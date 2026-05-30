@@ -82,7 +82,11 @@ export class RenderLoop {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio ?? 1, 2))
 
     this.scene = new THREE.Scene()
-    this.camera = new THREE.PerspectiveCamera(60, 1, 0.01, 100)
+    this.camera = new THREE.PerspectiveCamera(48, 1, 0.01, 100)
+    
+    this.camera._pixelWidth = this.canvas?.clientWidth ?? 640
+    this.camera._pixelHeight = this.canvas?.clientHeight ?? 480
+
     this.camera.position.set(0, 0, 0)
     this.camera.lookAt(0, 0, -1)
 
@@ -521,6 +525,9 @@ export class RenderLoop {
 
     const width = this.video?.videoWidth ?? this.canvas?.clientWidth ?? this.lastWidth ?? 1
     const height = this.video?.videoHeight ?? this.canvas?.clientHeight ?? this.lastHeight ?? 1
+    
+    this.camera._pixelWidth = this.canvas?.clientWidth ?? this.video?.videoWidth ?? 640
+    this.camera._pixelHeight = this.canvas?.clientHeight ?? this.video?.videoHeight ?? 480
 
     if (width === this.lastWidth && height === this.lastHeight) {
       return

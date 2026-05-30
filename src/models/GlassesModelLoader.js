@@ -142,6 +142,7 @@ export class GlassesModelLoader {
       max: finalBox.max.toArray(),
       size: finalSize.toArray(),
     }
+
     model.userData.depthPivot = modelConfig.depthPivot ?? 'center'
     model.userData.configKey = configKey
     model.userData.sourceUrl = url

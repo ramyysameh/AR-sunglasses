@@ -36,6 +36,19 @@ function anchorToWorld(anchor, camera, baseDepth, depthScale = DEFAULT_LANDMARK_
   return new THREE.Vector3(ndcX * halfWidth, ndcY * halfHeight, depth)
 }
 
+function anchorToWorldXY(anchor, camera, metricDepth) {
+  if (!anchor || !camera?.isPerspectiveCamera) return null
+
+  const distance = Math.abs(metricDepth)
+  const halfFov = THREE.MathUtils.degToRad(camera.fov) * 0.5
+  const halfHeight = Math.tan(halfFov) * distance
+  const halfWidth = halfHeight * camera.aspect
+  const ndcX = -(anchor.x * 2 - 1)
+  const ndcY = -(anchor.y * 2 - 1)
+
+  return new THREE.Vector3(ndcX * halfWidth, ndcY * halfHeight, metricDepth)
+}
+
 function decomposeMatrix(matrix) {
   const position = new THREE.Vector3()
   const quaternion = new THREE.Quaternion()
@@ -53,6 +66,29 @@ function averageWorld(points) {
   }
 
   return valid.reduce((sum, point) => sum.add(point), new THREE.Vector3()).multiplyScalar(1 / valid.length)
+}
+
+function estimateMetricDepth(leftIris, rightIris, camera, realIPD_m = 0.063) {
+  if (!leftIris || !rightIris || !camera?.isPerspectiveCamera) return null
+
+  const pw = camera._pixelWidth
+  const ph = camera._pixelHeight
+  if (!pw || !ph || pw <= 0 || ph <= 0) return null
+
+  // Normalized IPD (0-1 space, as MediaPipe outputs)
+  const dxNorm = leftIris.x - rightIris.x
+  const dyNorm = leftIris.y - rightIris.y
+  // Convert to pixel space using the SAME dimensions used for focal length
+  // focal length must be computed in the same pixel space as ipdPixels
+  const ipdPixels = Math.sqrt(dxNorm * dxNorm * pw * pw + dyNorm * dyNorm * ph * ph)
+
+  if (!Number.isFinite(ipdPixels) || ipdPixels < 8) return null
+
+  // focalLength in pixels — must use same pw/ph as above
+  const focalLength = (ph * 0.5) / Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5)
+
+  const metricDepth = -(realIPD_m * focalLength) / ipdPixels
+  return THREE.MathUtils.clamp(metricDepth, DEFAULT_MIN_DEPTH, DEFAULT_MAX_DEPTH)
 }
 
 function span(a, b) {
@@ -86,19 +122,31 @@ export class FaceFitSolver {
     }
 
     const { position: matrixPosition, quaternion } = decomposeMatrix(faceMatrix)
-    const baseDepth = validDepth(matrixPosition.z)
-      ? matrixPosition.z
-      : validDepth(scanProfile.profile?.headDepth)
-        ? scanProfile.profile.headDepth
-        : this.fallbackDepth
+    
+    const ipdDepth = estimateMetricDepth(
+      pose.anchorPoints?.leftIris,
+      pose.anchorPoints?.rightIris,
+      camera,
+      0.076
+    )
+    const baseDepth = ipdDepth
+      ?? (validDepth(matrixPosition.z) ? matrixPosition.z : this.fallbackDepth)
+
+    // IPD depth is measured at eye level; nose bridge is slightly forward
+    const noseBridgeDepth = baseDepth + 0.022
+
     const anchorWorldPoints = Object.fromEntries(
       Object.entries(pose.anchorPoints).map(([key, anchor]) => [
         key,
-        anchorToWorld(anchor, camera, baseDepth, this.landmarkDepthScale),
+        anchorToWorldXY(anchor, camera, 
+          (key === 'bridgeCenter' || key === 'bridgeTop' || key === 'noseTip') 
+            ? noseBridgeDepth 
+            : baseDepth
+        ),
       ])
     )
     const faceWorldPoints = Array.isArray(landmarks)
-      ? landmarks.map((landmark) => anchorToWorld(landmark, camera, baseDepth, this.landmarkDepthScale))
+      ? landmarks.map((landmark) => anchorToWorldXY(landmark, camera, baseDepth))
       : []
     const bridgeWorld = anchorWorldPoints.bridgeCenter ?? anchorWorldPoints.bridgeTop
     const irisWorld = anchorWorldPoints.irisCenter
@@ -109,11 +157,13 @@ export class FaceFitSolver {
     const leftIris = anchorWorldPoints.leftIris
     const rightIris = anchorWorldPoints.rightIris
     const brow = anchorWorldPoints.browCenter ?? anchorWorldPoints.bridgeTop
-    const frameAnchor = averageWorld([
-      bridgeWorld,
-      irisWorld,
-      brow,
-    ]) ?? bridgeWorld ?? matrixPosition
+    
+    const frameAnchorXY = averageWorld([bridgeWorld, irisWorld, brow])
+    const frameAnchor = new THREE.Vector3(
+      frameAnchorXY?.x ?? matrixPosition.x,
+      frameAnchorXY?.y ?? matrixPosition.y,
+      noseBridgeDepth
+    )
 
     if (!finiteVector3(frameAnchor)) {
       return null
@@ -126,25 +176,35 @@ export class FaceFitSolver {
       .multiplyScalar(-1)
       .applyQuaternion(quaternion)
     const targetPosition = frameAnchor.clone().add(modelLocalCorrection)
-    const surfaceDepth = Math.max(
-      bridgeWorld?.z ?? targetPosition.z,
-      leftCheek?.z ?? targetPosition.z,
-      rightCheek?.z ?? targetPosition.z
-    )
-    const minVisibleDepth = surfaceDepth + (skuFitMetadata?.frontFrameClearanceMeters ?? 0.006)
+    
+    const surfaceDepth = noseBridgeDepth
+    const minVisibleDepth = surfaceDepth + (skuFitMetadata?.frontFrameClearanceMeters ?? 0.003)
     targetPosition.z = Math.max(targetPosition.z, minVisibleDepth)
 
     const faceSpan = scanProfile.profile?.faceWidth ?? pose.faceMetrics?.weightedFaceSpan ?? 0
     const currentSpan = pose.faceMetrics?.weightedFaceSpan ?? faceSpan
+    
+    const templeSpan = span(leftTemple, rightTemple)
+    const irisSpan = span(leftIris, rightIris)
+
+    // Target: glasses width = 1.0x temple span (temples sit at hinge points)
+    const targetWidth = templeSpan > 0
+      ? templeSpan
+      : irisSpan * 1.6  // fallback: extrapolate temple span from iris span
+
+    const naturalFrameWidth = Number.isFinite(skuFitMetadata?.frameWidthMeters) && skuFitMetadata.frameWidthMeters > 0
+      ? skuFitMetadata.frameWidthMeters
+      : 0.068
+
+    const skuScale = Number.isFinite(skuFitMetadata?.scaleMultiplier) ? skuFitMetadata.scaleMultiplier : 1
+    const fittedScale = targetWidth > 0 ? (targetWidth / naturalFrameWidth) * skuScale : 1
+
+    const limits = skuFitMetadata?.scaleLimits ?? { min: 0.85, max: 1.25 }
+    const scale = THREE.MathUtils.clamp(fittedScale, limits.min, limits.max)
+
     const scaleDrift = faceSpan > 0 && currentSpan > 0
       ? THREE.MathUtils.clamp(currentSpan / faceSpan, 0.985, 1.015)
       : 1
-    const skuScale = Number.isFinite(skuFitMetadata?.scaleMultiplier)
-      ? skuFitMetadata.scaleMultiplier
-      : 1
-    const naturalFrameWidth = Number.isFinite(skuFitMetadata?.frameWidthMeters) && skuFitMetadata.frameWidthMeters > 0
-      ? skuFitMetadata.frameWidthMeters
-      : 0.145
     const worldFaceWidth = weightedWorldFaceWidth({
       leftTemple,
       rightTemple,
@@ -155,12 +215,8 @@ export class FaceFitSolver {
     })
     const frameFitRatio = Number.isFinite(skuFitMetadata?.faceFitWidthRatio)
       ? skuFitMetadata.faceFitWidthRatio
-      : 0.55
-    const fittedScale = worldFaceWidth > 0
-      ? (worldFaceWidth * frameFitRatio) / naturalFrameWidth
-      : 1
-    const limits = skuFitMetadata?.scaleLimits ?? { min: 1.0, max: 1.85 }
-    const scale = THREE.MathUtils.clamp(fittedScale * skuScale * scaleDrift, limits.min, limits.max)
+      : 0.88
+
     const requiredAnchors = [bridgeWorld, irisWorld, leftTemple, rightTemple, leftCheek, rightCheek]
     const anchorQuality = requiredAnchors.filter(finiteVector3).length / requiredAnchors.length
     const scaleQuality = faceSpan > 0 ? 1 : 0.5
