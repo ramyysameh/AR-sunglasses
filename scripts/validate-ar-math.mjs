@@ -153,12 +153,13 @@ assert.ok(
   `normalized sunglasses width should be close to 0.145m, got ${normalizedMeasurement.size.x}`
 )
 assert.equal(config.scaleMultiplier, 1, 'normalized model scale multiplier should default to 1')
-// TODO(fit-tuning): scaleLimits is unresolved. Initial intent was {min:1.05,max:1.85}
-// (camera-space sizing); it was later re-tuned to {min:0.85,max:1.15}. Pick the right
-// range after eyeballing fit on a real device, then re-tighten this assertion.
-assert.ok(
-  config.scaleLimits.min > 0 && config.scaleLimits.max > config.scaleLimits.min,
-  'local face-fit scale limits should be a valid ascending range'
+// scaleLimits confirmed on-device 2026-06-15: {min:0.85,max:1.15} produces a
+// correctly-sized fit. (Initial commit used {1.05,1.85}; the re-tune to this
+// tighter range is the intended value.)
+assert.deepEqual(
+  config.scaleLimits,
+  { min: 0.85, max: 1.15 },
+  'local face-fit scale limits should match the on-device-verified range'
 )
 assert.ok(config.faceFitWidthRatio > 0, 'SKU config should expose face-fit width ratio')
 assert.ok(config.bridgePivot instanceof THREE.Vector3, 'SKU config should expose bridge pivot metadata')
