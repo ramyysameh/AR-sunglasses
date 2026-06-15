@@ -4,26 +4,15 @@ import {
   tryOnSkuConfigs,
 } from '../src/config/tryOnConfig.js'
 import {
-  buildLensLaunchData,
   validateTryOnSkuCatalog,
 } from '../src/tryon/validation.js'
 
 const errors = validateTryOnSkuCatalog(tryOnSkuConfigs)
 assert.deepEqual(errors, [], `try-on SKU catalog is invalid:\n${errors.join('\n')}`)
 
-for (const sku of Object.values(tryOnSkuConfigs)) {
-  const launchData = buildLensLaunchData(sku)
-  assert.equal(launchData.launchParams.sku, sku.sku, `${sku.sku} launch data should include sku`)
-  assert.equal(
-    launchData.launchParams.frameWidthMm,
-    sku.frameWidthMm,
-    `${sku.sku} launch data should include physical frame width`
-  )
-}
-
 assert.ok(
   tryOnRuntimeConfig.defaultProvider === 'mediapipe',
-  'default provider should be local MediaPipe until Snap credentials are ready'
+  'default provider should be the MediaPipe + Three.js engine'
 )
 
 assert.ok(

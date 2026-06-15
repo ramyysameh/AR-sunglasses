@@ -116,6 +116,9 @@ export class FaceFitSolver {
     this.fallbackDepth = options.fallbackDepth ?? DEFAULT_FALLBACK_DEPTH
   }
 
+  /**
+   * @param {{ pose?: any, landmarks?: any, faceMatrix?: any, scanProfile?: any, skuFitMetadata?: any, camera?: any }} [input]
+   */
   solve({ pose, landmarks, faceMatrix, scanProfile, skuFitMetadata, camera } = {}) {
     if (!pose?.anchorPoints || !faceMatrix || !scanProfile?.isReady) {
       return null

@@ -45,7 +45,7 @@ export class DebugHUD {
     this.root.style.borderRadius = '14px'
     this.root.style.background = 'rgba(10, 12, 18, 0.72)'
     this.root.style.backdropFilter = 'blur(14px)'
-    this.root.style.WebkitBackdropFilter = 'blur(14px)'
+    this.root.style.setProperty('-webkit-backdrop-filter', 'blur(14px)')
     this.root.style.border = '1px solid rgba(255, 255, 255, 0.12)'
     this.root.style.color = '#f3f7ff'
     this.root.style.font = '12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace'

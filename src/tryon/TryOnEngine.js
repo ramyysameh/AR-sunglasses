@@ -1,23 +1,10 @@
 import { TryOnEventEmitter } from './TryOnEventEmitter.js'
-import { hasUsableSnapRuntimeConfig } from './validation.js'
 
 const PROVIDER_LOADERS = {
-  snap: async () => {
-    const module = await import('./providers/SnapCameraKitProvider.js')
-    return module.SnapCameraKitProvider
-  },
   mediapipe: async () => {
     const module = await import('./providers/MediaPipeThreeProvider.js')
     return module.MediaPipeThreeProvider
   },
-}
-
-function isLocalBrowser() {
-  if (typeof window === 'undefined') {
-    return false
-  }
-
-  return ['localhost', '127.0.0.1', ''].includes(window.location.hostname)
 }
 
 export class TryOnEngine extends TryOnEventEmitter {
@@ -69,26 +56,7 @@ export class TryOnEngine extends TryOnEventEmitter {
   }
 
   _resolveProviderName(config) {
-    const requestedProvider = config.provider ?? config.defaultProvider ?? 'mediapipe'
-    if (requestedProvider !== 'snap') {
-      return requestedProvider
-    }
-
-    if (hasUsableSnapRuntimeConfig(config)) {
-      return 'snap'
-    }
-
-    if (config.allowLocalFallback && config.fallbackProvider && isLocalBrowser()) {
-      this.emit('error', {
-        provider: 'snap',
-        recoverable: true,
-        error: new Error('Snap Camera Kit is not configured locally; using MediaPipe fallback.'),
-      })
-
-      return config.fallbackProvider
-    }
-
-    return 'snap'
+    return config.provider ?? config.defaultProvider ?? 'mediapipe'
   }
 
   _forwardProviderEvents(provider) {

@@ -7,17 +7,25 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "typecheck": "tsc -p jsconfig.json",
     "validate": "node scripts/validate-ar-math.mjs",
     "validate:tryon": "node scripts/validate-tryon-config.mjs",
     "inspect:models": "node scripts/inspect-models.mjs",
-    "normalize:models": "node scripts/normalize-glasses-model.mjs"
+    "normalize:models": "node scripts/normalize-glasses-model.mjs",
+    "compress:models": "node scripts/compress-models.mjs"
   },
   "devDependencies": {
+    "@gltf-transform/core": "^4.4.0",
+    "@gltf-transform/extensions": "^4.4.0",
+    "@gltf-transform/functions": "^4.4.0",
+    "@types/node": "^25.9.3",
+    "@types/three": "^0.184.1",
+    "draco3dgltf": "^1.5.7",
+    "typescript": "^6.0.3",
     "vite": "^6.3.5"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.35",
-    "@snap/camera-kit": "^1.17.0",
     "three": "^0.184.0"
   }
 }

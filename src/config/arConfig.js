@@ -8,6 +8,7 @@ export const glassesConfig = {
     modelPath: 'models/sunglasses.glb',
     optimizedModelPath: 'models/sunglasses-opt.glb',
     normalizedModelPath: 'models/normalized/sunglasses.glb',
+    runtimeModelPath: 'models/sunglasses-draco.glb',
     name: 'sunglasses',
     modelUnit: 'meters',
     frameWidthMeters: 0.136,
@@ -50,6 +51,7 @@ export const glassesConfig = {
     modelPath: 'models/gripz1.glb',
     optimizedModelPath: 'models/gripz1-opt.glb',
     normalizedModelPath: 'models/normalized/gripz1.glb',
+    runtimeModelPath: 'models/gripz1-draco.glb',
     name: 'gripz1',
     modelUnit: 'meters',
     frameWidthMeters: 0.136,
@@ -98,8 +100,10 @@ export function getGlassesConfig(key = defaultGlassesKey) {
 
 export function getGlassesModelUrl(key = defaultGlassesKey) {
   const config = getGlassesConfig(key)
-  if (config.useNormalizedModel && config.normalizedModelPath) {
-    return config.normalizedModelPath
+  if (config.useNormalizedModel) {
+    // Prefer the Draco-compressed runtime build; fall back to the full-precision
+    // normalized asset (e.g. before `npm run compress:models` has been run).
+    return config.runtimeModelPath ?? config.normalizedModelPath ?? config.modelPath
   }
 
   return config.useOptimizedModel && config.optimizedModelPath

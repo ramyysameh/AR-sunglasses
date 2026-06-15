@@ -9,6 +9,7 @@ import { DebugHUD } from '../../debug/DebugHUD.js'
 import { RenderLoop } from '../../core/RenderLoop.js'
 import { getGlassesConfig, getGlassesModelUrl } from '../../config/arConfig.js'
 import { TryOnEventEmitter } from '../TryOnEventEmitter.js'
+import { CameraError, describeCameraError } from '../../support/capabilities.js'
 
 function stopStream(stream) {
   stream?.getTracks?.().forEach((track) => track.stop())
@@ -152,14 +153,18 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
   }
 
   async _startCamera() {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: 'user',
-        width: { ideal: this.config.camera?.width ?? 1280 },
-        height: { ideal: this.config.camera?.height ?? 720 },
-      },
-      audio: false,
-    })
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          width: { ideal: this.config.camera?.width ?? 1280 },
+          height: { ideal: this.config.camera?.height ?? 720 },
+        },
+        audio: false,
+      })
+    } catch (error) {
+      throw new CameraError(describeCameraError(error), error)
+    }
 
     this.video.srcObject = this.stream
     this.video.muted = true

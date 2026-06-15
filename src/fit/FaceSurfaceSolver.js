@@ -56,6 +56,9 @@ export class FaceSurfaceSolver {
     this.landmarkDepthScale = options.landmarkDepthScale ?? DEFAULT_LANDMARK_DEPTH_SCALE
   }
 
+  /**
+   * @param {{ pose?: any, camera?: any, calibrationState?: any, modelConfig?: any }} [input]
+   */
   solve({ pose, camera, calibrationState, modelConfig } = {}) {
     const anchors = pose?.anchorPoints ?? {}
     const matrixDepth = pose?.rawPose?.position?.z ?? pose?.position?.z

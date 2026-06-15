@@ -52,7 +52,8 @@ export class GlassesModelLoader {
       throw new Error(`No scene found in model: ${url}`)
     }
 
-    model.traverse((child) => {
+    model.traverse((node) => {
+      const child = /** @type {THREE.Mesh} */ (node)
       if (!child.isMesh) {
         return
       }
@@ -60,10 +61,14 @@ export class GlassesModelLoader {
       child.frustumCulled = false
 
       const materials = Array.isArray(child.material) ? child.material : [child.material]
-      for (const material of materials) {
-        if (!material) {
+      for (const baseMaterial of materials) {
+        if (!baseMaterial) {
           continue
         }
+
+        // Glasses use PBR (standard/physical) materials, which expose map,
+        // roughness, metalness, etc. that the base Material type does not.
+        const material = /** @type {THREE.MeshStandardMaterial} */ (baseMaterial)
 
         if (material?.map) {
           material.map.colorSpace = THREE.SRGBColorSpace

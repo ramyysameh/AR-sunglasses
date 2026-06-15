@@ -197,6 +197,9 @@ export class RenderLoop {
     return { ...this.filterSettings }
   }
 
+  /**
+   * @param {{ faceTracker?: object, landmarkProcessor?: object, modelConfig?: object }} [deps]
+   */
   start({ faceTracker, landmarkProcessor, modelConfig } = {}) {
     this.faceTracker = faceTracker ?? this.faceTracker
     this.landmarkProcessor = landmarkProcessor ?? this.landmarkProcessor

@@ -19,10 +19,6 @@ html, body {
   height: 100vh;
 }
 
-#ar-container.is-snap-provider #overlay-canvas {
-  object-fit: cover;
-}
-
 /* Camera feed */
 #camera-feed {
   position: absolute;
@@ -103,6 +99,8 @@ html, body {
 }
 
 #loading.is-error {
+  flex-direction: column;
+  gap: 14px;
   background: rgba(88, 16, 16, 0.88);
   border-color: rgba(255, 160, 160, 0.34);
   pointer-events: auto;
@@ -116,6 +114,27 @@ html, body {
   border-top-color: #fff;
   border-radius: 50%;
   animation: loading-spinner 0.8s linear infinite;
+}
+
+/* No spinner on error/idle states. */
+#loading.is-error::before {
+  display: none;
+}
+
+.retry-btn {
+  padding: 0.6rem 1.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.retry-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 @keyframes loading-spinner {

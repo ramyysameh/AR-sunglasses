@@ -36,19 +36,6 @@ function isVector3Like(value) {
     Number.isFinite(value.z)
 }
 
-export function hasUsableSnapLensConfig(skuConfig) {
-  return isNonEmptyString(skuConfig?.lensId) &&
-    isNonEmptyString(skuConfig?.lensGroupId) &&
-    !skuConfig.lensId.startsWith('__') &&
-    !skuConfig.lensGroupId.startsWith('__')
-}
-
-export function hasUsableSnapRuntimeConfig(config = {}) {
-  const sku = config.skus?.[config.defaultSkuKey]
-
-  return isNonEmptyString(config.snap?.apiToken) && hasUsableSnapLensConfig(sku)
-}
-
 export function validateTryOnSkuConfig(skuConfig) {
   const errors = []
 
@@ -68,10 +55,6 @@ export function validateTryOnSkuConfig(skuConfig) {
     if (!isVector3Like(skuConfig?.[field])) {
       errors.push(`${skuConfig?.sku ?? 'unknown'} has invalid ${field}`)
     }
-  }
-
-  if (isNonEmptyString(skuConfig?.lensId) !== isNonEmptyString(skuConfig?.lensGroupId)) {
-    errors.push(`${skuConfig?.sku ?? 'unknown'} must set both lensId and lensGroupId`)
   }
 
   return errors
@@ -96,19 +79,4 @@ export function validateTryOnSkuCatalog(skus = {}) {
   }
 
   return errors
-}
-
-export function buildLensLaunchData(skuConfig) {
-  return {
-    launchParams: {
-      sku: skuConfig.sku,
-      modelAssetId: skuConfig.modelAssetId,
-      frameWidthMm: skuConfig.frameWidthMm,
-      lensWidthMm: skuConfig.lensWidthMm,
-      bridgeWidthMm: skuConfig.bridgeWidthMm,
-      templeLengthMm: skuConfig.templeLengthMm,
-      lensHeightMm: skuConfig.lensHeightMm,
-      fitProfileVersion: skuConfig.fitProfileVersion,
-    },
-  }
 }

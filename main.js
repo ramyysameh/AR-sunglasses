@@ -1,5 +1,6 @@
 import { TryOnEngine } from './src/tryon/TryOnEngine.js'
 import { getTryOnRuntimeConfig } from './src/config/tryOnConfig.js'
+import { checkEnvironment } from './src/support/capabilities.js'
 
 const video = document.getElementById('camera-feed')
 const canvas = document.getElementById('overlay-canvas')
@@ -20,7 +21,11 @@ function downloadDataUrl(dataUrl, filename) {
   link.click()
 }
 
-function setLoading(message, isError = false) {
+/**
+ * @param {string} message
+ * @param {{ isError?: boolean, onRetry?: (() => void) | null }} [options]
+ */
+function setLoading(message, { isError = false, onRetry = null } = {}) {
   if (!loadingEl) {
     return
   }
@@ -28,9 +33,18 @@ function setLoading(message, isError = false) {
   loadingEl.textContent = message
   loadingEl.classList.toggle('is-error', isError)
   loadingEl.style.display = message ? 'flex' : 'none'
+
+  if (onRetry) {
+    const retryBtn = document.createElement('button')
+    retryBtn.type = 'button'
+    retryBtn.className = 'retry-btn'
+    retryBtn.textContent = 'Retry'
+    retryBtn.addEventListener('click', onRetry, { once: true })
+    loadingEl.appendChild(retryBtn)
+  }
 }
 
-async function main() {
+async function startEngine() {
   const runtimeConfig = getTryOnRuntimeConfig({
     provider,
     defaultSkuKey: sku ?? undefined,
@@ -46,7 +60,7 @@ async function main() {
     const message = error?.message ?? String(error)
     console.warn('Try-on provider warning:', message)
     if (!recoverable) {
-      setLoading(message, true)
+      setLoading(message, { isError: true })
     }
   })
   tryOnEngine.on('ready', ({ provider: activeProvider }) => {
@@ -65,11 +79,31 @@ async function main() {
   })
 }
 
+async function main() {
+  const environment = checkEnvironment()
+  if (!environment.ok) {
+    setLoading(environment.message ?? 'This device cannot run the try-on.', { isError: true })
+    return
+  }
+
+  try {
+    await startEngine()
+  } catch (error) {
+    console.error('Failed to start AR try-on app:', error)
+    const recoverable = Boolean(error?.recoverable)
+    // Tear down any partial session before a retry so the camera is released.
+    await tryOnEngine?.destroy?.().catch(() => {})
+    tryOnEngine = null
+
+    setLoading(error?.message ?? 'Failed to start AR try-on.', {
+      isError: true,
+      onRetry: recoverable ? () => { main() } : null,
+    })
+  }
+}
+
 window.addEventListener('beforeunload', () => {
   tryOnEngine?.destroy?.()
 })
 
-main().catch((error) => {
-  console.error('Failed to start AR try-on app:', error)
-  setLoading(error?.message ?? 'Failed to start AR try-on.', true)
-})
+main()

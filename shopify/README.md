@@ -1,13 +1,18 @@
-# Shopify WebAR Try-On Embed
+# Shopify WebAR Try-On Embed (legacy manual section)
 
-This folder contains a theme-section integration for the production WebAR try-on.
+This folder contains a manual theme-section embed for the WebAR try-on. It is the
+quickest way to drop the hosted try-on onto a single store, and is kept as a fallback.
 
-1. Build and deploy the Vite app over HTTPS.
-2. Configure the section setting `tryon_app_url` to the hosted app URL.
-3. Set Snap Camera Kit values through the hosted app environment:
-   - `VITE_SNAP_CAMERA_KIT_API_TOKEN`
-   - `VITE_SNAP_LENS_ID`
-   - `VITE_SNAP_LENS_GROUP_ID`
-4. Map production product and variant IDs into `src/config/tryOnConfig.js` or provide `window.AR_TRYON_CONFIG` from the theme.
+> The production distribution path is a **Shopify App + Theme App Extension** (see the
+> `shopify-app/` project), which installs the Try-On button automatically. Prefer that
+> over this manual section for any real deployment.
 
-The storefront should use the Snap Camera Kit provider. The local MediaPipe provider is only a debug fallback.
+## Manual section setup
+
+1. Build and deploy the Vite app over HTTPS (e.g. Vercel).
+2. In the theme editor, add the **AR Try-On** section and set `tryon_app_url` to the
+   hosted app URL.
+3. The section passes the product and variant IDs to the try-on app via query params.
+
+The try-on runs entirely client-side using the custom MediaPipe + Three.js engine — no
+API keys or external AR vendor is required.
