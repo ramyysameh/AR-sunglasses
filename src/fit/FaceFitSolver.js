@@ -159,9 +159,14 @@ export class FaceFitSolver {
     const rightCheek = anchorWorldPoints.rightCheek
     const leftIris = anchorWorldPoints.leftIris
     const rightIris = anchorWorldPoints.rightIris
-    const brow = anchorWorldPoints.browCenter ?? anchorWorldPoints.bridgeTop
-    
-    const frameAnchorXY = averageWorld([bridgeWorld, irisWorld, brow])
+    const browTop = anchorWorldPoints.bridgeTop ?? anchorWorldPoints.browCenter
+
+    // Anchor on the nose bridge, where glasses physically rest. We previously
+    // averaged in the iris and brow landmarks, but those swing far more than the
+    // bridge when the head pitches up/down, dragging the anchor off the bridge.
+    // A light pull toward bridgeTop keeps the resting point at the top of the
+    // bridge (where the frame sits) without reintroducing the brow's pitch swing.
+    const frameAnchorXY = averageWorld([bridgeWorld, bridgeWorld, browTop])
     const frameAnchor = new THREE.Vector3(
       frameAnchorXY?.x ?? matrixPosition.x,
       frameAnchorXY?.y ?? matrixPosition.y,
@@ -174,11 +179,16 @@ export class FaceFitSolver {
 
     const localBridgePivot = skuFitMetadata?.bridgePivot ?? new THREE.Vector3()
     const localLensCenter = skuFitMetadata?.lensCenterOffset ?? new THREE.Vector3()
-    const modelLocalCorrection = localBridgePivot.clone()
-      .add(localLensCenter)
-      .multiplyScalar(-1)
-      .applyQuaternion(quaternion)
-    const targetPosition = frameAnchor.clone().add(modelLocalCorrection)
+
+    // Rotate the frame about its nose-bridge CONTACT point (a little behind the
+    // front of the frame) rather than the model origin, so the contact stays glued
+    // to the nose as the head pitches/turns.
+    //   (I - R)·pivot is zero when facing forward, so the approved head-on
+    //   placement is unchanged; it only engages under rotation.
+    const rotatedPivot = localBridgePivot.clone().applyQuaternion(quaternion)
+    const pivotCorrection = localBridgePivot.clone().sub(rotatedPivot)
+    const lensCorrection = localLensCenter.clone().multiplyScalar(-1).applyQuaternion(quaternion)
+    const targetPosition = frameAnchor.clone().add(pivotCorrection).add(lensCorrection)
     
     const surfaceDepth = noseBridgeDepth
     const minVisibleDepth = surfaceDepth + (skuFitMetadata?.frontFrameClearanceMeters ?? 0.003)

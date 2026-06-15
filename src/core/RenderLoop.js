@@ -8,7 +8,10 @@ import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
 import { FaceFitSolver } from '../fit/FaceFitSolver.js'
 
 const TRACK_LOSS_RESET_MS = 180
-const PREDICTION_FACTOR = 0.85
+// Lower lead than before (was 0.85): heavy lead on an already-smoothed signal
+// overshoots and recoils, which reads as rubber-banding. A light lead just
+// compensates residual filter latency.
+const PREDICTION_FACTOR = 0.4
 const MAX_PREDICTION_SPEED = 1.2
 const FALLBACK_FACE_DEPTH = -0.78
 const NEAREST_DISPLAY_DEPTH = -0.62
@@ -56,6 +59,7 @@ export class RenderLoop {
     this.lastTrackingTimestamp = null
     this.filtersNeedReset = false
     this.lastRawPosition = null
+    this.lastRawQuat = null
     this.lastRawTimestamp = null
     this.lastGoodTransform = null
     this.lowQualityFrames = 0
@@ -218,6 +222,7 @@ export class RenderLoop {
     this.predictionDelta = 0
     this.filtersNeedReset = false
     this.lastRawPosition = null
+    this.lastRawQuat = null
     this.lastRawTimestamp = null
     this.lastGoodTransform = null
     this.lowQualityFrames = 0
@@ -282,31 +287,50 @@ export class RenderLoop {
     return smoothPos.clone().addScaledVector(clampedVelocity, PREDICTION_FACTOR)
   }
 
-  _updateAdaptiveFilters(rawPosition, timestamp) {
+  _updateAdaptiveFilters(rawPosition, rawQuat, timestamp) {
     if (!this.lastRawPosition || this.lastRawTimestamp === null) {
       this.lastRawPosition = rawPosition.clone()
+      this.lastRawQuat = rawQuat?.clone() ?? null
       this.lastRawTimestamp = timestamp
       return
     }
 
     const dt = Math.max((timestamp - this.lastRawTimestamp) / 1000, 1e-3)
-    const speed = rawPosition.distanceTo(this.lastRawPosition) / dt
-    const motion = THREE.MathUtils.clamp(speed / 0.65, 0, 1)
+    const linearSpeed = rawPosition.distanceTo(this.lastRawPosition) / dt
+    // More sensitive gate (was /0.65): heads rarely translate that fast, so the
+    // filter almost never opened up and everything lagged. /0.4 lets it respond
+    // to normal head movement.
+    const linearMotion = THREE.MathUtils.clamp(linearSpeed / 0.4, 0, 1)
+
+    // A head tilt/turn is mostly rotation with little translation. Without this,
+    // the gate reads a tilt as "still" and over-smooths the rotation, so the
+    // glasses appear not to follow the head. Fold angular speed into the motion.
+    let angularMotion = 0
+    if (rawQuat && this.lastRawQuat) {
+      const angularSpeed = rawQuat.angleTo(this.lastRawQuat) / dt // rad/s
+      angularMotion = THREE.MathUtils.clamp(angularSpeed / 1.8, 0, 1)
+    }
+
+    const motion = Math.max(linearMotion, angularMotion)
     this.filterMode = motion > 0.55 ? 'fast' : motion > 0.2 ? 'moving' : 'still'
 
+    // Higher base cutoff (was 0.85 / 0.75): less smoothing latency at rest, which
+    // is the main source of the perceived lag. Jitter is still controlled because
+    // beta opens the cutoff further as motion rises.
     this.positionFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.85, 2.4, motion),
+      minCutoff: THREE.MathUtils.lerp(1.5, 3.0, motion),
       beta: THREE.MathUtils.lerp(0.02, 0.12, motion),
       dCutoff: 1.0,
     })
 
     this.rotationFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.75, 2.0, motion),
-      beta: THREE.MathUtils.lerp(0.04, 0.16, motion),
+      minCutoff: THREE.MathUtils.lerp(1.3, 2.8, motion),
+      beta: THREE.MathUtils.lerp(0.05, 0.16, motion),
       dCutoff: 1.0,
     })
 
     this.lastRawPosition = rawPosition.clone()
+    this.lastRawQuat = rawQuat?.clone() ?? this.lastRawQuat
     this.lastRawTimestamp = timestamp
   }
 
@@ -662,7 +686,7 @@ export class RenderLoop {
       const basePosition = fitSolution.glassesTransform.position
       const tunedPosition = basePosition.clone().add(new THREE.Vector3(xOffset, yOffset, zOffset))
 
-      this._updateAdaptiveFilters(tunedPosition, timestamp)
+      this._updateAdaptiveFilters(tunedPosition, fitSolution.glassesTransform.quaternion, timestamp)
 
       const smoothPos = this.positionFilter
         ? this.positionFilter.filter(tunedPosition, timestamp)
