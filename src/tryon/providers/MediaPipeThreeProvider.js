@@ -229,19 +229,9 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
   }
 
   _updateScanMessage(scanState) {
-    if (!scanState || scanState.isReady) {
-      this._setLoading('')
-      return
-    }
-
-    const stageCopy = {
-      front: 'Hold still and face the camera',
-      yawLeft: 'Turn your head slightly left',
-      yawRight: 'Turn your head slightly right',
-      neutralReturn: 'Return to center',
-    }
-    const progress = Math.round((scanState.quality ?? 0) * 100)
-
-    this._setLoading(`${stageCopy[scanState.activeStage] ?? 'Scanning face'}... ${progress}%`)
+    // The animated scan overlay (driven by this 'scan' event) communicates the
+    // stage and progress, so the text pill stays clear during scanning.
+    this.emit('scan', scanState)
+    this._setLoading('')
   }
 }

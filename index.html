@@ -12,6 +12,30 @@
     <div id="ar-container">
       <video id="camera-feed" autoplay playsinline muted></video>
       <canvas id="overlay-canvas"></canvas>
+
+      <div id="scan-overlay" class="scan-overlay" hidden aria-hidden="true">
+        <div class="scan-stage">
+          <svg class="scan-progress" viewBox="0 0 168 168" aria-hidden="true">
+            <circle class="scan-progress-track" cx="84" cy="84" r="80" />
+            <circle class="scan-progress-bar" cx="84" cy="84" r="80" />
+          </svg>
+          <div class="scan-frame">
+            <span class="scan-corner tl"></span>
+            <span class="scan-corner tr"></span>
+            <span class="scan-corner bl"></span>
+            <span class="scan-corner br"></span>
+            <div class="scan-line"></div>
+            <div class="scan-mesh"></div>
+          </div>
+          <div class="scan-arrow scan-arrow-left">❮</div>
+          <div class="scan-arrow scan-arrow-right">❯</div>
+          <div class="scan-check" aria-hidden="true">✓</div>
+        </div>
+        <div class="scan-caption">
+          <span class="scan-caption-text">Hold still…</span>
+        </div>
+      </div>
+
       <div id="loading">Loading model...</div>
 
       <aside id="model-sidebar" class="model-sidebar">

@@ -4,6 +4,9 @@ const DEFAULT_MIN_DEPTH = -1.8
 const DEFAULT_MAX_DEPTH = -0.22
 const DEFAULT_FALLBACK_DEPTH = -0.72
 const DEFAULT_LANDMARK_DEPTH_SCALE = 0.08
+// Depth relief applied to the occluder mesh so the cheeks/jaw bulge forward and
+// actually mask the temple arms. Tunable: bigger = more pronounced 3D face shell.
+const OCCLUDER_DEPTH_SCALE = 0.45
 
 function finiteVector3(vector) {
   return vector &&
@@ -148,8 +151,10 @@ export class FaceFitSolver {
         ),
       ])
     )
+    // Give the occluder real depth (cheeks/nose forward, jaw/ears back) instead of
+    // a flat billboard, so temple arms passing behind the cheeks get masked.
     const faceWorldPoints = Array.isArray(landmarks)
-      ? landmarks.map((landmark) => anchorToWorldXY(landmark, camera, baseDepth))
+      ? landmarks.map((landmark) => anchorToWorld(landmark, camera, baseDepth, OCCLUDER_DEPTH_SCALE))
       : []
     const bridgeWorld = anchorWorldPoints.bridgeCenter ?? anchorWorldPoints.bridgeTop
     const irisWorld = anchorWorldPoints.irisCenter

@@ -146,6 +146,225 @@ html, body {
   }
 }
 
+/* ============================================================
+   Face scan onboarding overlay
+   ============================================================ */
+:root {
+  --scan-accent: #6ea8fe;
+}
+
+.scan-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  padding-bottom: 6vh;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 42%, rgba(0, 0, 0, 0) 30%, rgba(0, 0, 0, 0.42) 100%);
+  animation: scan-fade-in 0.4s ease both;
+}
+
+.scan-overlay[hidden] {
+  display: none;
+}
+
+.scan-stage {
+  position: relative;
+  width: 264px;
+  height: 264px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Circular progress ring */
+.scan-progress {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  overflow: visible;
+}
+
+.scan-progress-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.14);
+  stroke-width: 3;
+}
+
+.scan-progress-bar {
+  fill: none;
+  stroke: var(--scan-accent);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 502.65;
+  stroke-dashoffset: 502.65;
+  filter: drop-shadow(0 0 6px rgba(110, 168, 254, 0.7));
+  transition: stroke-dashoffset 0.25s ease, stroke 0.3s ease;
+}
+
+/* Oval face frame */
+.scan-frame {
+  position: relative;
+  width: 176px;
+  height: 226px;
+  border-radius: 48% 48% 44% 44%;
+  border: 1.5px solid rgba(110, 168, 254, 0.45);
+  box-shadow: inset 0 0 26px rgba(110, 168, 254, 0.18);
+  overflow: hidden;
+}
+
+.scan-corner {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid var(--scan-accent);
+  animation: scan-corner-pulse 1.4s ease-in-out infinite alternate;
+}
+
+.scan-corner.tl { top: 6px; left: 6px; border-right: 0; border-bottom: 0; border-radius: 8px 0 0 0; }
+.scan-corner.tr { top: 6px; right: 6px; border-left: 0; border-bottom: 0; border-radius: 0 8px 0 0; }
+.scan-corner.bl { bottom: 6px; left: 6px; border-right: 0; border-top: 0; border-radius: 0 0 0 8px; }
+.scan-corner.br { bottom: 6px; right: 6px; border-left: 0; border-top: 0; border-radius: 0 0 8px 0; }
+
+/* Sweeping scan line */
+.scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--scan-accent), transparent);
+  box-shadow: 0 0 12px 2px rgba(110, 168, 254, 0.65);
+  animation: scan-sweep 2.1s ease-in-out infinite alternate;
+}
+
+/* Faint scanning mesh inside the frame */
+.scan-mesh {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(110, 168, 254, 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(110, 168, 254, 0.16) 1px, transparent 1px);
+  background-size: 20px 20px;
+  opacity: 0.5;
+  animation: scan-mesh-pulse 2.1s ease-in-out infinite alternate;
+}
+
+/* Directional turn arrows */
+.scan-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 2.4rem;
+  color: var(--scan-accent);
+  opacity: 0;
+  text-shadow: 0 0 14px rgba(110, 168, 254, 0.8);
+  transition: opacity 0.25s ease;
+}
+
+.scan-arrow-left { left: -2px; }
+.scan-arrow-right { right: -2px; }
+
+.scan-overlay[data-stage="yawLeft"] .scan-arrow-left {
+  opacity: 1;
+  animation: scan-nudge-left 0.8s ease-in-out infinite;
+}
+
+.scan-overlay[data-stage="yawRight"] .scan-arrow-right {
+  opacity: 1;
+  animation: scan-nudge-right 0.8s ease-in-out infinite;
+}
+
+/* Completion check */
+.scan-check {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(64, 200, 130, 0.92);
+  color: #fff;
+  font-size: 2rem;
+  font-weight: 700;
+  opacity: 0;
+  transform: scale(0.4);
+}
+
+.scan-overlay[data-stage="done"] .scan-frame,
+.scan-overlay[data-stage="done"] .scan-arrow {
+  opacity: 0;
+}
+
+.scan-overlay[data-stage="done"] .scan-progress-bar {
+  stroke: #40c882;
+}
+
+.scan-overlay[data-stage="done"] .scan-check {
+  animation: scan-check-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.scan-caption {
+  padding: 0.6rem 1.3rem;
+  border-radius: 999px;
+  background: rgba(12, 12, 14, 0.74);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.98rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-align: center;
+  max-width: 80vw;
+}
+
+@keyframes scan-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scan-sweep {
+  from { top: 8%; }
+  to { top: 92%; }
+}
+
+@keyframes scan-mesh-pulse {
+  from { opacity: 0.28; }
+  to { opacity: 0.6; }
+}
+
+@keyframes scan-corner-pulse {
+  from { opacity: 0.35; box-shadow: 0 0 0 rgba(110, 168, 254, 0); }
+  to { opacity: 1; box-shadow: 0 0 10px rgba(110, 168, 254, 0.6); }
+}
+
+@keyframes scan-nudge-left {
+  0%, 100% { transform: translateY(-50%) translateX(0); }
+  50% { transform: translateY(-50%) translateX(-7px); }
+}
+
+@keyframes scan-nudge-right {
+  0%, 100% { transform: translateY(-50%) translateX(0); }
+  50% { transform: translateY(-50%) translateX(7px); }
+}
+
+@keyframes scan-check-pop {
+  from { opacity: 0; transform: scale(0.4); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-line, .scan-mesh, .scan-corner, .scan-arrow { animation: none !important; }
+}
+
 /* Capture button status dot */
 .capture-dot {
   width: 12px;

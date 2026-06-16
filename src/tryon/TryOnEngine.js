@@ -60,7 +60,7 @@ export class TryOnEngine extends TryOnEventEmitter {
   }
 
   _forwardProviderEvents(provider) {
-    for (const eventName of ['ready', 'tracking', 'trackingLost', 'captureReady', 'error']) {
+    for (const eventName of ['ready', 'tracking', 'trackingLost', 'captureReady', 'error', 'scan']) {
       provider.on(eventName, (detail) => this.emit(eventName, detail))
     }
   }

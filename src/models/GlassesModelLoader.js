@@ -6,6 +6,32 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { getGlassesConfig } from '../config/arConfig.js'
 
+/**
+ * Fades the rear of the temple arms to transparent based on the model's local Z.
+ * The ear-hook tips can't be hidden by a face occluder (the MediaPipe face mesh
+ * has no ears/hair), so we taper them out instead of letting them clip the cheeks.
+ * Operates in model-local space, so it holds at any head angle with no per-frame cost.
+ * @param {THREE.MeshStandardMaterial} material
+ * @param {{ start: number, end: number }} fade start = last fully-opaque local Z; end = fully-gone (more negative)
+ */
+function applyTempleFade(material, fade) {
+  material.transparent = true
+  material.customProgramCacheKey = () => `templeFade:${fade.start}:${fade.end}`
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uTempleFadeStart = { value: fade.start }
+    shader.uniforms.uTempleFadeEnd = { value: fade.end }
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vTempleZ;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vTempleZ = position.z;')
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vTempleZ;\nuniform float uTempleFadeStart;\nuniform float uTempleFadeEnd;')
+      .replace(
+        '#include <dithering_fragment>',
+        '  float templeFade = smoothstep(uTempleFadeEnd, uTempleFadeStart, vTempleZ);\n  if (templeFade <= 0.002) discard;\n  gl_FragColor.a *= templeFade;\n#include <dithering_fragment>'
+      )
+  }
+}
+
 export class GlassesModelLoader {
   constructor(options = {}) {
     this.dracoDecoderPath = options.dracoDecoderPath ?? 'draco/gltf/'
@@ -47,6 +73,7 @@ export class GlassesModelLoader {
     const model = gltf.scene ?? gltf.scenes?.[0]
     const modelConfig = getGlassesConfig(configKey)
     const materialProfile = modelConfig.materialProfile ?? {}
+    const templeFade = modelConfig.templeFade ?? { start: -0.08, end: -0.12 }
 
     if (!model) {
       throw new Error(`No scene found in model: ${url}`)
@@ -98,6 +125,7 @@ export class GlassesModelLoader {
           }
         }
 
+        applyTempleFade(material, templeFade)
         material.needsUpdate = true
       }
     })

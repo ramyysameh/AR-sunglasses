@@ -11,7 +11,7 @@ const TRACK_LOSS_RESET_MS = 180
 // Lower lead than before (was 0.85): heavy lead on an already-smoothed signal
 // overshoots and recoils, which reads as rubber-banding. A light lead just
 // compensates residual filter latency.
-const PREDICTION_FACTOR = 0.4
+const PREDICTION_FACTOR = 0.6
 const MAX_PREDICTION_SPEED = 1.2
 const FALLBACK_FACE_DEPTH = -0.78
 const NEAREST_DISPLAY_DEPTH = -0.62
@@ -64,10 +64,14 @@ export class RenderLoop {
     this.lastGoodTransform = null
     this.lowQualityFrames = 0
     this.smoothedScale = null
+    this.smoothedDepth = null
     this.lastPredictionTimestamp = null
     this.occlusionEnabled = true
-    this.contactShadowEnabled = true
+    // The flat CircleGeometry "contact shadow" reads as a grey disc on the nose,
+    // so keep it off. Revisit with a proper soft/blurred shadow later if desired.
+    this.contactShadowEnabled = false
     this.filterMode = 'still'
+    this.motionLevel = 0
     this.lastScanStateKey = ''
   }
 
@@ -228,6 +232,7 @@ export class RenderLoop {
     this.lowQualityFrames = 0
     this.lastPredictionTimestamp = null
     this.smoothedScale = null
+    this.smoothedDepth = null
   }
 
   _hideTrackedObjects(timestamp) {
@@ -266,6 +271,7 @@ export class RenderLoop {
   _predictPosition(smoothPos) {
     if (!this.prevFilteredPos) {
       this.prevFilteredPos = smoothPos.clone()
+      this.smoothedVelocity = null
       this.predictionDelta = 0
       this.lastPredictionTimestamp = performance.now()
       return smoothPos.clone()
@@ -274,17 +280,31 @@ export class RenderLoop {
     const now = performance.now()
     const dt = Math.max((now - (this.lastPredictionTimestamp ?? now)) / 1000, 1 / 120)
     const velocity = smoothPos.clone().sub(this.prevFilteredPos)
-    const velocityLength = velocity.length()
-    const maxPredictionDelta = THREE.MathUtils.clamp(MAX_PREDICTION_SPEED * dt, 0.006, 0.03)
-    const clampedVelocity = velocityLength > maxPredictionDelta
-      ? velocity.multiplyScalar(maxPredictionDelta / velocityLength)
-      : velocity
+
+    // Smooth the velocity before using it as a lead. Raw per-frame velocity is
+    // noisy, and once scaled by the prediction gain that noise becomes visible
+    // jitter during turns. An EMA gives a stable lead direction and magnitude.
+    if (!this.smoothedVelocity) {
+      this.smoothedVelocity = velocity.clone()
+    } else {
+      this.smoothedVelocity.lerp(velocity, 0.45)
+    }
+
+    const leadVelocity = this.smoothedVelocity.clone()
+    const velocityLength = leadVelocity.length()
+    const maxPredictionDelta = THREE.MathUtils.clamp(MAX_PREDICTION_SPEED * dt, 0.006, 0.045)
+    if (velocityLength > maxPredictionDelta) {
+      leadVelocity.multiplyScalar(maxPredictionDelta / velocityLength)
+    }
 
     this.prevFilteredPos = smoothPos.clone()
     this.lastPredictionTimestamp = now
     this.predictionDelta = Math.min(velocityLength, maxPredictionDelta)
 
-    return smoothPos.clone().addScaledVector(clampedVelocity, PREDICTION_FACTOR)
+    // Scale lead by current motion: zero prediction (and zero noise amplification)
+    // at rest, ramping to full lead during real movement.
+    const predictionGain = PREDICTION_FACTOR * (this.motionLevel ?? 0)
+    return smoothPos.clone().addScaledVector(leadVelocity, predictionGain)
   }
 
   _updateAdaptiveFilters(rawPosition, rawQuat, timestamp) {
@@ -308,24 +328,34 @@ export class RenderLoop {
     let angularMotion = 0
     if (rawQuat && this.lastRawQuat) {
       const angularSpeed = rawQuat.angleTo(this.lastRawQuat) / dt // rad/s
-      angularMotion = THREE.MathUtils.clamp(angularSpeed / 1.8, 0, 1)
+      // More sensitive (was /1.8): a head turn should hit full motion quickly so
+      // the filters open up and the glasses don't trail the turn.
+      angularMotion = THREE.MathUtils.clamp(angularSpeed / 1.0, 0, 1)
     }
 
-    const motion = Math.max(linearMotion, angularMotion)
+    const rawMotion = Math.max(linearMotion, angularMotion)
+    // Deadzone: ignore tiny motion (landmark noise + involuntary sway) so the
+    // filter stays in its heavily-smoothed "still" mode at rest and doesn't jitter.
+    // Real movement still ramps motion to 1 for full responsiveness.
+    // Wider deadzone (was 0.12): tracking is noisier when the head is held at an
+    // angle, and that noise was tripping the gate out of "still" mode and jittering.
+    // A bigger deadzone keeps any held pose (forward OR turned) in heavy smoothing.
+    const deadzone = 0.2
+    const motion = THREE.MathUtils.clamp((rawMotion - deadzone) / (1 - deadzone), 0, 1)
+    this.motionLevel = motion
     this.filterMode = motion > 0.55 ? 'fast' : motion > 0.2 ? 'moving' : 'still'
 
-    // Higher base cutoff (was 0.85 / 0.75): less smoothing latency at rest, which
-    // is the main source of the perceived lag. Jitter is still controlled because
-    // beta opens the cutoff further as motion rises.
+    // Very low base cutoff = strong smoothing on any held pose (no jitter); high
+    // ceiling = tight tracking during real movement so the face doesn't clip the frame.
     this.positionFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(1.5, 3.0, motion),
-      beta: THREE.MathUtils.lerp(0.02, 0.12, motion),
+      minCutoff: THREE.MathUtils.lerp(0.85, 5.5, motion),
+      beta: THREE.MathUtils.lerp(0.015, 0.20, motion),
       dCutoff: 1.0,
     })
 
     this.rotationFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(1.3, 2.8, motion),
-      beta: THREE.MathUtils.lerp(0.05, 0.16, motion),
+      minCutoff: THREE.MathUtils.lerp(0.75, 5.0, motion),
+      beta: THREE.MathUtils.lerp(0.04, 0.26, motion),
       dCutoff: 1.0,
     })
 
@@ -695,6 +725,14 @@ export class RenderLoop {
         ? this.rotationFilter.filter(fitSolution.glassesTransform.quaternion, timestamp)
         : fitSolution.glassesTransform.quaternion.clone()
       const predictedPos = this._predictPosition(smoothPos)
+      // Extra depth (z) damping: the IPD-based depth estimate is noisy when the head
+      // is held at an angle (foreshortened irises), trembling the frame in/out. Damp
+      // it hard at rest, lightly during real movement so moving closer/farther tracks.
+      const depthAlpha = THREE.MathUtils.lerp(0.05, 0.85, this.motionLevel ?? 0)
+      this.smoothedDepth = this.smoothedDepth == null
+        ? predictedPos.z
+        : THREE.MathUtils.lerp(this.smoothedDepth, predictedPos.z, depthAlpha)
+      predictedPos.z = this.smoothedDepth
       const fitScale = this._smoothSolvedScale(fitSolution.glassesTransform.scale)
       const transform = {
         position: predictedPos,
