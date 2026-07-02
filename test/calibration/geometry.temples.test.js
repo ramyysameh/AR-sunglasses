@@ -30,4 +30,13 @@ describe('detectTemples', () => {
     ])
     expect(detectTemples(flat).certainty).toBeLessThan(0.5)
   })
+
+  it('reports low certainty for a single one-sided arm', () => {
+    // front slab present, but only a LEFT rearward arm — no matching right arm
+    const oneArm = new Float32Array([
+      -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.02, 0.02,
+      -0.069, 0, -0.13,
+    ])
+    expect(detectTemples(oneArm).certainty).toBeLessThan(0.5)
+  })
 })
