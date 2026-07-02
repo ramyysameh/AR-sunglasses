@@ -672,7 +672,7 @@ Create `src/calibration/normalizer.js`:
 
 ```js
 import { mergedPositions } from './glbAccess.js'
-import { computeBounds, measureFrontWidth } from './geometry.js'
+import { computeBounds } from './geometry.js'
 
 export function normalizeModel(doc, spec) {
   const transforms = []
@@ -715,7 +715,6 @@ export function normalizeModel(doc, spec) {
     transforms.push('recenter')
   }
 
-  void measureFrontWidth
   return { doc, transforms }
 }
 ```
