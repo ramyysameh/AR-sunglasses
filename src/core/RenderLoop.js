@@ -2,17 +2,21 @@
  * Main AR render loop that fuses face tracking, pose filtering, occlusion, and Three.js rendering.
  */
 import * as THREE from 'three'
-import { scaleMultiplier, xOffset, yOffset, zOffset } from '../config/poseConfig.js'
+import { scaleMultiplier, xOffset, yOffset, zOffset, rotOffsetX, rotOffsetY, rotOffsetZ, trackingSmoothness } from '../config/poseConfig.js'
 import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
 import { FaceFitSolver } from '../fit/FaceFitSolver.js'
+import { coverNDC } from '../fit/coverMap.js'
 
 const TRACK_LOSS_RESET_MS = 180
 // Lower lead than before (was 0.85): heavy lead on an already-smoothed signal
 // overshoots and recoils, which reads as rubber-banding. A light lead just
 // compensates residual filter latency.
-const PREDICTION_FACTOR = 0.6
+const PREDICTION_FACTOR = 0.85
 const MAX_PREDICTION_SPEED = 1.2
+// Rotation lead (ms) to cancel capture->detect->render latency during turns.
+const ROT_LEAD_MS = 60
+const MAX_ROT_LEAD_FRAMES = 4
 const FALLBACK_FACE_DEPTH = -0.78
 const NEAREST_DISPLAY_DEPTH = -0.62
 const LOW_QUALITY_FREEZE_FRAMES = 3
@@ -85,8 +89,10 @@ export class RenderLoop {
     })
     this.renderer.setClearColor(0x000000, 0)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.1
+    // AgX matches Blender's default view transform, so the frame reads with the
+    // same richness/contrast as in Blender (ACES was washing it out lighter).
+    this.renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping
+    this.renderer.toneMappingExposure = 1.0
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio ?? 1, 2))
 
     this.scene = new THREE.Scene()
@@ -98,7 +104,7 @@ export class RenderLoop {
     this.camera.position.set(0, 0, 0)
     this.camera.lookAt(0, 0, -1)
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.85)
+    const ambient = new THREE.AmbientLight(0xffffff, 0.45)
     const key = new THREE.DirectionalLight(0xffffff, 1.35)
     key.position.set(0.45, 1.1, 1.8)
     const fill = new THREE.DirectionalLight(0xffffff, 0.45)
@@ -141,6 +147,13 @@ export class RenderLoop {
     if (this.glassesRoot && this.scene) {
       this.scene.add(this.glassesRoot)
     }
+
+    // A new model can have a radically different fitted scale/depth (e.g. a
+    // normalized frame ~1.0 vs a raw-unit frame ~0.05). Force a tracking-state
+    // reset so the smoothers re-seed to the new model's target on the next
+    // frame instead of easing down from the previous model's value — which
+    // otherwise makes a swapped-in frame appear huge and shrink over seconds.
+    this.filtersNeedReset = true
   }
 
   setFaceOccluder(faceOccluder) {
@@ -233,6 +246,33 @@ export class RenderLoop {
     this.lastPredictionTimestamp = null
     this.smoothedScale = null
     this.smoothedDepth = null
+    this._lastRotQuat = null
+    this._angVelQ = null
+  }
+
+  // Opt-in live fit readout (visit with ?fitdbg=1). Shows what actually moves
+  // during a head turn so the "shrinks / moves forward on big turns" report can
+  // be measured on a real camera, which the pre-rendered mock can't reach.
+  _updateFitDebugOverlay(data) {
+    if (this._fitDbg === undefined) {
+      this._fitDbg = new URLSearchParams(window.location.search).get('fitdbg') === '1'
+    }
+    if (!this._fitDbg) return
+    if (!this._fitDbgEl) {
+      const el = document.createElement('div')
+      el.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99999;font:12px/1.5 monospace;' +
+        'color:#7fffd4;background:rgba(0,0,0,.72);padding:8px 10px;border-radius:8px;white-space:pre;pointer-events:none'
+      document.body.appendChild(el)
+      this._fitDbgEl = el
+      this._fitDbgPeak = 0
+    }
+    const yaw = Math.abs(data.yaw)
+    if (yaw > this._fitDbgPeak) this._fitDbgPeak = yaw
+    this._fitDbgEl.textContent =
+      `yaw      ${data.yaw.toFixed(1)}°  (peak ${this._fitDbgPeak.toFixed(0)}°)\n` +
+      `scale    applied ${data.scale.toFixed(4)}  target ${data.raw.toFixed(4)}\n` +
+      `depth z  ${data.z.toFixed(4)}  (more -neg = farther)\n` +
+      `fitQual  ${(data.quality ?? 0).toFixed(2)}`
   }
 
   _hideTrackedObjects(timestamp) {
@@ -307,6 +347,40 @@ export class RenderLoop {
     return smoothPos.clone().addScaledVector(leadVelocity, predictionGain)
   }
 
+  _predictRotation(quat, timestamp) {
+    if (!this._lastRotQuat) {
+      this._lastRotQuat = quat.clone()
+      this._lastRotT = timestamp
+      this._angVelQ = null
+      return quat.clone()
+    }
+
+    const dt = Math.max((timestamp - (this._lastRotT ?? timestamp)) / 1000, 1 / 120)
+    // Incremental rotation since last frame (the per-frame angular velocity).
+    const delta = this._lastRotQuat.clone().invert().multiply(quat)
+    this._lastRotQuat = quat.clone()
+    this._lastRotT = timestamp
+
+    // Smooth the angular velocity so the lead doesn't amplify per-frame noise.
+    if (!this._angVelQ) {
+      this._angVelQ = delta.clone()
+    } else {
+      this._angVelQ.slerp(delta, 0.4)
+    }
+
+    const motion = this.motionLevel ?? 0
+    // Predict ahead by ~ROT_LEAD_MS, scaled by how much the head is actually
+    // moving (zero lead at rest -> no jitter; full lead mid-turn -> no trailing).
+    const leadFrames = THREE.MathUtils.clamp((ROT_LEAD_MS / 1000) / dt, 0, MAX_ROT_LEAD_FRAMES) * motion
+    if (leadFrames <= 0.01) {
+      return quat.clone()
+    }
+
+    // slerp(t>1) extrapolates along the same arc -> leads the rotation.
+    const lead = new THREE.Quaternion().slerp(this._angVelQ, leadFrames)
+    return quat.clone().multiply(lead)
+  }
+
   _updateAdaptiveFilters(rawPosition, rawQuat, timestamp) {
     if (!this.lastRawPosition || this.lastRawTimestamp === null) {
       this.lastRawPosition = rawPosition.clone()
@@ -328,9 +402,9 @@ export class RenderLoop {
     let angularMotion = 0
     if (rawQuat && this.lastRawQuat) {
       const angularSpeed = rawQuat.angleTo(this.lastRawQuat) / dt // rad/s
-      // More sensitive (was /1.8): a head turn should hit full motion quickly so
-      // the filters open up and the glasses don't trail the turn.
-      angularMotion = THREE.MathUtils.clamp(angularSpeed / 1.0, 0, 1)
+      // More sensitive: a head turn should hit full motion quickly so the filters
+      // open up immediately and the glasses don't trail the turn.
+      angularMotion = THREE.MathUtils.clamp(angularSpeed / 0.6, 0, 1)
     }
 
     const rawMotion = Math.max(linearMotion, angularMotion)
@@ -340,22 +414,39 @@ export class RenderLoop {
     // Wider deadzone (was 0.12): tracking is noisier when the head is held at an
     // angle, and that noise was tripping the gate out of "still" mode and jittering.
     // A bigger deadzone keeps any held pose (forward OR turned) in heavy smoothing.
-    const deadzone = 0.2
+    const deadzone = 0.28
     const motion = THREE.MathUtils.clamp((rawMotion - deadzone) / (1 - deadzone), 0, 1)
-    this.motionLevel = motion
-    this.filterMode = motion > 0.55 ? 'fast' : motion > 0.2 ? 'moving' : 'still'
+    // The detector runs slower than the render loop, so a fresh pose arrives only
+    // every ~2nd frame; the in-between (near-duplicate) frame reads as "still".
+    // Using that raw value directly whipsaws motion 1->0->1 each frame, which flips
+    // the filter cutoffs and the rotation lead on/off and shows up as rotational
+    // shake on a tilt. Fast attack (follow real acceleration immediately), slow
+    // release (ride through the duplicate frame instead of collapsing to 0).
+    const prevMotion = this.motionLevel ?? 0
+    this.motionLevel = motion > prevMotion
+      ? motion
+      : THREE.MathUtils.lerp(prevMotion, motion, 0.3)
+    const smoothedMotion = this.motionLevel
+    this.filterMode = smoothedMotion > 0.55 ? 'fast' : smoothedMotion > 0.2 ? 'moving' : 'still'
+
+    // Global user smoothness knob (debug panel). Neutral at 0.5; >0.5 lowers the
+    // cutoffs (smoother/laggier), <0.5 raises them (snappier/jitterier).
+    const smoothFactor = Math.pow(0.4, (trackingSmoothness - 0.5) * 2)
 
     // Very low base cutoff = strong smoothing on any held pose (no jitter); high
     // ceiling = tight tracking during real movement so the face doesn't clip the frame.
+    // Lower rest cutoffs = stronger smoothing when (nearly) still, so residual
+    // landmark noise doesn't jitter the frame; high ceilings keep it responsive
+    // once real movement ramps `motion` up.
     this.positionFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.85, 5.5, motion),
-      beta: THREE.MathUtils.lerp(0.015, 0.20, motion),
+      minCutoff: THREE.MathUtils.lerp(0.40, 6.0, smoothedMotion) * smoothFactor,
+      beta: THREE.MathUtils.lerp(0.010, 0.22, smoothedMotion) * smoothFactor,
       dCutoff: 1.0,
     })
 
     this.rotationFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.75, 5.0, motion),
-      beta: THREE.MathUtils.lerp(0.04, 0.26, motion),
+      minCutoff: THREE.MathUtils.lerp(0.35, 6.0, smoothedMotion) * smoothFactor,
+      beta: THREE.MathUtils.lerp(0.02, 0.30, smoothedMotion) * smoothFactor,
       dCutoff: 1.0,
     })
 
@@ -373,8 +464,7 @@ export class RenderLoop {
     const halfFov = THREE.MathUtils.degToRad(this.camera.fov) * 0.5
     const halfHeight = Math.tan(halfFov) * distance
     const halfWidth = halfHeight * this.camera.aspect
-    const ndcX = -(anchor.x * 2 - 1)
-    const ndcY = -(anchor.y * 2 - 1)
+    const { ndcX, ndcY } = coverNDC(anchor, this.camera)
 
     return new THREE.Vector3(ndcX * halfWidth, ndcY * halfHeight, depth)
   }
@@ -452,7 +542,16 @@ export class RenderLoop {
     const globalScale = Number.isFinite(scaleMultiplier) ? scaleMultiplier : 1
     const limits = this.modelConfig?.scaleLimits ?? { min: 0.85, max: 1.15 }
     const clampedScale = THREE.MathUtils.clamp(targetScale * globalScale, limits.min, limits.max)
-    const damping = Number.isFinite(this.modelConfig?.fitDamping) ? this.modelConfig.fitDamping : 0.18
+    const baseDamping = Number.isFinite(this.modelConfig?.fitDamping) ? this.modelConfig.fitDamping : 0.18
+
+    // Every 2D face metric foreshortens with yaw, so the fitted size wobbles when
+    // the head isn't frontal. Only re-fit the size when near-frontal AND fairly
+    // still; hold it steady through turns (the face isn't actually resizing).
+    const yawAbs = Math.abs(this.headYaw ?? 0)
+    const frontal = yawAbs < THREE.MathUtils.degToRad(5)
+    const damping = frontal
+      ? THREE.MathUtils.lerp(baseDamping, 0.004, this.motionLevel ?? 0)
+      : 0.0
 
     this.smoothedScale = this.smoothedScale === null
       ? clampedScale
@@ -533,8 +632,7 @@ export class RenderLoop {
     const halfFov = THREE.MathUtils.degToRad(this.camera.fov) * 0.5
     const halfHeight = Math.tan(halfFov) * distance
     const halfWidth = halfHeight * this.camera.aspect
-    const ndcX = -(anchor.x * 2 - 1)
-    const ndcY = -(anchor.y * 2 - 1)
+    const { ndcX, ndcY } = coverNDC(anchor, this.camera)
 
     return new THREE.Vector3(
       ndcX * halfWidth,
@@ -580,21 +678,35 @@ export class RenderLoop {
       return
     }
 
-    const width = this.video?.videoWidth ?? this.canvas?.clientWidth ?? this.lastWidth ?? 1
-    const height = this.video?.videoHeight ?? this.canvas?.clientHeight ?? this.lastHeight ?? 1
-    
-    this.camera._pixelWidth = this.canvas?.clientWidth ?? this.video?.videoWidth ?? 640
-    this.camera._pixelHeight = this.canvas?.clientHeight ?? this.video?.videoHeight ?? 480
+    // Render at the DISPLAY (canvas) size so the overlay buffer matches what's
+    // on screen — never CSS-stretched to a different aspect than it was rendered.
+    const dispW = this.canvas?.clientWidth || this.video?.videoWidth || this.lastWidth || 1
+    const dispH = this.canvas?.clientHeight || this.video?.videoHeight || this.lastHeight || 1
 
-    if (width === this.lastWidth && height === this.lastHeight) {
+    // Keep both coordinate spaces so landmark projection can undo the video's
+    // object-fit:cover crop (see coverNDC).
+    this.camera._videoW = this.video?.videoWidth || dispW
+    this.camera._videoH = this.video?.videoHeight || dispH
+    this.camera._clientW = dispW
+    this.camera._clientH = dispH
+    this.camera._pixelWidth = dispW
+    this.camera._pixelHeight = dispH
+
+    // Always keep the camera aspect locked to the DISPLAY — covers the case where
+    // the camera was just rebuilt (video change) with a different aspect.
+    const aspect = dispW / dispH
+    if (this.camera.aspect !== aspect) {
+      this.camera.aspect = aspect
+      this.camera.updateProjectionMatrix()
+    }
+
+    if (dispW === this.lastWidth && dispH === this.lastHeight) {
       return
     }
 
-    this.lastWidth = width
-    this.lastHeight = height
-    this.renderer.setSize(width, height, false)
-    this.camera.aspect = width / height
-    this.camera.updateProjectionMatrix()
+    this.lastWidth = dispW
+    this.lastHeight = dispH
+    this.renderer.setSize(dispW, dispH, false)
   }
 
   _frame() {
@@ -721,22 +833,47 @@ export class RenderLoop {
       const smoothPos = this.positionFilter
         ? this.positionFilter.filter(tunedPosition, timestamp)
         : tunedPosition
-      const smoothQuat = this.rotationFilter
+      const filteredQuat = this.rotationFilter
         ? this.rotationFilter.filter(fitSolution.glassesTransform.quaternion, timestamp)
         : fitSolution.glassesTransform.quaternion.clone()
+      // Apply the user's rotation fine-tune (debug panel) on top of the tracked pose.
+      const smoothQuat = filteredQuat.clone()
+      if (rotOffsetX || rotOffsetY || rotOffsetZ) {
+        smoothQuat.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(
+          THREE.MathUtils.degToRad(rotOffsetX),
+          THREE.MathUtils.degToRad(rotOffsetY),
+          THREE.MathUtils.degToRad(rotOffsetZ),
+          'XYZ'
+        )))
+      }
+      // Lead the rotation to cancel pipeline latency so it doesn't trail a turn.
+      const predictedQuat = this._predictRotation(smoothQuat, timestamp)
+
+      // Use the SAME yaw the solver used for its depth-hold, so the size-freeze and
+      // the depth-hold engage together (no out-of-sync transition that shrinks).
+      this.headYaw = Number.isFinite(fitSolution.headYaw)
+        ? fitSolution.headYaw
+        : new THREE.Euler().setFromQuaternion(predictedQuat, 'YXZ').y
+
       const predictedPos = this._predictPosition(smoothPos)
-      // Extra depth (z) damping: the IPD-based depth estimate is noisy when the head
-      // is held at an angle (foreshortened irises), trembling the frame in/out. Damp
-      // it hard at rest, lightly during real movement so moving closer/farther tracks.
+      // Depth (z) jitter damping. (Yaw-induced depth inflation is now handled at
+      // the source in FaceFitSolver, so x/y/z stay consistent.)
       const depthAlpha = THREE.MathUtils.lerp(0.05, 0.85, this.motionLevel ?? 0)
       this.smoothedDepth = this.smoothedDepth == null
         ? predictedPos.z
         : THREE.MathUtils.lerp(this.smoothedDepth, predictedPos.z, depthAlpha)
       predictedPos.z = this.smoothedDepth
       const fitScale = this._smoothSolvedScale(fitSolution.glassesTransform.scale)
+      this._updateFitDebugOverlay({
+        yaw: THREE.MathUtils.radToDeg(this.headYaw ?? 0),
+        scale: fitScale,
+        raw: fitSolution.glassesTransform.scale,
+        z: predictedPos.z,
+        quality: fitSolution.fitQuality,
+      })
       const transform = {
         position: predictedPos,
-        quaternion: smoothQuat,
+        quaternion: predictedQuat,
         scale: fitScale,
         anchorWorldPoints,
         occlusionMesh: fitSolution.occlusionMesh,
@@ -746,7 +883,7 @@ export class RenderLoop {
       this._applyTransform(transform)
       this.lastGoodTransform = {
         position: predictedPos.clone(),
-        quaternion: smoothQuat.clone(),
+        quaternion: predictedQuat.clone(),
         scale: fitScale,
         anchorWorldPoints,
         occlusionMesh: fitSolution.occlusionMesh,
@@ -782,8 +919,8 @@ export class RenderLoop {
           modelDepth: glassesModel.userData.naturalDepth,
           depthPivot: glassesModel.userData.depthPivot,
           noseBridgeZ: smoothPos.z,
-          headQuaternion: smoothQuat ?? this.lastHeadQuaternion,
-          headPosition: smoothPos ?? this.lastHeadPosition,
+          headQuaternion: predictedQuat ?? this.lastHeadQuaternion,
+          headPosition: predictedPos ?? this.lastHeadPosition,
           predictionDelta: this.predictionDelta ?? 0,
           debugPoints: this._projectDebugPoints(anchorWorldPoints),
         })

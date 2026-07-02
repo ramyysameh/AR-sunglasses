@@ -7,6 +7,7 @@ import { FaceOccluder } from '../../occlusion/FaceOccluder.js'
 import { GlassesModelLoader } from '../../models/GlassesModelLoader.js'
 import { DebugHUD } from '../../debug/DebugHUD.js'
 import { RenderLoop } from '../../core/RenderLoop.js'
+import { LocalFaceScanner } from '../../fit/LocalFaceScanner.js'
 import { getGlassesConfig, getGlassesModelUrl } from '../../config/arConfig.js'
 import { TryOnEventEmitter } from '../TryOnEventEmitter.js'
 import { CameraError, describeCameraError } from '../../support/capabilities.js'
@@ -55,12 +56,20 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     this.landmarkProcessor = new LandmarkProcessor()
 
     this._setLoading('Loading render pipeline...')
+    // In mock mode the "face" is a static image, so the head-turn calibration
+    // can never complete — relax the scanner to lock on from the front view only.
+    const mockParam = new URLSearchParams(window.location.search).get('mock')
+    const mockMode = mockParam === '1' || mockParam === 'turn'
+    const localFaceScanner = mockMode
+      ? new LocalFaceScanner({ stageTargets: { front: 5, yawLeft: 0, yawRight: 0, neutralReturn: 0 } })
+      : undefined
     this.renderLoop = await new RenderLoop({
       canvas: this.canvas,
       video: this.video,
       positionFilter: new VectorFilter(),
       rotationFilter: new QuaternionFilter(),
       onScanStateChange: (scanState) => this._updateScanMessage(scanState),
+      ...(localFaceScanner ? { localFaceScanner } : {}),
     }).init()
 
     this.renderLoop.camera = this._initCamera()
@@ -76,7 +85,9 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
       initialParams: this.renderLoop.getFilterSettings(),
       onParamsChange: (params) => this.renderLoop.setFilterParams(params),
     })
-    hud.setVisible(this.debugEnabled)
+    // Debug control sidebar is always shown so position/scale/rotation/tracking
+    // can be tuned live. (Previously gated behind ?debug=1.)
+    hud.setVisible(true)
 
     this.renderLoop.setFaceOccluder(faceOccluder)
     this.renderLoop.setHud(hud)
@@ -153,6 +164,14 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
   }
 
   async _startCamera() {
+    // Dev/preview: ?mock=1 feeds a static face image instead of the webcam,
+    // so the AR pipeline can be previewed without camera access.
+    const mock = new URLSearchParams(window.location.search).get('mock')
+    if (mock === '1' || mock === 'turn') {
+      await this._startMockCamera()
+      return
+    }
+
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -191,16 +210,89 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     }
   }
 
+  async _startMockCamera() {
+    // ?mock=1   -> static virtual face
+    // ?mock=turn-> virtual face that oscillates left/right (to test head turns)
+    const mode = new URLSearchParams(window.location.search).get('mock')
+    const cb = Date.now()
+
+    let images
+    if (mode === 'turn') {
+      const N = 9
+      images = await Promise.all(
+        Array.from({ length: N }, (_, i) => {
+          const im = new Image()
+          im.crossOrigin = 'anonymous'
+          im.src = `/mock-turn/frame-${i}.png?v=${cb}`
+          return im.decode().then(() => im)
+        })
+      )
+    } else {
+      const im = new Image()
+      im.crossOrigin = 'anonymous'
+      im.src = `/mock-face.png?v=${cb}`
+      await im.decode()
+      images = [im]
+    }
+
+    const first = images[0]
+    const canvas = document.createElement('canvas')
+    canvas.width = first.naturalWidth || 720
+    canvas.height = first.naturalHeight || 720
+    const ctx = canvas.getContext('2d')
+
+    const N = images.length
+    const start = performance.now()
+    const PERIOD_MS = 2600 // one full left->right->left cycle (brisk, to stress tracking)
+    this._oscStart = null
+    const draw = () => {
+      let idx = (N - 1) >> 1 // front frame (middle)
+      // Hold front during init warm-up AND while the calibration overlay is
+      // visible; only start oscillating once the scan has actually locked, so it
+      // never starts turning before calibration completes.
+      const scanOverlay = document.getElementById('scan-overlay')
+      const calibrating = scanOverlay ? scanOverlay.hidden === false : false
+      const warmup = performance.now() - start < 2500
+      if (N > 1 && !calibrating && !warmup) {
+        if (this._oscStart == null) this._oscStart = performance.now()
+        const phase = Math.sin(((performance.now() - this._oscStart) / PERIOD_MS) * Math.PI * 2) // -1..1
+        idx = Math.round((phase * 0.5 + 0.5) * (N - 1))
+      }
+      ctx.drawImage(images[idx], 0, 0, canvas.width, canvas.height)
+      this._mockRAF = requestAnimationFrame(draw)
+    }
+    draw()
+
+    this.stream = canvas.captureStream(30)
+    this.video.srcObject = this.stream
+    this.video.muted = true
+    this.video.playsInline = true
+
+    await new Promise((resolve) => {
+      if (this.video.readyState >= 1 && this.video.videoWidth > 0) {
+        resolve()
+        return
+      }
+      this.video.addEventListener('loadedmetadata', () => resolve(), { once: true })
+    })
+    await this.video.play()
+  }
+
   _initCamera() {
-    const width = this.video.videoWidth
-    const height = this.video.videoHeight
-    const fy = height * 1.2
-    const fovY = 2 * Math.atan(height / (2 * fy)) * (180 / Math.PI)
-    const camera = new THREE.PerspectiveCamera(fovY, width / height, 0.001, 1000)
+    // Vertical FOV from the video (aspect-independent ~45°).
+    const vh = this.video.videoHeight || 720
+    const fy = vh * 1.2
+    const fovY = 2 * Math.atan(vh / (2 * fy)) * (180 / Math.PI)
+    // Aspect + render size come from the DISPLAY (canvas), not the video, so the
+    // glasses are never horizontally squished when the video aspect differs from
+    // the window aspect. RenderLoop._syncSize keeps this in sync every frame.
+    const cw = this.canvas?.clientWidth || this.video.videoWidth || 1280
+    const ch = this.canvas?.clientHeight || vh || 720
+    const camera = new THREE.PerspectiveCamera(fovY, cw / ch, 0.001, 1000)
 
     camera.position.set(0, 0, 0)
     camera.lookAt(0, 0, -1)
-    this.renderLoop.renderer?.setSize(width, height, false)
+    this.renderLoop.renderer?.setSize(cw, ch, false)
 
     return camera
   }
@@ -212,13 +304,14 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
       return
     }
 
-    if (this.renderLoop.camera && this.renderLoop.lastWidth === width && this.renderLoop.lastHeight === height) {
+    // Only rebuild the camera when the VIDEO intrinsics change; the display
+    // aspect is handled continuously by RenderLoop._syncSize().
+    if (this._lastVideoW === width && this._lastVideoH === height) {
       return
     }
-
+    this._lastVideoW = width
+    this._lastVideoH = height
     this.renderLoop.camera = this._initCamera()
-    this.renderLoop.camera.aspect = width / height
-    this.renderLoop.camera.updateProjectionMatrix()
   }
 
   _setLoading(message) {

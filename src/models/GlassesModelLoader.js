@@ -99,7 +99,28 @@ export class GlassesModelLoader {
 
         if (material?.map) {
           material.map.colorSpace = THREE.SRGBColorSpace
+          // Sharper textures at grazing angles + proper mipmaps (fixes the
+          // "low quality / pixelated" look on the frame).
+          material.map.anisotropy = 16
+          material.map.generateMipmaps = true
+          material.map.minFilter = THREE.LinearMipmapLinearFilter
+          material.map.magFilter = THREE.LinearFilter
           material.map.needsUpdate = true
+        }
+
+        // Frame stays EXACTLY as authored. The lens is the one exception: glTF
+        // glass "transmission" stalls the real-time renderer, so swap it for
+        // lightweight alpha (keeps the authored tint colour, just renderable).
+        if (modelConfig.preserveMaterials) {
+          const name = `${material.name ?? ''} ${child.name ?? ''}`.toLowerCase()
+          if (name.includes('lens') || name.includes('glass')) {
+            if ('transmission' in material) material.transmission = 0
+            material.transparent = true
+            material.opacity = Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : 0.5
+            material.depthWrite = false
+          }
+          material.needsUpdate = true
+          continue
         }
 
         if ('roughness' in material && Number.isFinite(materialProfile.frameRoughness)) {

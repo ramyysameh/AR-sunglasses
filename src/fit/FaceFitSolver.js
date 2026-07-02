@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { coverNDC } from './coverMap.js'
 
 const DEFAULT_MIN_DEPTH = -1.8
 const DEFAULT_MAX_DEPTH = -0.22
@@ -33,8 +34,7 @@ function anchorToWorld(anchor, camera, baseDepth, depthScale = DEFAULT_LANDMARK_
   const halfFov = THREE.MathUtils.degToRad(camera.fov) * 0.5
   const halfHeight = Math.tan(halfFov) * distance
   const halfWidth = halfHeight * camera.aspect
-  const ndcX = -(anchor.x * 2 - 1)
-  const ndcY = -(anchor.y * 2 - 1)
+  const { ndcX, ndcY } = coverNDC(anchor, camera)
 
   return new THREE.Vector3(ndcX * halfWidth, ndcY * halfHeight, depth)
 }
@@ -46,8 +46,7 @@ function anchorToWorldXY(anchor, camera, metricDepth) {
   const halfFov = THREE.MathUtils.degToRad(camera.fov) * 0.5
   const halfHeight = Math.tan(halfFov) * distance
   const halfWidth = halfHeight * camera.aspect
-  const ndcX = -(anchor.x * 2 - 1)
-  const ndcY = -(anchor.y * 2 - 1)
+  const { ndcX, ndcY } = coverNDC(anchor, camera)
 
   return new THREE.Vector3(ndcX * halfWidth, ndcY * halfHeight, metricDepth)
 }
@@ -117,6 +116,8 @@ export class FaceFitSolver {
   constructor(options = {}) {
     this.landmarkDepthScale = options.landmarkDepthScale ?? DEFAULT_LANDMARK_DEPTH_SCALE
     this.fallbackDepth = options.fallbackDepth ?? DEFAULT_FALLBACK_DEPTH
+    this._smoothForeshorten = null
+    this._heldDepth = null
   }
 
   /**
@@ -135,8 +136,21 @@ export class FaceFitSolver {
       camera,
       0.076
     )
-    const baseDepth = ipdDepth
+    const rawDepth = ipdDepth
       ?? (validDepth(matrixPosition.z) ? matrixPosition.z : this.fallbackDepth)
+
+    // The IPD-based distance estimate inflates with yaw (foreshortened irises read
+    // as "farther"), which makes the whole frame drift in depth on a turn. Hold the
+    // distance steady while turned; only re-estimate it near-frontal. Doing this at
+    // the source keeps x, y and z consistent (no recede, no forward pop).
+    const headEuler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ')
+    const frontalDepth = Math.abs(headEuler.y) < THREE.MathUtils.degToRad(5)
+    if (this._heldDepth == null || frontalDepth) {
+      this._heldDepth = rawDepth
+    } else {
+      this._heldDepth += (rawDepth - this._heldDepth) * 0.02
+    }
+    const baseDepth = this._heldDepth
 
     // IPD depth is measured at eye level; nose bridge is slightly forward
     const noseBridgeDepth = baseDepth + 0.022
@@ -205,7 +219,10 @@ export class FaceFitSolver {
     const templeSpan = span(leftTemple, rightTemple)
     const irisSpan = span(leftIris, rightIris)
 
-    // Target: glasses width = 1.0x temple span (temples sit at hinge points)
+    // Target: glasses width = 1.0x temple span (temples sit at hinge points).
+    // No yaw foreshortening correction here — the size is frozen during turns
+    // downstream (RenderLoop._smoothSolvedScale), and the depth is held steady at
+    // the source, so the projected width stays consistent.
     const targetWidth = templeSpan > 0
       ? templeSpan
       : irisSpan * 1.6  // fallback: extrapolate temple span from iris span
@@ -246,6 +263,9 @@ export class FaceFitSolver {
         quaternion,
         scale,
       },
+      // The head yaw the solver used, so the size-freeze downstream keys off the
+      // exact same value as the depth-hold here (no out-of-sync transition).
+      headYaw: headEuler.y,
       occlusionMesh: {
         landmarks,
         baseDepth,

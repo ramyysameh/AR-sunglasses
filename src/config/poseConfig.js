@@ -23,3 +23,19 @@ export function setXOffset(v) {
 export function setZOffset(v) {
 	zOffset = Number.isFinite(v) ? v : 0.0
 }
+
+// Rotation fine-tune offsets (degrees), applied on top of the tracked head pose.
+export let rotOffsetX = 0.0 // pitch (tilt up/down)
+export let rotOffsetY = 0.0 // yaw (turn left/right)
+export let rotOffsetZ = 0.0 // roll (tilt sideways)
+
+export function setRotOffsetX(v) { rotOffsetX = Number.isFinite(v) ? v : 0.0 }
+export function setRotOffsetY(v) { rotOffsetY = Number.isFinite(v) ? v : 0.0 }
+export function setRotOffsetZ(v) { rotOffsetZ = Number.isFinite(v) ? v : 0.0 }
+
+// Global tracking smoothness: 0 = snappy (tracks fast, more jitter),
+// 0.5 = default behavior, 1 = very smooth (more lag, less jitter).
+export let trackingSmoothness = 0.5
+export function setTrackingSmoothness(v) {
+	trackingSmoothness = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5
+}

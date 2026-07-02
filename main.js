@@ -247,6 +247,28 @@ async function main() {
 sidebarCollapseBtn?.addEventListener('click', () => collapseSidebar(true))
 sidebarOpenBtn?.addEventListener('click', () => collapseSidebar(false))
 
+// Bottom-of-screen camera switch: cycles through the input sources, reloading
+// in the chosen mode.  Webcam -> Virtual Face -> Turning Face -> Webcam.
+const cameraSwitchBtn = document.getElementById('camera-switch-btn')
+if (cameraSwitchBtn) {
+  const mock = new URLSearchParams(window.location.search).get('mock')
+  const current = mock === 'turn' ? 'turn' : mock === '1' ? 'static' : 'webcam'
+  const NEXT = {
+    webcam: { mock: '1', label: 'Virtual Face' },
+    static: { mock: 'turn', label: 'Turning Face' },
+    turn: { mock: null, label: 'Webcam' },
+  }
+  const next = NEXT[current]
+  const label = cameraSwitchBtn.querySelector('.switch-label')
+  if (label) label.textContent = `Switch to ${next.label}`
+  cameraSwitchBtn.addEventListener('click', () => {
+    const url = new URL(window.location.href)
+    if (next.mock) url.searchParams.set('mock', next.mock)
+    else url.searchParams.delete('mock')
+    window.location.href = url.toString()
+  })
+}
+
 window.addEventListener('beforeunload', () => {
   tryOnEngine?.destroy?.()
 })

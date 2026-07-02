@@ -40,7 +40,8 @@ html, body {
   background: transparent !important;
 }
 
-#capture-btn {
+#capture-btn,
+#camera-switch-btn {
   position: fixed;
   left: 50%;
   bottom: 28px;
@@ -64,12 +65,14 @@ html, body {
   cursor: pointer;
 }
 
-#capture-btn:hover {
+#capture-btn:hover,
+#camera-switch-btn:hover {
   background: rgba(24, 24, 28, 0.92);
   border-color: rgba(255, 255, 255, 0.34);
 }
 
-#capture-btn:active {
+#capture-btn:active,
+#camera-switch-btn:active {
   transform: translateX(-50%) translateY(1px);
 }
 
