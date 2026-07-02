@@ -402,6 +402,15 @@ describe('detectTemples', () => {
     ])
     expect(detectTemples(flat).certainty).toBeLessThan(0.5)
   })
+
+  it('reports low certainty for a single one-sided arm', () => {
+    // front slab present, but only a LEFT rearward arm — no matching right arm
+    const oneArm = new Float32Array([
+      -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.02, 0.02,
+      -0.069, 0, -0.13,
+    ])
+    expect(detectTemples(oneArm).certainty).toBeLessThan(0.5)
+  })
 })
 ```
 
@@ -431,25 +440,38 @@ export function measureFrontWidth(positions) {
   return maxX - minX
 }
 
-// Hinge = the outermost front-slab vertex on each side. Certainty rises with how
-// far the mesh extends rearward (−Z) beyond the front slab (i.e. real temple arms).
+// Hinges = the outermost front-slab vertex on each side. Certainty rises with how
+// far the mesh extends rearward (−Z) past the front slab ON BOTH sides — a single
+// arm, an off-axis rear spike, or a flat front all score low, since real eyewear
+// has two temple arms. Distinguishing genuine thin arms from an unusually deep
+// front slab is left to A2 tuning against real GLBs.
 export function detectTemples(positions) {
   const { min, max } = computeBounds(positions)
   const zRange = max.z - min.z || 1
   const zThreshold = max.z - zRange * 0.25
-  let left = { x: 0, y: 0, z: 0 }
-  let right = { x: 0, y: 0, z: 0 }
-  let rearDepth = 0
+  let left = null
+  let right = null
+  let leftRearDepth = 0
+  let rightRearDepth = 0
   for (let i = 0; i < positions.length; i += 3) {
     const x = positions[i], y = positions[i + 1], z = positions[i + 2]
     if (z >= zThreshold) {
-      if (x < left.x) left = { x, y, z }
-      if (x > right.x) right = { x, y, z }
+      if (x < 0 && (left === null || x < left.x)) left = { x, y, z }
+      if (x > 0 && (right === null || x > right.x)) right = { x, y, z }
     }
-    rearDepth = Math.max(rearDepth, zThreshold - z)
+    const rear = zThreshold - z
+    if (rear > 0) {
+      if (x < 0) leftRearDepth = Math.max(leftRearDepth, rear)
+      else if (x > 0) rightRearDepth = Math.max(rightRearDepth, rear)
+    }
   }
-  const certainty = Math.max(0, Math.min(1, rearDepth / (zRange * 0.5)))
-  return { leftHinge: left, rightHinge: right, certainty }
+  const bothArms = Math.min(leftRearDepth, rightRearDepth)
+  const certainty = Math.max(0, Math.min(1, bothArms / (zRange * 0.5)))
+  return {
+    leftHinge: left ?? { x: 0, y: 0, z: 0 },
+    rightHinge: right ?? { x: 0, y: 0, z: 0 },
+    certainty,
+  }
 }
 ```
 
