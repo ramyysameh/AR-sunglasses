@@ -15,21 +15,30 @@ export function computeBounds(positions) {
   return { min, max, size, center }
 }
 
-// Mean |x-centroid_x| distance between the mesh and its own X-mirror, normalized
-// by width. Approximated by comparing the sorted absolute-x profile of the +x and
-// -x half-spaces — a mesh symmetric about x=0 has matching profiles (deviation ~0).
+// Voxel-occupancy mirror symmetry about the X=0 plane: bucket vertices into a
+// coarse grid and measure the fraction whose X-mirror voxel is unoccupied.
+// 0 = every occupied region has a mirror across X=0 (symmetric); grows toward 1
+// as geometry lacks a mirror counterpart. Tessellation-independent (vertex-count
+// differences collapse into the same voxel) and scale-invariant (voxel ~ width/32).
 export function measureSymmetryDeviation(positions) {
-  const { size, center } = computeBounds(positions)
+  const { size } = computeBounds(positions)
   const width = size.x || 1
-  let sum = 0
+  const voxel = Math.max(width / 32, 1e-9)
+  const key = (x, y, z) =>
+    `${Math.round(x / voxel)},${Math.round(y / voxel)},${Math.round(z / voxel)}`
+
+  const occupied = new Set()
+  for (let i = 0; i < positions.length; i += 3) {
+    occupied.add(key(positions[i], positions[i + 1], positions[i + 2]))
+  }
+
+  let mismatched = 0
   let count = 0
   for (let i = 0; i < positions.length; i += 3) {
-    // distance of each vertex from the symmetry plane, offset by how far the whole
-    // mesh's center is from x=0 (a centered-but-symmetric mesh scores 0).
-    sum += Math.abs(positions[i] - center.x) - Math.abs(positions[i])
     count += 1
+    if (!occupied.has(key(-positions[i], positions[i + 1], positions[i + 2]))) {
+      mismatched += 1
+    }
   }
-  // center offset dominates asymmetry; fold it in explicitly and normalize.
-  const centerOffset = Math.abs(center.x)
-  return (centerOffset + Math.abs(sum) / (count || 1)) / width
+  return count ? mismatched / count : 0
 }

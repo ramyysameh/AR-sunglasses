@@ -26,4 +26,10 @@ describe('measureSymmetryDeviation', () => {
     const shifted = symmetric.map((v, i) => (i % 3 === 0 ? v + 0.5 : v))
     expect(measureSymmetryDeviation(shifted)).toBeGreaterThan(0.1)
   })
+
+  it('detects a centered-but-asymmetric mesh (no mirror counterpart)', () => {
+    // center.x = 0 (min -1, max +1), but (1,1,0) has no mirror at (-1,1,0)
+    const asymmetricCentered = new Float32Array([-1, 0, 0, 1, 0, 0, 1, 1, 0])
+    expect(measureSymmetryDeviation(asymmetricCentered)).toBeGreaterThan(0.1)
+  })
 })
