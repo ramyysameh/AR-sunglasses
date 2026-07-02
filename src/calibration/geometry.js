@@ -42,3 +42,40 @@ export function measureSymmetryDeviation(positions) {
   }
   return count ? mismatched / count : 0
 }
+
+// The front slab = vertices within the front 25% of the Z range. Its X extent is
+// the frame width.
+export function measureFrontWidth(positions) {
+  const { min, max } = computeBounds(positions)
+  const zThreshold = max.z - (max.z - min.z) * 0.25
+  let minX = Infinity
+  let maxX = -Infinity
+  for (let i = 0; i < positions.length; i += 3) {
+    if (positions[i + 2] >= zThreshold) {
+      minX = Math.min(minX, positions[i])
+      maxX = Math.max(maxX, positions[i])
+    }
+  }
+  return maxX - minX
+}
+
+// Hinge = the outermost front-slab vertex on each side. Certainty rises with how
+// far the mesh extends rearward (−Z) beyond the front slab (i.e. real temple arms).
+export function detectTemples(positions) {
+  const { min, max } = computeBounds(positions)
+  const zRange = max.z - min.z || 1
+  const zThreshold = max.z - zRange * 0.25
+  let left = { x: 0, y: 0, z: 0 }
+  let right = { x: 0, y: 0, z: 0 }
+  let rearDepth = 0
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i], y = positions[i + 1], z = positions[i + 2]
+    if (z >= zThreshold) {
+      if (x < left.x) left = { x, y, z }
+      if (x > right.x) right = { x, y, z }
+    }
+    rearDepth = Math.max(rearDepth, zThreshold - z)
+  }
+  const certainty = Math.max(0, Math.min(1, rearDepth / (zRange * 0.5)))
+  return { leftHinge: left, rightHinge: right, certainty }
+}
