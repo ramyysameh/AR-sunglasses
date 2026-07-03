@@ -48,6 +48,19 @@ async function resolveRemoteSkuKey() {
     }
 
     const { fitMetadata, modelUrl } = await response.json()
+
+    const isValidPayload = Boolean(modelUrl) &&
+      fitMetadata &&
+      typeof fitMetadata === 'object' &&
+      Number.isFinite(fitMetadata.frameWidthMeters) &&
+      fitMetadata.bridgeAnchor &&
+      fitMetadata.leftHinge &&
+      fitMetadata.rightHinge
+
+    if (!isValidPayload) {
+      throw new Error('invalid tryon-config payload')
+    }
+
     const engineModelConfig = toEngineModelConfig(fitMetadata, modelUrl)
     return registerRuntimeGlassesConfig(REMOTE_SKU_KEY, engineModelConfig)
   } catch (error) {

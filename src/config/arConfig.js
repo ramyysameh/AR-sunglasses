@@ -202,6 +202,11 @@ export function getGlassesConfig(key = defaultGlassesKey) {
   return glassesConfig[key] ?? glassesConfig[defaultGlassesKey]
 }
 
+// Fields the adapter (fitMetadataAdapter.js) supplies as plain {x,y,z}
+// objects but the engine (FaceFitSolver, RenderLoop) expects as THREE.Vector3
+// instances, since it calls .clone()/.applyQuaternion()/.sub() etc. on them.
+const VECTOR3_FIELDS = ['bridgePivot', 'lensCenterOffset', 'leftHingePoint', 'rightHingePoint']
+
 /**
  * Registers a runtime-fetched model config (e.g. from the Shopify app's
  * /api/tryon-config, adapted via fitMetadataAdapter) under a dynamic key so
@@ -212,6 +217,13 @@ export function getGlassesConfig(key = defaultGlassesKey) {
  * etc.) are backfilled from the default SKU so the loader always sees a
  * complete config.
  *
+ * The adapter is a pure, engine-agnostic mapper and produces plain {x,y,z}
+ * objects for vector fields (bridgePivot, lensCenterOffset, leftHingePoint,
+ * rightHingePoint), not THREE.Vector3 instances. Any such field present on
+ * the adapter output is re-wrapped here into the same THREE type the base
+ * SKU config uses for that field, so backfilling from the base config isn't
+ * the only type concern downstream consumers need to worry about.
+ *
  * @param {string} key
  * @param {{ modelUrl: string } & Record<string, unknown>} engineModelConfig
  * @returns {string} the key to pass to loadSku/getGlassesConfig
@@ -220,11 +232,11 @@ export function registerRuntimeGlassesConfig(key, engineModelConfig) {
   const base = glassesConfig[defaultGlassesKey]
   const { modelUrl, ...rest } = engineModelConfig
 
-  glassesConfig[key] = {
+  const merged = {
     ...base,
     ...rest,
     name: key,
-    displayName: rest.displayName ?? base.displayName,
+    displayName: 'AR model',
     modelPath: modelUrl,
     normalizedModelPath: modelUrl,
     runtimeModelPath: modelUrl,
@@ -232,6 +244,15 @@ export function registerRuntimeGlassesConfig(key, engineModelConfig) {
     useNormalizedModel: false,
     useOptimizedModel: false,
   }
+
+  for (const field of VECTOR3_FIELDS) {
+    const value = rest[field]
+    if (value && !(value instanceof THREE.Vector3)) {
+      merged[field] = new THREE.Vector3(value.x, value.y, value.z)
+    }
+  }
+
+  glassesConfig[key] = merged
 
   return key
 }
