@@ -15,3 +15,5 @@ __pycache__/
 # OS cruft
 .DS_Store
 Thumbs.db
+# Subagent-driven dev scratch (briefs, reports, ledger, diffs)
+.superpowers/

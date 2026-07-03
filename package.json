@@ -8,6 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p jsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "validate": "node scripts/validate-ar-math.mjs",
     "validate:tryon": "node scripts/validate-tryon-config.mjs",
     "inspect:models": "node scripts/inspect-models.mjs",
@@ -23,7 +25,8 @@
     "draco3dgltf": "^1.5.7",
     "sharp": "^0.35.1",
     "typescript": "^6.0.3",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.35",

@@ -45,6 +45,10 @@ export default defineConfig({
   plugins: [pruneAuthoringModels()],
   build: {
     rollupOptions: {
+      input: {
+        main: 'index.html',
+        calibrate: 'harness/calibrate.html',
+      },
       output: {
         manualChunks: {
           three: ['three'],

@@ -274,6 +274,12 @@ describe('measureSymmetryDeviation', () => {
     const shifted = symmetric.map((v, i) => (i % 3 === 0 ? v + 0.5 : v))
     expect(measureSymmetryDeviation(shifted)).toBeGreaterThan(0.1)
   })
+
+  it('detects a centered-but-asymmetric mesh (no mirror counterpart)', () => {
+    // center.x = 0 (min -1, max +1), but (1,1,0) has no mirror at (-1,1,0)
+    const asymmetricCentered = new Float32Array([-1, 0, 0, 1, 0, 0, 1, 1, 0])
+    expect(measureSymmetryDeviation(asymmetricCentered)).toBeGreaterThan(0.1)
+  })
 })
 ```
 
@@ -304,23 +310,32 @@ export function computeBounds(positions) {
   return { min, max, size, center }
 }
 
-// Mean |x-centroid_x| distance between the mesh and its own X-mirror, normalized
-// by width. Approximated by comparing the sorted absolute-x profile of the +x and
-// -x half-spaces — a mesh symmetric about x=0 has matching profiles (deviation ~0).
+// Voxel-occupancy mirror symmetry about the X=0 plane: bucket vertices into a
+// coarse grid and measure the fraction whose X-mirror voxel is unoccupied.
+// 0 = every occupied region has a mirror across X=0 (symmetric); grows toward 1
+// as geometry lacks a mirror counterpart. Tessellation-independent (vertex-count
+// differences collapse into the same voxel) and scale-invariant (voxel ~ width/32).
 export function measureSymmetryDeviation(positions) {
-  const { size, center } = computeBounds(positions)
+  const { size } = computeBounds(positions)
   const width = size.x || 1
-  let sum = 0
+  const voxel = Math.max(width / 32, 1e-9)
+  const key = (x, y, z) =>
+    `${Math.round(x / voxel)},${Math.round(y / voxel)},${Math.round(z / voxel)}`
+
+  const occupied = new Set()
+  for (let i = 0; i < positions.length; i += 3) {
+    occupied.add(key(positions[i], positions[i + 1], positions[i + 2]))
+  }
+
+  let mismatched = 0
   let count = 0
   for (let i = 0; i < positions.length; i += 3) {
-    // distance of each vertex from the symmetry plane, offset by how far the whole
-    // mesh's center is from x=0 (a centered-but-symmetric mesh scores 0).
-    sum += Math.abs(positions[i] - center.x) - Math.abs(positions[i])
     count += 1
+    if (!occupied.has(key(-positions[i], positions[i + 1], positions[i + 2]))) {
+      mismatched += 1
+    }
   }
-  // center offset dominates asymmetry; fold it in explicitly and normalize.
-  const centerOffset = Math.abs(center.x)
-  return (centerOffset + Math.abs(sum) / (count || 1)) / width
+  return count ? mismatched / count : 0
 }
 ```
 
@@ -387,6 +402,15 @@ describe('detectTemples', () => {
     ])
     expect(detectTemples(flat).certainty).toBeLessThan(0.5)
   })
+
+  it('reports low certainty for a single one-sided arm', () => {
+    // front slab present, but only a LEFT rearward arm — no matching right arm
+    const oneArm = new Float32Array([
+      -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.02, 0.02,
+      -0.069, 0, -0.13,
+    ])
+    expect(detectTemples(oneArm).certainty).toBeLessThan(0.5)
+  })
 })
 ```
 
@@ -416,25 +440,38 @@ export function measureFrontWidth(positions) {
   return maxX - minX
 }
 
-// Hinge = the outermost front-slab vertex on each side. Certainty rises with how
-// far the mesh extends rearward (−Z) beyond the front slab (i.e. real temple arms).
+// Hinges = the outermost front-slab vertex on each side. Certainty rises with how
+// far the mesh extends rearward (−Z) past the front slab ON BOTH sides — a single
+// arm, an off-axis rear spike, or a flat front all score low, since real eyewear
+// has two temple arms. Distinguishing genuine thin arms from an unusually deep
+// front slab is left to A2 tuning against real GLBs.
 export function detectTemples(positions) {
   const { min, max } = computeBounds(positions)
   const zRange = max.z - min.z || 1
   const zThreshold = max.z - zRange * 0.25
-  let left = { x: 0, y: 0, z: 0 }
-  let right = { x: 0, y: 0, z: 0 }
-  let rearDepth = 0
+  let left = null
+  let right = null
+  let leftRearDepth = 0
+  let rightRearDepth = 0
   for (let i = 0; i < positions.length; i += 3) {
     const x = positions[i], y = positions[i + 1], z = positions[i + 2]
     if (z >= zThreshold) {
-      if (x < left.x) left = { x, y, z }
-      if (x > right.x) right = { x, y, z }
+      if (x < 0 && (left === null || x < left.x)) left = { x, y, z }
+      if (x > 0 && (right === null || x > right.x)) right = { x, y, z }
     }
-    rearDepth = Math.max(rearDepth, zThreshold - z)
+    const rear = zThreshold - z
+    if (rear > 0) {
+      if (x < 0) leftRearDepth = Math.max(leftRearDepth, rear)
+      else if (x > 0) rightRearDepth = Math.max(rightRearDepth, rear)
+    }
   }
-  const certainty = Math.max(0, Math.min(1, rearDepth / (zRange * 0.5)))
-  return { leftHinge: left, rightHinge: right, certainty }
+  const bothArms = Math.min(leftRearDepth, rightRearDepth)
+  const certainty = Math.max(0, Math.min(1, bothArms / (zRange * 0.5)))
+  return {
+    leftHinge: left ?? { x: 0, y: 0, z: 0 },
+    rightHinge: right ?? { x: 0, y: 0, z: 0 },
+    certainty,
+  }
 }
 ```
 
@@ -631,7 +668,7 @@ git commit -m "feat(calibration): add GLB position access and model validator"
 
 **Interfaces:**
 - Consumes: `mergedPositions` (glbAccess), `computeBounds` (geometry).
-- Produces: `normalizeModel(doc, spec) -> { doc, transforms:string[] }`. Recenters the front-slab X-center and bridge-top to the origin by baking a translation into every root node; records which transforms it applied. (Axis/scale conversion is a no-op here because fixtures are already +Y-up meters; the hook exists and is recorded when it does act.)
+- Produces: `normalizeModel(doc, spec) -> { doc, transforms:string[] }` (synchronous). FIRST bakes each mesh node's world transform into its vertex data (so `mergedPositions` reads world-space and node transforms become identity), recording `'flatten'` when it acts; THEN recenters the front-slab X-center and bridge-top to the origin, recording `'recenter'`. Baking handles the flat (direct scene-child) node layout the spec expects; deeply-nested rigs are deferred to A2.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -658,6 +695,19 @@ describe('normalizeModel', () => {
     expect(b.center.x).toBeCloseTo(0, 4)
     expect(transforms).toContain('recenter')
   })
+
+  it('bakes a translated node transform into vertices (world-space) before recentering', () => {
+    const doc = buildDoc([
+      -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.024, 0.02,
+      -0.069, 0, -0.13, 0.069, 0, -0.13, 0, -0.02, 0.02,
+    ])
+    doc.getRoot().listNodes().find((n) => n.getMesh()).setTranslation([0.5, 0, 0])
+    const { doc: normalized, transforms } = normalizeModel(doc, MODELING_SPEC)
+    const meshNode = normalized.getRoot().listNodes().find((n) => n.getMesh())
+    expect(meshNode.getTranslation()[0]).toBeCloseTo(0, 5)
+    expect(computeBounds(mergedPositions(normalized)).center.x).toBeCloseTo(0, 4)
+    expect(transforms).toContain('flatten')
+  })
 })
 ```
 
@@ -672,10 +722,53 @@ Create `src/calibration/normalizer.js`:
 
 ```js
 import { mergedPositions } from './glbAccess.js'
-import { computeBounds, measureFrontWidth } from './geometry.js'
+import { computeBounds } from './geometry.js'
+
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+
+function transformPoint(m, x, y, z) {
+  const w = m[3] * x + m[7] * y + m[11] * z + m[15] || 1
+  return [
+    (m[0] * x + m[4] * y + m[8] * z + m[12]) / w,
+    (m[1] * x + m[5] * y + m[9] * z + m[13]) / w,
+    (m[2] * x + m[6] * y + m[10] * z + m[14]) / w,
+  ]
+}
+
+// Bake each mesh node's world transform into its vertex data so all downstream
+// geometry reads one consistent space and node transforms are identity. Handles the
+// flat (direct scene-child) node layout the modeling spec expects and that exported
+// eyewear GLBs use; deeply-nested rigs would need a full scene-graph flatten (A2).
+function bakeNodeTransforms(doc) {
+  let baked = false
+  for (const node of doc.getRoot().listNodes()) {
+    const mesh = node.getMesh()
+    if (!mesh) continue
+    const m = node.getWorldMatrix()
+    if (m.every((v, i) => Math.abs(v - IDENTITY[i]) < 1e-9)) continue
+    for (const prim of mesh.listPrimitives()) {
+      const acc = prim.getAttribute('POSITION')
+      if (!acc) continue
+      const arr = acc.getArray().slice()
+      for (let i = 0; i < arr.length; i += 3) {
+        const [x, y, z] = transformPoint(m, arr[i], arr[i + 1], arr[i + 2])
+        arr[i] = x
+        arr[i + 1] = y
+        arr[i + 2] = z
+      }
+      acc.setArray(arr)
+    }
+    node.setTranslation([0, 0, 0])
+    node.setRotation([0, 0, 0, 1])
+    node.setScale([1, 1, 1])
+    baked = true
+  }
+  return baked
+}
 
 export function normalizeModel(doc, spec) {
   const transforms = []
+  if (bakeNodeTransforms(doc)) transforms.push('flatten')
   const positions = mergedPositions(doc)
   if (positions.length === 0) return { doc, transforms }
 
@@ -715,7 +808,6 @@ export function normalizeModel(doc, spec) {
     transforms.push('recenter')
   }
 
-  void measureFrontWidth
   return { doc, transforms }
 }
 ```
@@ -863,6 +955,16 @@ describe('estimateAnchors', () => {
     expect(signals.scaleSanity).toBeGreaterThan(0.5)
     expect(signals.orientationConfidence).toBeGreaterThan(0.5)
   })
+
+  it('scores orientation low for a mis-oriented (taller-than-wide) model', () => {
+    // taller in Y than wide in X — wrong canonical orientation, must be flagged
+    const misOriented = new Float32Array([
+      -0.02, -0.069, 0.02, 0.02, -0.069, 0.02, 0, 0.069, 0.02,
+      -0.02, -0.069, -0.13, 0.02, 0.069, -0.13,
+    ])
+    const { signals } = estimateAnchors(buildDoc(misOriented), MODELING_SPEC)
+    expect(signals.orientationConfidence).toBeLessThan(0.6)
+  })
 })
 ```
 
@@ -908,12 +1010,12 @@ export function estimateAnchors(doc, spec) {
   const mid = (minW + maxW) / 2
   const scaleSanity = clamp01(1 - Math.abs(width - mid) / (mid))
 
-  // orientationConfidence: front slab should sit toward +z and be wider (x) than
-  // deep (z). Reward that shape.
-  const orientationConfidence = clamp01(
-    (bounds.max.z > Math.abs(bounds.min.z) ? 0.5 : 0.2) +
-      (bounds.size.x > bounds.size.z ? 0.5 : 0.2)
-  )
+  // Eyewear canonical orientation: wider in X than tall in Y, and the widest X-span
+  // sits at the front slab (+Z) with temples trailing to −Z. A model rotated onto the
+  // wrong axis (taller than wide) scores low so it is flagged for manual review.
+  const widerThanTall = bounds.size.x > bounds.size.y ? 0.5 : 0
+  const frontIsWidest = width >= bounds.size.x * 0.9 ? 0.5 : 0.2
+  const orientationConfidence = clamp01(widerThanTall + frontIsWidest)
 
   return {
     anchors: { bridge, leftHinge: temples.leftHinge, rightHinge: temples.rightHinge },
@@ -966,7 +1068,7 @@ import { MODELING_SPEC } from '../../src/calibration/spec.js'
 const goodSignals = {
   symmetryDeviation: 0.02,
   templeDetectionCertainty: 0.9,
-  frameWidthMeters: 0.138,
+  frameWidthMeters: 0.145,
   orientationConfidence: 0.95,
   scaleSanity: 0.9,
 }
@@ -975,7 +1077,7 @@ describe('scoreConfidence', () => {
   it('scores a clean model as confident with a full breakdown', () => {
     const { overall, breakdown } = scoreConfidence(goodSignals, MODELING_SPEC)
     expect(breakdown.symmetry).toBeGreaterThan(0.8)
-    expect(breakdown.frameWidth).toBeGreaterThan(0.8)
+    expect(breakdown.frameWidth).toBeGreaterThan(0.9)
     expect(overall).toBeGreaterThan(0.6)
     expect(isConfident(overall)).toBe(true)
   })
@@ -1017,11 +1119,12 @@ function clamp01(v) {
 // Convert each raw signal into a 0–1 sub-score where 1 = good.
 function subScores(signals, spec) {
   const [minW, maxW] = spec.frameWidthRangeM
-  const mid = (minW + maxW) / 2
   return {
     symmetry: clamp01(1 - signals.symmetryDeviation / 0.15),
     temple: clamp01(signals.templeDetectionCertainty),
-    frameWidth: clamp01(1 - Math.abs(signals.frameWidthMeters - mid) / (mid - minW || 1)),
+    // High anywhere inside the human range [minW, maxW]; tapers only OUTSIDE it —
+    // a normal 145mm frame must not be penalized for being off the range midpoint.
+    frameWidth: clamp01(1 - Math.max(0, minW - signals.frameWidthMeters, signals.frameWidthMeters - maxW) / (maxW - minW)),
     orientation: clamp01(signals.orientationConfidence),
     scale: clamp01(signals.scaleSanity),
   }
@@ -1202,6 +1305,14 @@ const GOOD = [
   -0.069, 0, -0.13, 0.069, 0, -0.13, 0, -0.02, 0.02,
 ]
 
+// GOOD with the RIGHT temple tip moved inward (x 0.069 -> 0.02) so it is NOT a
+// mirror image. A genuine shape asymmetry that survives the normalizer's recenter
+// — unlike a uniform x-translation, which recenter would simply remove.
+const ASYMMETRIC = [
+  -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.024, 0.02,
+  -0.069, 0, -0.13, 0.02, 0, -0.13, 0, -0.02, 0.02,
+]
+
 export function buildFixtures() {
   return {
     good: buildDoc(GOOD),
@@ -1210,7 +1321,7 @@ export function buildFixtures() {
       AR_hinge_L: { x: -0.069, y: 0, z: -0.01 },
       AR_hinge_R: { x: 0.069, y: 0, z: -0.01 },
     }),
-    asymmetric: buildDoc(GOOD.map((v, i) => (i % 3 === 0 ? v + 0.05 : v))),
+    asymmetric: buildDoc(ASYMMETRIC),
     tooWide: buildDoc(GOOD.map((v, i) => (i % 3 === 0 ? v * 4 : v))),
   }
 }
@@ -1341,12 +1452,15 @@ Create `harness/calibrate.js`:
 
 ```js
 import { WebIO } from '@gltf-transform/core'
+import { KHRONOS_EXTENSIONS } from '@gltf-transform/extensions'
 import { validateModel } from '../src/calibration/validator.js'
 import { normalizeModel } from '../src/calibration/normalizer.js'
 import { calibrate } from '../src/calibration/calibrator.js'
 import { MODELING_SPEC } from '../src/calibration/spec.js'
 
-const io = new WebIO()
+// Register the Khronos extensions (KHR_texture_transform, KHR_materials_*, etc.)
+// so WebIO can read real Blender-exported GLBs, which declare them as required.
+const io = new WebIO().registerExtensions(KHRONOS_EXTENSIONS)
 let current = null
 
 const report = document.getElementById('report')
