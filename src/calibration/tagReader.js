@@ -9,6 +9,8 @@ export function readTags(doc, spec) {
   const bridge = findNode(doc, spec.tagNames.bridge)
   const left = findNode(doc, spec.tagNames.hingeL)
   const right = findNode(doc, spec.tagNames.hingeR)
+  // findNode returns null (not undefined) for a missing name, so this triple
+  // guard requires all three tags before reporting found.
   if (!bridge || !left || !right) {
     return { found: false, anchors: null }
   }

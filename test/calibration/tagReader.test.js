@@ -23,4 +23,11 @@ describe('readTags', () => {
     expect(res.found).toBe(false)
     expect(res.anchors).toBeNull()
   })
+
+  it('reports not-found when only some tags are present', () => {
+    const doc = buildDoc(frame, { AR_bridge: { x: 0, y: 0.01, z: 0.02 } })
+    const res = readTags(doc, MODELING_SPEC)
+    expect(res.found).toBe(false)
+    expect(res.anchors).toBeNull()
+  })
 })
