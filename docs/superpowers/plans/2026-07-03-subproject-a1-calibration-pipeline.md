@@ -668,7 +668,7 @@ git commit -m "feat(calibration): add GLB position access and model validator"
 
 **Interfaces:**
 - Consumes: `mergedPositions` (glbAccess), `computeBounds` (geometry).
-- Produces: `normalizeModel(doc, spec) -> { doc, transforms:string[] }`. Recenters the front-slab X-center and bridge-top to the origin by baking a translation into every root node; records which transforms it applied. (Axis/scale conversion is a no-op here because fixtures are already +Y-up meters; the hook exists and is recorded when it does act.)
+- Produces: `normalizeModel(doc, spec) -> { doc, transforms:string[] }` (synchronous). FIRST bakes each mesh node's world transform into its vertex data (so `mergedPositions` reads world-space and node transforms become identity), recording `'flatten'` when it acts; THEN recenters the front-slab X-center and bridge-top to the origin, recording `'recenter'`. Baking handles the flat (direct scene-child) node layout the spec expects; deeply-nested rigs are deferred to A2.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -695,6 +695,19 @@ describe('normalizeModel', () => {
     expect(b.center.x).toBeCloseTo(0, 4)
     expect(transforms).toContain('recenter')
   })
+
+  it('bakes a translated node transform into vertices (world-space) before recentering', () => {
+    const doc = buildDoc([
+      -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.024, 0.02,
+      -0.069, 0, -0.13, 0.069, 0, -0.13, 0, -0.02, 0.02,
+    ])
+    doc.getRoot().listNodes().find((n) => n.getMesh()).setTranslation([0.5, 0, 0])
+    const { doc: normalized, transforms } = normalizeModel(doc, MODELING_SPEC)
+    const meshNode = normalized.getRoot().listNodes().find((n) => n.getMesh())
+    expect(meshNode.getTranslation()[0]).toBeCloseTo(0, 5)
+    expect(computeBounds(mergedPositions(normalized)).center.x).toBeCloseTo(0, 4)
+    expect(transforms).toContain('flatten')
+  })
 })
 ```
 
@@ -711,8 +724,51 @@ Create `src/calibration/normalizer.js`:
 import { mergedPositions } from './glbAccess.js'
 import { computeBounds } from './geometry.js'
 
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+
+function transformPoint(m, x, y, z) {
+  const w = m[3] * x + m[7] * y + m[11] * z + m[15] || 1
+  return [
+    (m[0] * x + m[4] * y + m[8] * z + m[12]) / w,
+    (m[1] * x + m[5] * y + m[9] * z + m[13]) / w,
+    (m[2] * x + m[6] * y + m[10] * z + m[14]) / w,
+  ]
+}
+
+// Bake each mesh node's world transform into its vertex data so all downstream
+// geometry reads one consistent space and node transforms are identity. Handles the
+// flat (direct scene-child) node layout the modeling spec expects and that exported
+// eyewear GLBs use; deeply-nested rigs would need a full scene-graph flatten (A2).
+function bakeNodeTransforms(doc) {
+  let baked = false
+  for (const node of doc.getRoot().listNodes()) {
+    const mesh = node.getMesh()
+    if (!mesh) continue
+    const m = node.getWorldMatrix()
+    if (m.every((v, i) => Math.abs(v - IDENTITY[i]) < 1e-9)) continue
+    for (const prim of mesh.listPrimitives()) {
+      const acc = prim.getAttribute('POSITION')
+      if (!acc) continue
+      const arr = acc.getArray().slice()
+      for (let i = 0; i < arr.length; i += 3) {
+        const [x, y, z] = transformPoint(m, arr[i], arr[i + 1], arr[i + 2])
+        arr[i] = x
+        arr[i + 1] = y
+        arr[i + 2] = z
+      }
+      acc.setArray(arr)
+    }
+    node.setTranslation([0, 0, 0])
+    node.setRotation([0, 0, 0, 1])
+    node.setScale([1, 1, 1])
+    baked = true
+  }
+  return baked
+}
+
 export function normalizeModel(doc, spec) {
   const transforms = []
+  if (bakeNodeTransforms(doc)) transforms.push('flatten')
   const positions = mergedPositions(doc)
   if (positions.length === 0) return { doc, transforms }
 
