@@ -42,8 +42,13 @@ wiring) before the rest of Sub-project B is fleshed out.
   persist normalized GLB + fit-metadata record. Direct import of the A1 `src/calibration/*`
   modules.
 - **Model + config serving:**
-  - `GET /models/:assetId.glb` — serves the normalized GLB (scoped to the shop).
-  - `GET /api/tryon-config?shop=&productId=` → `{ modelUrl, fitMetadata }` (public, shop-scoped).
+  - `GET /models/:assetId.glb` — serves the normalized GLB. **No real access control this
+    slice:** `assetId` is an unguessable UUID and GLB models aren't sensitive; proper
+    shop-scoped authorization (signed URLs or a session/shop check) is deferred to
+    Sub-project D's security review.
+  - `GET /api/tryon-config?shop=&productId=` → `{ modelUrl, fitMetadata }` — a public read
+    endpoint keyed by `shop` + `productId`, same "unguessable, not yet authorized" posture,
+    hardened in D.
 - **Storefront Theme App Extension** — an app block on the product page: a "Try on" button
   opening a dialog with an iframe to the hosted try-on, passing `shop` + `productId`.
   Auto-installed (replaces the manual `shopify/sections/ar-try-on.liquid`).
@@ -75,6 +80,10 @@ couples the storefront render to the config and complicates caching.)
 - Low confidence / `needsManual` → admin surfaces the confidence report. **For this slice,
   use a tagged/spec-compliant model so calibration is confident;** the in-admin manual
   anchor tool (adapting A1's harness) is deferred to the next slice.
+  - Note: on the recommended **tagged** path, A1 returns `source:'tagged'` with
+    `confidence: null` (exact anchors, not a score) — so `ModelAsset.confidence` is null and
+    the admin shows "tagged (exact)" rather than a percentage. A confidence % appears only on
+    the geometric-fallback path.
 - No mapping for a product → the extension button is hidden/disabled.
 - Try-on config fetch fails → the iframe shows a graceful error (reuse the engine's existing
   error surface).
@@ -87,6 +96,11 @@ couples the storefront render to the config and complicates caching.)
   fitMetadata}` for the mapped product; unmapped product returns an empty/disabled response.
 - **Manual / E2E:** on a dev store via the Shopify CLI — install, upload, map, and confirm
   the PDP "Try on" button opens the try-on with the calibrated model.
+- **Known risk (untested this slice):** the iframe's `allow="camera"` also depends on the
+  top-level merchant-theme page's `Permissions-Policy` not blocking camera. This works on a
+  controlled dev store but may **silently fail on some real merchant themes**. Untested here
+  and flagged for the next slice — verify against real themes; the fix may need an
+  app-embed/permissions approach or documented merchant guidance.
 
 ## Deferred (explicit)
 
