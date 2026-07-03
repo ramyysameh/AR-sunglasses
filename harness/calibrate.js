@@ -1,10 +1,11 @@
 import { WebIO } from '@gltf-transform/core'
+import { KHRONOS_EXTENSIONS } from '@gltf-transform/extensions'
 import { validateModel } from '../src/calibration/validator.js'
 import { normalizeModel } from '../src/calibration/normalizer.js'
 import { calibrate } from '../src/calibration/calibrator.js'
 import { MODELING_SPEC } from '../src/calibration/spec.js'
 
-const io = new WebIO()
+const io = new WebIO().registerExtensions(KHRONOS_EXTENSIONS)
 let current = null
 
 const report = document.getElementById('report')
