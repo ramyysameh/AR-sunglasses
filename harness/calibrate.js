@@ -45,13 +45,17 @@ function renderAnchors(fit) {
 document.getElementById('file').addEventListener('change', async (event) => {
   const file = event.target.files[0]
   if (!file) return
-  const doc = await io.readBinary(new Uint8Array(await file.arrayBuffer()))
-  const validation = validateModel(doc, MODELING_SPEC)
-  const { doc: normalized } = normalizeModel(doc, MODELING_SPEC)
-  const calibration = calibrate(normalized, MODELING_SPEC)
-  current = calibration
-  renderReport(validation, calibration)
-  renderAnchors(calibration.fitMetadata)
+  try {
+    const doc = await io.readBinary(new Uint8Array(await file.arrayBuffer()))
+    const validation = validateModel(doc, MODELING_SPEC)
+    const { doc: normalized } = normalizeModel(doc, MODELING_SPEC)
+    const calibration = calibrate(normalized, MODELING_SPEC)
+    current = calibration
+    renderReport(validation, calibration)
+    renderAnchors(calibration.fitMetadata)
+  } catch (err) {
+    document.getElementById('report').textContent = `Could not read model: ${err.message}`
+  }
 })
 
 document.getElementById('export').addEventListener('click', () => {

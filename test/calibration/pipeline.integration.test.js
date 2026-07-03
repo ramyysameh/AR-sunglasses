@@ -18,6 +18,21 @@ describe('calibration pipeline (end to end)', () => {
     expect(validation.status).toBe('pass')
     expect(calibration.source).toBe('tagged')
     expect(calibration.needsManual).toBe(false)
+
+    // normalizeModel recenters by a geometry-derived delta (dx=0, dy=-0.024 for
+    // this fixture) and shifts the non-mesh tag nodes by that same delta, so the
+    // authored anchors {0,0.024,0.02}/{-0.069,0,-0.01}/{0.069,0,-0.01} should come
+    // out shifted by (0, -0.024, 0).
+    const { bridgeAnchor, leftHinge, rightHinge } = calibration.fitMetadata
+    expect(bridgeAnchor.x).toBeCloseTo(0, 4)
+    expect(bridgeAnchor.y).toBeCloseTo(0, 4)
+    expect(bridgeAnchor.z).toBeCloseTo(0.02, 4)
+    expect(leftHinge.x).toBeCloseTo(-0.069, 4)
+    expect(leftHinge.y).toBeCloseTo(-0.024, 4)
+    expect(leftHinge.z).toBeCloseTo(-0.01, 4)
+    expect(rightHinge.x).toBeCloseTo(0.069, 4)
+    expect(rightHinge.y).toBeCloseTo(-0.024, 4)
+    expect(rightHinge.z).toBeCloseTo(-0.01, 4)
   })
 
   it('good untagged fixture → confident geometric calibration', () => {

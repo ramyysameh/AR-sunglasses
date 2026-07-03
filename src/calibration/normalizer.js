@@ -49,7 +49,7 @@ export function normalizeModel(doc, spec) {
   const positions = mergedPositions(doc)
   if (positions.length === 0) return { doc, transforms }
 
-  const { min, max, center } = computeBounds(positions)
+  const { min, max } = computeBounds(positions)
   // Front slab X-center → 0; bridge-top (max.y at front) → y 0; front plane keeps +z.
   const frontZThreshold = max.z - (max.z - min.z) * 0.25
   let frontMinX = Infinity
