@@ -1068,7 +1068,7 @@ import { MODELING_SPEC } from '../../src/calibration/spec.js'
 const goodSignals = {
   symmetryDeviation: 0.02,
   templeDetectionCertainty: 0.9,
-  frameWidthMeters: 0.138,
+  frameWidthMeters: 0.145,
   orientationConfidence: 0.95,
   scaleSanity: 0.9,
 }
@@ -1077,7 +1077,7 @@ describe('scoreConfidence', () => {
   it('scores a clean model as confident with a full breakdown', () => {
     const { overall, breakdown } = scoreConfidence(goodSignals, MODELING_SPEC)
     expect(breakdown.symmetry).toBeGreaterThan(0.8)
-    expect(breakdown.frameWidth).toBeGreaterThan(0.8)
+    expect(breakdown.frameWidth).toBeGreaterThan(0.9)
     expect(overall).toBeGreaterThan(0.6)
     expect(isConfident(overall)).toBe(true)
   })
@@ -1119,11 +1119,12 @@ function clamp01(v) {
 // Convert each raw signal into a 0–1 sub-score where 1 = good.
 function subScores(signals, spec) {
   const [minW, maxW] = spec.frameWidthRangeM
-  const mid = (minW + maxW) / 2
   return {
     symmetry: clamp01(1 - signals.symmetryDeviation / 0.15),
     temple: clamp01(signals.templeDetectionCertainty),
-    frameWidth: clamp01(1 - Math.abs(signals.frameWidthMeters - mid) / (mid - minW || 1)),
+    // High anywhere inside the human range [minW, maxW]; tapers only OUTSIDE it —
+    // a normal 145mm frame must not be penalized for being off the range midpoint.
+    frameWidth: clamp01(1 - Math.max(0, minW - signals.frameWidthMeters, signals.frameWidthMeters - maxW) / (maxW - minW)),
     orientation: clamp01(signals.orientationConfidence),
     scale: clamp01(signals.scaleSanity),
   }
