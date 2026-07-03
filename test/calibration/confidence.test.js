@@ -5,7 +5,7 @@ import { MODELING_SPEC } from '../../src/calibration/spec.js'
 const goodSignals = {
   symmetryDeviation: 0.02,
   templeDetectionCertainty: 0.9,
-  frameWidthMeters: 0.135,
+  frameWidthMeters: 0.145,
   orientationConfidence: 0.95,
   scaleSanity: 0.9,
 }
@@ -14,7 +14,7 @@ describe('scoreConfidence', () => {
   it('scores a clean model as confident with a full breakdown', () => {
     const { overall, breakdown } = scoreConfidence(goodSignals, MODELING_SPEC)
     expect(breakdown.symmetry).toBeGreaterThan(0.8)
-    expect(breakdown.frameWidth).toBeGreaterThan(0.8)
+    expect(breakdown.frameWidth).toBeGreaterThan(0.9)
     expect(overall).toBeGreaterThan(0.6)
     expect(isConfident(overall)).toBe(true)
   })

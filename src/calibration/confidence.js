@@ -15,11 +15,10 @@ function clamp01(v) {
 // Convert each raw signal into a 0–1 sub-score where 1 = good.
 function subScores(signals, spec) {
   const [minW, maxW] = spec.frameWidthRangeM
-  const mid = (minW + maxW) / 2
   return {
     symmetry: clamp01(1 - signals.symmetryDeviation / 0.15),
     temple: clamp01(signals.templeDetectionCertainty),
-    frameWidth: clamp01(1 - Math.abs(signals.frameWidthMeters - mid) / (mid - minW || 1)),
+    frameWidth: clamp01(1 - Math.max(0, minW - signals.frameWidthMeters, signals.frameWidthMeters - maxW) / (maxW - minW)),
     orientation: clamp01(signals.orientationConfidence),
     scale: clamp01(signals.scaleSanity),
   }
