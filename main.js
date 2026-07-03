@@ -1,7 +1,8 @@
 import { TryOnEngine } from './src/tryon/TryOnEngine.js'
 import { getTryOnRuntimeConfig } from './src/config/tryOnConfig.js'
 import { checkEnvironment } from './src/support/capabilities.js'
-import { glassesConfig, defaultGlassesKey } from './src/config/arConfig.js'
+import { glassesConfig, defaultGlassesKey, registerRuntimeGlassesConfig } from './src/config/arConfig.js'
+import { toEngineModelConfig } from './src/tryon/fitMetadataAdapter.js'
 
 const video = document.getElementById('camera-feed')
 const canvas = document.getElementById('overlay-canvas')
@@ -19,10 +20,41 @@ const params = new URLSearchParams(window.location.search)
 const debugEnabled = params.get('debug') === '1'
 const provider = params.get('provider') || undefined
 const sku = params.get('sku') || undefined
+const shop = params.get('shop') || undefined
+const productId = params.get('productId') || undefined
 
 let tryOnEngine = null
 let currentSkuKey = sku || defaultGlassesKey
 let isSwitching = false
+
+const REMOTE_SKU_KEY = '__remote__'
+
+/**
+ * Fetches this shop+product's fit metadata and model URL from the Shopify app
+ * backend and adapts it into the engine's model-config shape. Returns the SKU
+ * key to load, or null if the remote config is unavailable/params are absent —
+ * callers must fall back to the existing default SKU behavior in that case.
+ * @returns {Promise<string | null>}
+ */
+async function resolveRemoteSkuKey() {
+  if (!shop || !productId) {
+    return null
+  }
+
+  try {
+    const response = await fetch(`/api/tryon-config?shop=${encodeURIComponent(shop)}&productId=${encodeURIComponent(productId)}`)
+    if (!response.ok) {
+      throw new Error(`tryon-config request failed with status ${response.status}`)
+    }
+
+    const { fitMetadata, modelUrl } = await response.json()
+    const engineModelConfig = toEngineModelConfig(fitMetadata, modelUrl)
+    return registerRuntimeGlassesConfig(REMOTE_SKU_KEY, engineModelConfig)
+  } catch (error) {
+    console.warn('Falling back to default frame — could not load remote try-on config:', error)
+    return null
+  }
+}
 
 const GLASSES_ICON = `<svg viewBox="0 0 48 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <path d="M3 9h5M40 9h5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
@@ -186,14 +218,19 @@ function buildModelSwitcher() {
 }
 
 async function startEngine() {
+  const remoteSkuKey = await resolveRemoteSkuKey()
   const runtimeConfig = getTryOnRuntimeConfig({
     provider,
-    defaultSkuKey: sku ?? undefined,
+    defaultSkuKey: remoteSkuKey ?? sku ?? undefined,
     video,
     canvas,
     loadingEl,
     debugEnabled,
   })
+
+  if (remoteSkuKey) {
+    currentSkuKey = remoteSkuKey
+  }
 
   setLoading('Starting AR try-on...')
   tryOnEngine = new TryOnEngine()

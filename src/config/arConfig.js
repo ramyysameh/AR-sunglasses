@@ -202,6 +202,40 @@ export function getGlassesConfig(key = defaultGlassesKey) {
   return glassesConfig[key] ?? glassesConfig[defaultGlassesKey]
 }
 
+/**
+ * Registers a runtime-fetched model config (e.g. from the Shopify app's
+ * /api/tryon-config, adapted via fitMetadataAdapter) under a dynamic key so
+ * the existing SKU-keyed loading path (getGlassesConfig/getGlassesModelUrl)
+ * can serve it without any change to the engine's model-loading code.
+ *
+ * Missing engine-only fields (materialProfile, templeFade, useNormalizedModel,
+ * etc.) are backfilled from the default SKU so the loader always sees a
+ * complete config.
+ *
+ * @param {string} key
+ * @param {{ modelUrl: string } & Record<string, unknown>} engineModelConfig
+ * @returns {string} the key to pass to loadSku/getGlassesConfig
+ */
+export function registerRuntimeGlassesConfig(key, engineModelConfig) {
+  const base = glassesConfig[defaultGlassesKey]
+  const { modelUrl, ...rest } = engineModelConfig
+
+  glassesConfig[key] = {
+    ...base,
+    ...rest,
+    name: key,
+    displayName: rest.displayName ?? base.displayName,
+    modelPath: modelUrl,
+    normalizedModelPath: modelUrl,
+    runtimeModelPath: modelUrl,
+    optimizedModelPath: modelUrl,
+    useNormalizedModel: false,
+    useOptimizedModel: false,
+  }
+
+  return key
+}
+
 // Dev cache-buster: changes once per page load so a freshly re-exported GLB is
 // always fetched instead of a stale cached copy.
 const MODEL_CACHE_BUST = Date.now()
