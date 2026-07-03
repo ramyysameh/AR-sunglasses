@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { measureFrontWidth, detectTemples } from '../../src/calibration/geometry.js'
+import { measureFrontWidth, detectTemples } from '../src/geometry.js'
 
 // Front slab near z=+0.02 spanning x in [-0.069, 0.069], plus two temple points
 // running back to z=-0.13 at the outer x.

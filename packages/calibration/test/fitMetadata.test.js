@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createFitMetadata } from '../../src/calibration/fitMetadata.js'
+import { createFitMetadata } from '../src/fitMetadata.js'
 
 const base = {
   frameWidthMeters: 0.138,

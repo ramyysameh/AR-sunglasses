@@ -1,4 +1,4 @@
-import { buildDoc } from '../test/calibration/helpers/buildDoc.js'
+import { buildDoc } from './buildDoc.js'
 
 const GOOD = [
   -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.024, 0.02,

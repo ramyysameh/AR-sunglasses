@@ -1,0 +1,15 @@
+{
+  "name": "@artryon/calibration",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": { ".": "./src/index.js" },
+  "scripts": { "test": "vitest run" },
+  "devDependencies": {
+    "vitest": "^3.2.4",
+    "@gltf-transform/extensions": "^4.4.0"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "^4.4.0"
+  }
+}

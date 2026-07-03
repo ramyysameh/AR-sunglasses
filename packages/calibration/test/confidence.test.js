@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { scoreConfidence, isConfident } from '../../src/calibration/confidence.js'
-import { MODELING_SPEC } from '../../src/calibration/spec.js'
+import { scoreConfidence, isConfident } from '../src/confidence.js'
+import { MODELING_SPEC } from '../src/spec.js'
 
 const goodSignals = {
   symmetryDeviation: 0.02,

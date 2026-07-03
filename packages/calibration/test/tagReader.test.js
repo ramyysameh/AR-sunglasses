@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { readTags } from '../../src/calibration/tagReader.js'
-import { MODELING_SPEC } from '../../src/calibration/spec.js'
+import { readTags } from '../src/tagReader.js'
+import { MODELING_SPEC } from '../src/spec.js'
 import { buildDoc } from './helpers/buildDoc.js'
 
 const frame = [-0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.02, 0.02]

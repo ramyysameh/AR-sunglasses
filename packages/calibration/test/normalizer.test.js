@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeModel } from '../../src/calibration/normalizer.js'
-import { mergedPositions } from '../../src/calibration/glbAccess.js'
-import { computeBounds } from '../../src/calibration/geometry.js'
-import { MODELING_SPEC } from '../../src/calibration/spec.js'
+import { normalizeModel } from '../src/normalizer.js'
+import { mergedPositions } from '../src/glbAccess.js'
+import { computeBounds } from '../src/geometry.js'
+import { MODELING_SPEC } from '../src/spec.js'
 import { buildDoc } from './helpers/buildDoc.js'
 
 // Frame whose bridge sits at x=0.1 (off-origin) — normalizer should recenter it.

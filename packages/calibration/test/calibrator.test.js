@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { calibrate } from '../../src/calibration/calibrator.js'
-import { MODELING_SPEC } from '../../src/calibration/spec.js'
+import { calibrate } from '../src/calibrator.js'
+import { MODELING_SPEC } from '../src/spec.js'
 import { buildDoc } from './helpers/buildDoc.js'
 
 const goodFrame = [

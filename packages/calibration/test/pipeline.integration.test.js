@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { buildFixtures } from '../../scripts/build-fixtures.mjs'
-import { validateModel } from '../../src/calibration/validator.js'
-import { normalizeModel } from '../../src/calibration/normalizer.js'
-import { calibrate } from '../../src/calibration/calibrator.js'
-import { MODELING_SPEC } from '../../src/calibration/spec.js'
+import { buildFixtures } from './helpers/build-fixtures.mjs'
+import { validateModel } from '../src/validator.js'
+import { normalizeModel } from '../src/normalizer.js'
+import { calibrate } from '../src/calibrator.js'
+import { MODELING_SPEC } from '../src/spec.js'
 
 function run(doc) {
   const validation = validateModel(doc, MODELING_SPEC)

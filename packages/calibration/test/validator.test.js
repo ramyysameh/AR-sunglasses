@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { Document } from '@gltf-transform/core'
-import { validateModel } from '../../src/calibration/validator.js'
-import { MODELING_SPEC } from '../../src/calibration/spec.js'
+import { validateModel } from '../src/validator.js'
+import { MODELING_SPEC } from '../src/spec.js'
 import { buildDoc } from './helpers/buildDoc.js'
 
 const goodFrame = [

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { estimateAnchors } from '../../src/calibration/geometricEstimator.js'
-import { MODELING_SPEC } from '../../src/calibration/spec.js'
+import { estimateAnchors } from '../src/geometricEstimator.js'
+import { MODELING_SPEC } from '../src/spec.js'
 import { buildDoc } from './helpers/buildDoc.js'
 
 const goodFrame = [

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { MODELING_SPEC, FIT_PROFILE_VERSION } from '../../src/calibration/spec.js'
+import { MODELING_SPEC, FIT_PROFILE_VERSION } from '../src/spec.js'
 
 describe('MODELING_SPEC', () => {
   it('pins the canonical conventions', () => {

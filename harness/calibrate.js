@@ -1,9 +1,9 @@
 import { WebIO } from '@gltf-transform/core'
 import { KHRONOS_EXTENSIONS } from '@gltf-transform/extensions'
-import { validateModel } from '../src/calibration/validator.js'
-import { normalizeModel } from '../src/calibration/normalizer.js'
-import { calibrate } from '../src/calibration/calibrator.js'
-import { MODELING_SPEC } from '../src/calibration/spec.js'
+import { validateModel } from '../packages/calibration/src/validator.js'
+import { normalizeModel } from '../packages/calibration/src/normalizer.js'
+import { calibrate } from '../packages/calibration/src/calibrator.js'
+import { MODELING_SPEC } from '../packages/calibration/src/spec.js'
 
 const io = new WebIO().registerExtensions(KHRONOS_EXTENSIONS)
 let current = null

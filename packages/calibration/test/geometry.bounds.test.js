@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeBounds, measureSymmetryDeviation } from '../../src/calibration/geometry.js'
+import { computeBounds, measureSymmetryDeviation } from '../src/geometry.js'
 
 // A tiny symmetric box: corners mirrored across x=0
 const symmetric = new Float32Array([
