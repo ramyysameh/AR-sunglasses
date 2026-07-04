@@ -12,6 +12,10 @@ export const REQUIRED_FIELDS = [
 ]
 
 export function createFitMetadata(fields) {
+  if (typeof fields !== 'object' || fields === null) {
+    throw new Error('createFitMetadata requires a fields object')
+  }
+
   const missing = REQUIRED_FIELDS.filter((key) => fields[key] === undefined)
   if (missing.length) {
     throw new Error(`fit-metadata missing required fields: ${missing.join(', ')}`)

@@ -26,4 +26,11 @@ describe('scoreConfidence', () => {
     expect(overall).toBeLessThan(0.6)
     expect(isConfident(overall)).toBe(false)
   })
+
+  it('stays finite for a degenerate frame-width range (minW === maxW)', () => {
+    const spec = { frameWidthRangeM: [0.13, 0.13] }
+    const { breakdown, overall } = scoreConfidence({ symmetryDeviation: 0.02, templeDetectionCertainty: 0.9, frameWidthMeters: 0.13, orientationConfidence: 0.9, scaleSanity: 0.9 }, spec)
+    expect(Number.isFinite(breakdown.frameWidth)).toBe(true)
+    expect(Number.isFinite(overall)).toBe(true)
+  })
 })

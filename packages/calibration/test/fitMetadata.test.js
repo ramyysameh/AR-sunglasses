@@ -23,4 +23,9 @@ describe('createFitMetadata', () => {
   it('throws listing every missing required field', () => {
     expect(() => createFitMetadata({ frameWidthMeters: 0.138 })).toThrowError(/bridgeAnchor/)
   })
+
+  it('throws a clear error when called with no/invalid argument', () => {
+    expect(() => createFitMetadata()).toThrowError(/fields object/)
+    expect(() => createFitMetadata(null)).toThrowError(/fields object/)
+  })
 })

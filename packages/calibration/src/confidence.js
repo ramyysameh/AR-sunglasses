@@ -18,7 +18,7 @@ function subScores(signals, spec) {
   return {
     symmetry: clamp01(1 - signals.symmetryDeviation / 0.15),
     temple: clamp01(signals.templeDetectionCertainty),
-    frameWidth: clamp01(1 - Math.max(0, minW - signals.frameWidthMeters, signals.frameWidthMeters - maxW) / (maxW - minW)),
+    frameWidth: clamp01(1 - Math.max(0, minW - signals.frameWidthMeters, signals.frameWidthMeters - maxW) / ((maxW - minW) || 1)),
     orientation: clamp01(signals.orientationConfidence),
     scale: clamp01(signals.scaleSanity),
   }
