@@ -32,3 +32,25 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+model ModelAsset {
+  id          String   @id @default(uuid())
+  shop        String
+  storageRef  String
+  fitMetadata Json
+  confidence  Float?
+  status      String   @default("ready")
+  createdAt   DateTime @default(now())
+  mappings    ProductMapping[]
+}
+
+model ProductMapping {
+  id           String     @id @default(uuid())
+  shop         String
+  productId    String
+  modelAsset   ModelAsset @relation(fields: [modelAssetId], references: [id])
+  modelAssetId String
+  createdAt    DateTime   @default(now())
+
+  @@unique([shop, productId])
+}
