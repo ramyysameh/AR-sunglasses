@@ -14,7 +14,7 @@
 
 - Code style: **ES modules, no semicolons, single quotes, 2-space indent** — match existing `src/`.
 - The shared **`packages/calibration`** modules stay Node- and browser-runnable (no DOM/Three.js); they are A1 moved verbatim.
-- **Stack (spec-locked):** Shopify official Remix template + Prisma + PostgreSQL. Dev runs via the **Shopify CLI dev tunnel** (`shopify app dev`); no production host this slice.
+- **Stack (spec-locked):** Shopify official app template (React Router v7 — successor to the now-removed Remix template) + Prisma + PostgreSQL. Dev runs via the **Shopify CLI dev tunnel** (`shopify app dev`); no production host this slice.
 - **No real access control this slice:** `/models/:assetId.glb` and `/api/tryon-config` are public; `assetId` is an unguessable UUID; authorization is deferred to Sub-project D.
 - **Happy path uses a tagged/spec-compliant GLB** (A1 `source:'tagged'`, `confidence:null`, `needsManual:false`); the in-admin manual anchor tool is deferred to the next slice.
 - **Try-on delivery:** Theme App Extension → `<iframe allow="camera">` to the hosted engine, passing `shop`+`productId`; the engine fetches `/api/tryon-config`.
@@ -110,8 +110,10 @@ git commit -m "refactor: extract A1 calibration into @artryon/calibration worksp
 From the repo root:
 
 ```bash
-npm init @shopify/app@latest -- --template remix apps/shopify-app
+npm init @shopify/app@latest -- --template reactRouter --path apps/shopify-app -d npm
 ```
+
+> **Deviation (2026-07-06):** the spec/plan said `--template remix`, but the current CLI (`@shopify/create-app` 4.x) no longer ships a Remix template — Remix v2 merged into React Router v7, which is now Shopify's official app template. Operator-approved switch to `reactRouter`. Same loaders/actions model, same Prisma session storage; downstream tasks unchanged.
 
 Follow the CLI prompts (log in to the Partner account, select/create an app). This generates OAuth, App Bridge, Prisma session storage, webhook scaffolding, and an admin shell.
 
