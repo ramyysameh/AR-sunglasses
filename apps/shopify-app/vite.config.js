@@ -45,14 +45,20 @@ export default defineConfig({
     hmr: hmrConfig,
     fs: {
       // See https://vitejs.dev/config/server-options.html#server-fs-allow for more information
-      allow: ["app", "node_modules"],
+      // "../.." allows serving the hoisted monorepo-root node_modules (react etc. live there).
+      allow: ["app", "node_modules", "../.."],
     },
   },
   plugins: [reactRouter(), tsconfigPaths()],
+  // Monorepo: force a single copy of React so the hooks dispatcher isn't null
+  // ("Cannot read properties of null (reading 'useContext')").
+  resolve: {
+    dedupe: ["react", "react-dom", "react-router"],
+  },
   build: {
     assetsInlineLimit: 0,
   },
   optimizeDeps: {
-    include: ["@shopify/app-bridge-react"],
+    include: ["@shopify/app-bridge-react", "react", "react-dom"],
   },
 });
