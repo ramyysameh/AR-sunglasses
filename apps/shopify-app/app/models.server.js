@@ -27,3 +27,21 @@ export async function saveCalibratedModel(prisma, shop, glbBytes) {
     needsManual: result.needsManual,
   }
 }
+
+// Task 9: map a product to a calibrated model. Upsert on (shop, productId) so
+// re-mapping a product replaces its model instead of creating a duplicate.
+export async function mapProductToModel(prisma, shop, productId, modelAssetId) {
+  return prisma.productMapping.upsert({
+    where: { shop_productId: { shop, productId } },
+    update: { modelAssetId },
+    create: { shop, productId, modelAssetId },
+  })
+}
+
+export async function listMappings(prisma, shop) {
+  return prisma.productMapping.findMany({
+    where: { shop },
+    orderBy: { createdAt: 'desc' },
+    include: { modelAsset: true },
+  })
+}
