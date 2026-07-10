@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { readdir, rm } from 'node:fs/promises'
 import { defineConfig } from 'vite'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 import { glassesConfig, getGlassesModelUrl } from './src/config/arConfig.js'
 
 const rootDir = dirname(fileURLToPath(import.meta.url))
@@ -42,7 +43,12 @@ function pruneAuthoringModels() {
 }
 
 export default defineConfig({
-  plugins: [pruneAuthoringModels()],
+  plugins: [basicSsl(), pruneAuthoringModels()],
+  server: {
+    // Expose on the LAN over HTTPS so a phone on the same WiFi can reach the
+    // camera (getUserMedia requires a secure context). Open https://<pc-ip>:5173.
+    host: true,
+  },
   build: {
     rollupOptions: {
       input: {

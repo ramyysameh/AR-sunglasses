@@ -81,17 +81,19 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     await this.loadSku(config.defaultSkuKey)
 
     const faceOccluder = await new FaceOccluder().init(this.renderLoop.scene)
-    const hud = await new DebugHUD().init(container, {
-      initialParams: this.renderLoop.getFilterSettings(),
-      onParamsChange: (params) => this.renderLoop.setFilterParams(params),
-    })
-    // Debug control sidebar is always shown so position/scale/rotation/tracking
-    // can be tuned live. (Previously gated behind ?debug=1.)
-    hud.setVisible(true)
-
     this.renderLoop.setFaceOccluder(faceOccluder)
-    this.renderLoop.setHud(hud)
-    this.renderLoop.setFilterParams(hud.params)
+
+    // Debug tuning HUD (position/scale/rotation/tracking) — hidden in the
+    // customer view; enable it during development with ?debug=1.
+    if (this.debugEnabled) {
+      const hud = await new DebugHUD().init(container, {
+        initialParams: this.renderLoop.getFilterSettings(),
+        onParamsChange: (params) => this.renderLoop.setFilterParams(params),
+      })
+      hud.setVisible(true)
+      this.renderLoop.setHud(hud)
+      this.renderLoop.setFilterParams(hud.params)
+    }
     this.emit('ready', { provider: this.name, sku: this.currentSkuKey })
 
     return this
@@ -173,12 +175,11 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     }
 
     try {
+      // Keep constraints minimal — on iOS Safari, requesting a specific
+      // width/height can make it hand back a 1x1 green placeholder instead of a
+      // real stream. Just ask for the front camera and take whatever it gives.
       this.stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'user',
-          width: { ideal: this.config.camera?.width ?? 1280 },
-          height: { ideal: this.config.camera?.height ?? 720 },
-        },
+        video: { facingMode: 'user' },
         audio: false,
       })
     } catch (error) {

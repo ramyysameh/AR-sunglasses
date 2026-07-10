@@ -1,18 +1,13 @@
 import { TryOnEngine } from './src/tryon/TryOnEngine.js'
 import { getTryOnRuntimeConfig } from './src/config/tryOnConfig.js'
 import { checkEnvironment } from './src/support/capabilities.js'
-import { glassesConfig, defaultGlassesKey, registerRuntimeGlassesConfig } from './src/config/arConfig.js'
+import { defaultGlassesKey, registerRuntimeGlassesConfig } from './src/config/arConfig.js'
 import { toEngineModelConfig } from './src/tryon/fitMetadataAdapter.js'
 
 const video = document.getElementById('camera-feed')
 const canvas = document.getElementById('overlay-canvas')
 const loadingEl = document.getElementById('loading')
-const captureBtn = document.getElementById('capture-btn')
 const container = document.getElementById('ar-container')
-const sidebarEl = document.getElementById('model-sidebar')
-const modelListEl = document.getElementById('model-list')
-const sidebarCollapseBtn = document.getElementById('sidebar-collapse')
-const sidebarOpenBtn = document.getElementById('sidebar-open')
 const scanOverlay = document.getElementById('scan-overlay')
 const scanCaptionText = scanOverlay?.querySelector('.scan-caption-text')
 const scanBar = /** @type {SVGElement | null | undefined} */ (scanOverlay?.querySelector('.scan-progress-bar'))
@@ -24,8 +19,6 @@ const shop = params.get('shop') || undefined
 const productId = params.get('productId') || undefined
 
 let tryOnEngine = null
-let currentSkuKey = sku || defaultGlassesKey
-let isSwitching = false
 
 const REMOTE_SKU_KEY = '__remote__'
 
@@ -69,20 +62,6 @@ async function resolveRemoteSkuKey() {
   }
 }
 
-const GLASSES_ICON = `<svg viewBox="0 0 48 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M3 9h5M40 9h5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
-  <rect x="6.5" y="8" width="15" height="13" rx="6.5" stroke="currentColor" stroke-width="2.4"/>
-  <rect x="26.5" y="8" width="15" height="13" rx="6.5" stroke="currentColor" stroke-width="2.4"/>
-  <path d="M21.5 12.5c1.4-1.3 4.6-1.3 6 0" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
-</svg>`
-
-function downloadDataUrl(dataUrl, filename) {
-  const link = document.createElement('a')
-  link.href = dataUrl
-  link.download = filename
-  link.click()
-}
-
 /**
  * @param {string} message
  * @param {{ isError?: boolean, onRetry?: (() => void) | null }} [options]
@@ -100,7 +79,7 @@ function setLoading(message, { isError = false, onRetry = null } = {}) {
     const retryBtn = document.createElement('button')
     retryBtn.type = 'button'
     retryBtn.className = 'retry-btn'
-    retryBtn.textContent = 'Retry'
+    retryBtn.textContent = 'Try again'
     retryBtn.addEventListener('click', onRetry, { once: true })
     loadingEl.appendChild(retryBtn)
   }
@@ -155,97 +134,18 @@ function updateScan(scanState) {
   }
 }
 
-function collapseSidebar(collapsed) {
-  sidebarEl?.classList.toggle('is-collapsed', collapsed)
-  if (sidebarOpenBtn) {
-    sidebarOpenBtn.hidden = !collapsed
-  }
-}
-
-function setActiveCard(key) {
-  const cards = modelListEl?.querySelectorAll('.model-card') ?? []
-  cards.forEach((card) => {
-    const active = card.dataset.sku === key
-    card.classList.toggle('is-active', active)
-    card.setAttribute('aria-selected', active ? 'true' : 'false')
-  })
-}
-
-async function switchModel(key) {
-  if (isSwitching || key === currentSkuKey || !tryOnEngine) {
-    return
-  }
-
-  const cards = modelListEl?.querySelectorAll('.model-card') ?? []
-  const targetCard = modelListEl?.querySelector(`.model-card[data-sku="${key}"]`)
-  isSwitching = true
-  cards.forEach((card) => { card.disabled = true })
-  targetCard?.classList.add('is-loading')
-
-  try {
-    await tryOnEngine.loadSku(key)
-    currentSkuKey = key
-    setActiveCard(key)
-  } catch (error) {
-    console.error(`Failed to switch to frame "${key}":`, error)
-    setLoading('Could not load that frame. Try another.', { isError: true })
-  } finally {
-    targetCard?.classList.remove('is-loading')
-    cards.forEach((card) => { card.disabled = false })
-    isSwitching = false
-  }
-}
-
-function buildModelSwitcher() {
-  if (!modelListEl) {
-    return
-  }
-
-  modelListEl.innerHTML = ''
-  for (const [key, config] of Object.entries(glassesConfig)) {
-    const card = document.createElement('button')
-    card.type = 'button'
-    card.className = 'model-card'
-    card.dataset.sku = key
-    card.setAttribute('role', 'option')
-    card.setAttribute('aria-selected', key === currentSkuKey ? 'true' : 'false')
-    if (key === currentSkuKey) {
-      card.classList.add('is-active')
-    }
-
-    const spec = Number.isFinite(config.frameWidthMm) ? `${config.frameWidthMm}mm frame` : 'Eyewear'
-    card.innerHTML = `
-      <span class="model-thumb">${GLASSES_ICON}</span>
-      <span class="model-meta">
-        <span class="model-name">${config.displayName ?? key}</span>
-        <span class="model-spec">${spec}</span>
-      </span>`
-    card.addEventListener('click', () => switchModel(key))
-    modelListEl.appendChild(card)
-  }
-
-  // Don't cover the camera by default on phones.
-  if (window.innerWidth <= 640) {
-    collapseSidebar(true)
-  }
-}
-
 async function startEngine() {
   const remoteSkuKey = await resolveRemoteSkuKey()
   const runtimeConfig = getTryOnRuntimeConfig({
     provider,
-    defaultSkuKey: remoteSkuKey ?? sku ?? undefined,
+    defaultSkuKey: remoteSkuKey ?? sku ?? defaultGlassesKey,
     video,
     canvas,
     loadingEl,
     debugEnabled,
   })
 
-  if (remoteSkuKey) {
-    currentSkuKey = remoteSkuKey
-  }
-
-  setLoading('Starting AR try-on...')
+  setLoading('Preparing your try‑on…')
   tryOnEngine = new TryOnEngine()
   tryOnEngine.on('error', ({ error, recoverable }) => {
     const message = error?.message ?? String(error)
@@ -262,19 +162,12 @@ async function startEngine() {
   await tryOnEngine.init(container, runtimeConfig)
   await tryOnEngine.start()
   setLoading('')
-
-  captureBtn?.addEventListener('click', async () => {
-    const capture = await tryOnEngine.capture()
-    if (capture?.dataUrl) {
-      downloadDataUrl(capture.dataUrl, capture.filename ?? 'tryon.png')
-    }
-  })
 }
 
 async function main() {
   const environment = checkEnvironment()
   if (!environment.ok) {
-    setLoading(environment.message ?? 'This device cannot run the try-on.', { isError: true })
+    setLoading(environment.message ?? 'This device can’t run the try-on.', { isError: true })
     return
   }
 
@@ -287,41 +180,15 @@ async function main() {
     await tryOnEngine?.destroy?.().catch(() => {})
     tryOnEngine = null
 
-    setLoading(error?.message ?? 'Failed to start AR try-on.', {
+    setLoading(error?.message ?? 'Couldn’t start the try-on.', {
       isError: true,
       onRetry: recoverable ? () => { main() } : null,
     })
   }
 }
 
-sidebarCollapseBtn?.addEventListener('click', () => collapseSidebar(true))
-sidebarOpenBtn?.addEventListener('click', () => collapseSidebar(false))
-
-// Bottom-of-screen camera switch: cycles through the input sources, reloading
-// in the chosen mode.  Webcam -> Virtual Face -> Turning Face -> Webcam.
-const cameraSwitchBtn = document.getElementById('camera-switch-btn')
-if (cameraSwitchBtn) {
-  const mock = new URLSearchParams(window.location.search).get('mock')
-  const current = mock === 'turn' ? 'turn' : mock === '1' ? 'static' : 'webcam'
-  const NEXT = {
-    webcam: { mock: '1', label: 'Virtual Face' },
-    static: { mock: 'turn', label: 'Turning Face' },
-    turn: { mock: null, label: 'Webcam' },
-  }
-  const next = NEXT[current]
-  const label = cameraSwitchBtn.querySelector('.switch-label')
-  if (label) label.textContent = `Switch to ${next.label}`
-  cameraSwitchBtn.addEventListener('click', () => {
-    const url = new URL(window.location.href)
-    if (next.mock) url.searchParams.set('mock', next.mock)
-    else url.searchParams.delete('mock')
-    window.location.href = url.toString()
-  })
-}
-
 window.addEventListener('beforeunload', () => {
   tryOnEngine?.destroy?.()
 })
 
-buildModelSwitcher()
 main()

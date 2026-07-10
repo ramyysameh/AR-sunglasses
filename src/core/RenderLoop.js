@@ -84,8 +84,9 @@ export class RenderLoop {
       canvas: this.canvas,
       alpha: true,
       antialias: true,
-      // Required for the capture button to composite the WebGL overlay into a PNG.
-      preserveDrawingBuffer: true,
+      // preserveDrawingBuffer is intentionally OFF: on iOS it makes the alpha
+      // canvas render as solid green (uninitialized GPU buffer). It was only
+      // needed for the since-removed capture/screenshot feature.
     })
     this.renderer.setClearColor(0x000000, 0)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -565,19 +566,28 @@ export class RenderLoop {
       return
     }
 
+    // Global glasses-size fine-tune. A portrait phone crops the landscape camera
+    // (object-fit:cover), zooming the face without zooming the glasses; this
+    // multiplier compensates. Tune live with ?gscale=<n> (e.g. ?gscale=1.3).
+    if (this._glassesScaleMultiplier == null) {
+      const g = parseFloat(new URLSearchParams(window.location.search).get('gscale'))
+      this._glassesScaleMultiplier = Number.isFinite(g) && g > 0 ? g : 1
+    }
+    const scale = transform.scale * this._glassesScaleMultiplier
+
     this.glassesRoot.visible = true
     this.glassesRoot.position.copy(transform.position)
     this.glassesRoot.quaternion.copy(transform.quaternion)
-    this.glassesRoot.scale.setScalar(transform.scale)
+    this.glassesRoot.scale.setScalar(scale)
 
     if (this.contactShadow) {
       this.contactShadow.visible = true
       this.contactShadow.visible = this.contactShadowEnabled
       this.contactShadow.position.copy(transform.surfaceSolution?.bridgeWorld ?? transform.position)
-      this.contactShadow.position.y -= 0.012 * transform.scale
-      this.contactShadow.position.z += 0.006 * transform.scale
+      this.contactShadow.position.y -= 0.012 * scale
+      this.contactShadow.position.z += 0.006 * scale
       this.contactShadow.quaternion.copy(transform.quaternion)
-      this.contactShadow.scale.setScalar(transform.scale)
+      this.contactShadow.scale.setScalar(scale)
     }
 
     if (!this.occlusionEnabled) {

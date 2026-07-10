@@ -12,14 +12,14 @@ html, body {
   background: #000;
 }
 
-/* AR container — full viewport */
+/* AR container — full viewport, the camera is the whole stage */
 #ar-container {
   position: relative;
   width: 100vw;
-  height: 100vh;
+  height: 100dvh;
 }
 
-/* Camera feed */
+/* Camera feed — full-bleed, the glasses render on the transparent canvas above */
 #camera-feed {
   position: absolute;
   top: 0;
@@ -40,117 +40,90 @@ html, body {
   background: transparent !important;
 }
 
-#capture-btn,
-#camera-switch-btn {
-  position: fixed;
-  left: 50%;
-  bottom: 28px;
-  transform: translateX(-50%);
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 0.85rem 1.45rem;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 999px;
-  background: rgba(12, 12, 14, 0.86);
-  color: #fff;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  font-size: 0.95rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  cursor: pointer;
-}
-
-#capture-btn:hover,
-#camera-switch-btn:hover {
-  background: rgba(24, 24, 28, 0.92);
-  border-color: rgba(255, 255, 255, 0.34);
-}
-
-#capture-btn:active,
-#camera-switch-btn:active {
-  transform: translateX(-50%) translateY(1px);
-}
-
-/* Premium Glassmorphic Loading Indicator */
+/* ============================================================
+   Loading / status — a quiet, full-bleed moment over the camera
+   ============================================================ */
 #loading {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  color: #fff;
-  padding: 0.8rem 1.6rem;
-  border-radius: 30px;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  font-size: 0.95rem;
-  font-weight: 500;
-  letter-spacing: 0.5px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  inset: 0;
   z-index: 50;
-  pointer-events: none;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: min(90vw, 520px);
-  text-align: center;
-  line-height: 1.35;
-}
-
-#loading.is-error {
   flex-direction: column;
-  gap: 14px;
-  background: rgba(88, 16, 16, 0.88);
-  border-color: rgba(255, 160, 160, 0.34);
-  pointer-events: auto;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 24px clamp(24px, 12vw, 220px);
+  text-align: center;
+  background: radial-gradient(ellipse at 50% 44%, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.74));
+  color: #fff;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 #loading::before {
   content: "";
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  border-top-color: #fff;
+  width: 34px;
+  height: 34px;
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  border-top-color: rgba(255, 255, 255, 0.92);
   border-radius: 50%;
-  animation: loading-spinner 0.8s linear infinite;
+  animation: loading-spinner 0.9s linear infinite;
 }
 
-/* No spinner on error/idle states. */
+/* Error / idle: a sentence, no spinner, tappable retry */
+#loading.is-error {
+  gap: 16px;
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.92);
+  pointer-events: auto;
+}
+
 #loading.is-error::before {
   display: none;
 }
 
 .retry-btn {
-  padding: 0.6rem 1.4rem;
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  padding: 0.7rem 1.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
   color: #fff;
   font: inherit;
+  font-size: 0.76rem;
   font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   cursor: pointer;
   pointer-events: auto;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 
 .retry-btn:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.retry-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.7);
+  outline-offset: 3px;
 }
 
 @keyframes loading-spinner {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
 /* ============================================================
-   Face scan onboarding overlay
+   Face-scan onboarding overlay — the signature "finding you" moment
    ============================================================ */
 :root {
   --scan-accent: #6ea8fe;
@@ -366,217 +339,5 @@ html, body {
 
 @media (prefers-reduced-motion: reduce) {
   .scan-line, .scan-mesh, .scan-corner, .scan-arrow { animation: none !important; }
-}
-
-/* Capture button status dot */
-.capture-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #ff5a5a;
-  box-shadow: 0 0 0 3px rgba(255, 90, 90, 0.25);
-}
-
-/* ============================================================
-   Model switcher sidebar
-   ============================================================ */
-.model-sidebar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
-  width: 268px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 18px 14px;
-  background: linear-gradient(180deg, rgba(13, 14, 19, 0.88), rgba(13, 14, 19, 0.66));
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border-right: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 0 48px rgba(0, 0, 0, 0.45);
-  z-index: 40;
-  overflow-y: auto;
-  transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-.model-sidebar.is-collapsed {
-  transform: translateX(-110%);
-}
-
-.sidebar-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 6px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.sidebar-brand {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.sidebar-title {
-  color: #fff;
-  font-size: 1.02rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}
-
-.sidebar-subtitle {
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 0.76rem;
-  font-weight: 500;
-}
-
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-  cursor: pointer;
-  border-radius: 10px;
-  width: 32px;
-  height: 32px;
-  font-size: 1.1rem;
-  line-height: 1;
-  transition: background 0.18s ease;
-}
-
-.icon-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
-}
-
-.model-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.model-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #fff;
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
-  width: 100%;
-  transition: border-color 0.18s ease, background 0.18s ease, transform 0.12s ease;
-}
-
-.model-card:hover {
-  background: rgba(255, 255, 255, 0.09);
-  border-color: rgba(255, 255, 255, 0.22);
-}
-
-.model-card:active {
-  transform: scale(0.985);
-}
-
-.model-card.is-active {
-  border-color: rgba(110, 168, 254, 0.9);
-  background: linear-gradient(180deg, rgba(110, 168, 254, 0.22), rgba(110, 168, 254, 0.1));
-  box-shadow: 0 0 0 1px rgba(110, 168, 254, 0.5), 0 8px 22px rgba(40, 90, 180, 0.28);
-}
-
-.model-card[disabled] {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.model-thumb {
-  flex: 0 0 auto;
-  width: 52px;
-  height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 11px;
-  background: radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.03));
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.model-thumb svg {
-  width: 34px;
-  height: 34px;
-}
-
-.model-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.model-name {
-  font-size: 0.92rem;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.model-spec {
-  font-size: 0.74rem;
-  color: rgba(255, 255, 255, 0.55);
-}
-
-.model-card.is-loading .model-name::after {
-  content: '';
-  display: inline-block;
-  margin-left: 8px;
-  width: 11px;
-  height: 11px;
-  vertical-align: -1px;
-  border: 2px solid rgba(255, 255, 255, 0.25);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: loading-spinner 0.7s linear infinite;
-}
-
-/* Floating button to reveal the sidebar when collapsed */
-.sidebar-open {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  z-index: 45;
-  width: auto;
-  height: 40px;
-  gap: 8px;
-  padding: 0 14px 0 12px;
-  border-radius: 999px;
-  background: rgba(13, 14, 19, 0.78);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  font-weight: 600;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-.sidebar-open[hidden] {
-  display: none;
-}
-
-.sidebar-open-icon {
-  font-size: 1rem;
-}
-
-.sidebar-open-label {
-  font-size: 0.86rem;
-}
-
-@media (max-width: 640px) {
-  .model-sidebar {
-    width: min(80vw, 268px);
-  }
+  #loading::before { animation-duration: 1.6s; }
 }
