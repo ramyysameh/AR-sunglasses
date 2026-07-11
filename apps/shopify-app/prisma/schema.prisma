@@ -36,6 +36,7 @@ model Session {
 model ModelAsset {
   id          String   @id @default(uuid())
   shop        String
+  sourceUrl   String?  @unique
   storageRef  String
   fitMetadata Json
   confidence  Float?
