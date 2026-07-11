@@ -7,6 +7,7 @@ import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
 import { FaceFitSolver } from '../fit/FaceFitSolver.js'
 import { coverNDC } from '../fit/coverMap.js'
+import { resolveGlassesScaleMultiplier } from './glassesScale.js'
 
 const TRACK_LOSS_RESET_MS = 180
 // Lower lead than before (was 0.85): heavy lead on an already-smoothed signal
@@ -566,12 +567,11 @@ export class RenderLoop {
       return
     }
 
-    // Global glasses-size fine-tune. A portrait phone crops the landscape camera
-    // (object-fit:cover), zooming the face without zooming the glasses; this
-    // multiplier compensates. Tune live with ?gscale=<n> (e.g. ?gscale=1.3).
+    // Global glasses-size fine-tune — see src/core/glassesScale.js. Resolved
+    // once: portrait defaults to 1.7, landscape to 1.0, ?gscale=<n> overrides.
     if (this._glassesScaleMultiplier == null) {
-      const g = parseFloat(new URLSearchParams(window.location.search).get('gscale'))
-      this._glassesScaleMultiplier = Number.isFinite(g) && g > 0 ? g : 1
+      const isPortrait = window.innerHeight > window.innerWidth
+      this._glassesScaleMultiplier = resolveGlassesScaleMultiplier(window.location.search, isPortrait)
     }
     const scale = transform.scale * this._glassesScaleMultiplier
 
