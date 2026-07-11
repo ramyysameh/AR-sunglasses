@@ -17,6 +17,7 @@ const provider = params.get('provider') || undefined
 const sku = params.get('sku') || undefined
 const shop = params.get('shop') || undefined
 const productId = params.get('productId') || undefined
+const modelUrl = params.get('model') || undefined
 
 let tryOnEngine = null
 
@@ -58,6 +59,45 @@ async function resolveRemoteSkuKey() {
     return registerRuntimeGlassesConfig(REMOTE_SKU_KEY, engineModelConfig)
   } catch (error) {
     console.warn('Falling back to default frame — could not load remote try-on config:', error)
+    return null
+  }
+}
+
+/**
+ * Registers a merchant's block-configured GLB with the app (which calibrates +
+ * caches it) and adapts the returned fit metadata into the engine's model
+ * config. Returns the SKU key to load, or null if no ?model was given or the
+ * registration failed — callers fall back to the shop/product config.
+ * @returns {Promise<string | null>}
+ */
+async function resolveBlockModelKey() {
+  if (!modelUrl) {
+    return null
+  }
+
+  try {
+    const response = await fetch(`/api/register-model?url=${encodeURIComponent(modelUrl)}`)
+    if (!response.ok) {
+      throw new Error(`register-model request failed with status ${response.status}`)
+    }
+
+    const { fitMetadata, modelUrl: servedUrl } = await response.json()
+    const isValidPayload = Boolean(servedUrl) &&
+      fitMetadata &&
+      typeof fitMetadata === 'object' &&
+      Number.isFinite(fitMetadata.frameWidthMeters) &&
+      fitMetadata.bridgeAnchor &&
+      fitMetadata.leftHinge &&
+      fitMetadata.rightHinge
+
+    if (!isValidPayload) {
+      throw new Error('invalid register-model payload')
+    }
+
+    const engineModelConfig = toEngineModelConfig(fitMetadata, servedUrl)
+    return registerRuntimeGlassesConfig(REMOTE_SKU_KEY, engineModelConfig)
+  } catch (error) {
+    console.warn('Falling back — could not register block model:', error)
     return null
   }
 }
@@ -135,7 +175,7 @@ function updateScan(scanState) {
 }
 
 async function startEngine() {
-  const remoteSkuKey = await resolveRemoteSkuKey()
+  const remoteSkuKey = (await resolveBlockModelKey()) ?? (await resolveRemoteSkuKey())
   const runtimeConfig = getTryOnRuntimeConfig({
     provider,
     defaultSkuKey: remoteSkuKey ?? sku ?? defaultGlassesKey,
