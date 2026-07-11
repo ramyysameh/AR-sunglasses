@@ -115,7 +115,15 @@ Customer: taps "Try on"
 ## Out of scope / future
 
 - In-app upload button (keeps the Files → paste-URL flow).
-- SSRF hardening (restrict server-side fetch to Shopify CDN hosts) and size caps beyond a
-  basic guard — note for sub-project D.
+- **Hardening the public `register-model` endpoint — sub-project D, and this MUST land before
+  production traffic.** The endpoint is unauthenticated and, per distinct URL, performs a
+  server-side fetch and persists a new `ModelAsset` row + on-disk GLB. Deferred protections:
+  (a) SSRF — restrict the fetch to Shopify-CDN hosts (allowlist); (b) request size cap (the
+  current `arrayBuffer()` read is unbounded in memory); (c) **persistence/resource bounds** —
+  auth or rate-limiting + an eviction/growth bound, since an attacker looping distinct URLs can
+  grow the DB and fill disk regardless of any single-file size cap; (d) the concurrent
+  first-registration race (two calls for a new URL both calibrate; the loser writes an
+  orphaned GLB then hits a raw P2002 unique error that the route currently maps to a
+  misleading 422) — fix via unique-catch → re-read the existing row and return it.
 - Draco-compressed GLB inputs (assume raw GLBs like the exported models).
 - Per-device portrait-scale calibration (single constant for now).
