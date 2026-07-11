@@ -45,3 +45,37 @@ export async function listMappings(prisma, shop) {
     include: { modelAsset: true },
   })
 }
+
+// Block-level GLB: calibrate a merchant-hosted GLB once and cache it, keyed by
+// its source URL so the same URL is shared across shops. Public route entry.
+const BLOCK_SHOP = '__block__'
+
+export async function registerModelByUrl(prisma, url) {
+  const existing = await prisma.modelAsset.findFirst({ where: { sourceUrl: url } })
+  if (existing) {
+    return { modelUrl: `/models/${existing.id}.glb`, fitMetadata: existing.fitMetadata }
+  }
+
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`fetch failed: ${response.status}`)
+  }
+  const glbBytes = new Uint8Array(await response.arrayBuffer())
+
+  const result = await calibrateUpload(glbBytes)
+  const storageRef = `${globalThis.crypto.randomUUID()}.glb`
+  await saveModelGlb(storageRef, result.normalizedGlb)
+
+  const asset = await prisma.modelAsset.create({
+    data: {
+      shop: BLOCK_SHOP,
+      sourceUrl: url,
+      storageRef,
+      fitMetadata: result.fitMetadata,
+      confidence: result.confidence?.overall ?? null,
+      status: result.needsManual ? 'needs_manual' : 'ready',
+    },
+  })
+
+  return { modelUrl: `/models/${asset.id}.glb`, fitMetadata: asset.fitMetadata }
+}
