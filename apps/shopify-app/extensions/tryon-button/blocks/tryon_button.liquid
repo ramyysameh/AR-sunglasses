@@ -17,7 +17,7 @@
       <iframe
         class="ar-tryon__frame"
         allow="camera; fullscreen"
-        src="{{ block.settings.engine_url }}?shop={{ shop.permanent_domain | url_encode }}&productId={{ product_gid | url_encode }}"
+        src="{{ block.settings.engine_url }}?shop={{ shop.permanent_domain | url_encode }}&productId={{ product_gid | url_encode }}{% if block.settings.model_url != blank %}&model={{ block.settings.model_url | url_encode }}{% endif %}"
         loading="lazy"
       ></iframe>
     {% else %}
@@ -89,6 +89,7 @@
   "settings": [
     { "type": "product", "id": "product", "label": "Product", "autofill": true },
     { "type": "text", "id": "engine_url", "label": "Try-on engine URL", "info": "Your app's URL + /tryon/index.html (e.g. https://localhost:3458/tryon/index.html in dev)." },
+    { "type": "text", "id": "model_url", "label": "Model (GLB) URL", "info": "Upload the .glb under Settings → Files and paste its URL here. Leave blank to use the product's mapped model." },
     { "type": "text", "id": "button_label", "label": "Button label", "default": "Try on" }
   ]
 }
