@@ -106,12 +106,17 @@ export class RenderLoop {
     this.camera.position.set(0, 0, 0)
     this.camera.lookAt(0, 0, -1)
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.45)
-    const key = new THREE.DirectionalLight(0xffffff, 1.35)
+    // Flat, ambient-only lighting: directional lights are off. AmbientLight casts
+    // no specular highlight, so a glossy frame shows zero glare — no hard white
+    // streak sliding across as the head turns. Trade-off: no directional shading,
+    // so the frame reads flatter (less 3D form). Directionals kept at 0 intensity
+    // so they can be dialled back in if some shading is wanted later.
+    const ambient = new THREE.AmbientLight(0xffffff, 1.0)
+    const key = new THREE.DirectionalLight(0xffffff, 0)
     key.position.set(0.45, 1.1, 1.8)
-    const fill = new THREE.DirectionalLight(0xffffff, 0.45)
+    const fill = new THREE.DirectionalLight(0xffffff, 0)
     fill.position.set(-1.1, 0.15, 1.2)
-    const rim = new THREE.DirectionalLight(0xcfe6ff, 0.3)
+    const rim = new THREE.DirectionalLight(0xcfe6ff, 0)
     rim.position.set(0, 0.2, -1)
 
     this.scene.add(ambient, key, fill, rim)
@@ -573,10 +578,17 @@ export class RenderLoop {
       const isPortrait = window.innerHeight > window.innerWidth
       this._glassesScaleMultiplier = resolveGlassesScaleMultiplier(window.location.search, isPortrait)
     }
+    // Vertical placement fine-tune, in world metres (negative = lower on the
+    // nose). Resolved once from ?voffset=<n> for live tuning; 0 by default.
+    if (this._verticalOffset == null) {
+      const v = parseFloat(new URLSearchParams(window.location.search).get('voffset'))
+      this._verticalOffset = Number.isFinite(v) ? v : 0
+    }
     const scale = transform.scale * this._glassesScaleMultiplier
 
     this.glassesRoot.visible = true
     this.glassesRoot.position.copy(transform.position)
+    this.glassesRoot.position.y += this._verticalOffset
     this.glassesRoot.quaternion.copy(transform.quaternion)
     this.glassesRoot.scale.setScalar(scale)
 

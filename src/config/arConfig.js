@@ -243,6 +243,11 @@ export function registerRuntimeGlassesConfig(key, engineModelConfig) {
     optimizedModelPath: modelUrl,
     useNormalizedModel: false,
     useOptimizedModel: false,
+    // Render the uploaded GLB with its AUTHORED materials (as designed / as it
+    // looks in a GLB viewer) rather than overriding roughness/metalness. Any
+    // white glare on the frame is the scene lighting reflecting off the authored
+    // gloss, addressed in the lighting, not by altering the model's material.
+    preserveMaterials: true,
   }
 
   for (const field of VECTOR3_FIELDS) {

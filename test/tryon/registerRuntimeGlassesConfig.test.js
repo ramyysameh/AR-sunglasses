@@ -32,4 +32,12 @@ describe('registerRuntimeGlassesConfig', () => {
     expect(cfg.bridgePivot.z).toBeCloseTo(0.02)
     expect(cfg.lensCenterOffset.x).toBe(0)
   })
+
+  it('renders block models with their authored GLB materials (preserveMaterials)', () => {
+    const engineModelConfig = toEngineModelConfig(fit, '/models/authored.glb')
+    const key = registerRuntimeGlassesConfig('__authored__', engineModelConfig)
+    const cfg = getGlassesConfig(key)
+
+    expect(cfg.preserveMaterials).toBe(true)
+  })
 })
