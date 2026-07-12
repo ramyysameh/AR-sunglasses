@@ -31,4 +31,28 @@ describe('calibrate', () => {
     expect(typeof res.needsManual).toBe('boolean')
     expect(res.fitMetadata.provenance.source).toBe('geometric')
   })
+
+  it('keeps the default scale band for a model already sized near real-world meters', () => {
+    const res = calibrate(buildDoc(goodFrame), MODELING_SPEC)
+    // goodFrame is ~0.138 m wide (real eyewear scale) -> natural fit ~1.
+    expect(res.fitMetadata.scaleLimits).toEqual({ min: 0.85, max: 1.15 })
+  })
+
+  it('scales the scale band down for a large-coordinate model so the fit is not clamped huge', () => {
+    // A raw Blender-scene export is ~3.3 units wide, not real meters. The fit
+    // solver clamps scale = faceWidth / frameWidthMeters to these ABSOLUTE
+    // bounds, so the band must shrink with the model or the model renders many
+    // times too large (the bug the block-GLB flow surfaced with gripz-pelmo).
+    const largeFrame = goodFrame.map((v) => v * 24) // ~3.3-unit-wide frame
+    const res = calibrate(buildDoc(largeFrame), MODELING_SPEC)
+    const { scaleLimits, frameWidthMeters } = res.fitMetadata
+    expect(frameWidthMeters).toBeGreaterThan(2)
+    const naturalFit = 0.14 / frameWidthMeters // tiny (~0.042) for a ~3.3-unit model
+    // The natural fit must sit comfortably INSIDE the band (not clamped up toward
+    // the old ~0.85 floor), with headroom above for per-device tracker variance.
+    expect(scaleLimits.min).toBeGreaterThan(0)
+    expect(scaleLimits.min).toBeLessThan(naturalFit)
+    expect(scaleLimits.max).toBeGreaterThan(naturalFit * 2)
+    expect(scaleLimits.max).toBeLessThan(0.85) // not the normalized-model band
+  })
 })
