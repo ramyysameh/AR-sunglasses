@@ -73,6 +73,10 @@ createSkyPixels({ width, height, sunAzimuthDeg, sunElevationDeg, sunSize, sunInt
 Pure pixel math. Computes a vertical gradient (sky → horizon → ground) and composites a
 soft-edged sun disc at the given direction.
 
+**Values are linear radiance, not sRGB-encoded.** `PMREMGenerator` expects linear input, so
+the gradient and disc math operate in linear space and are never gamma-encoded. `sunIntensity`
+is therefore a linear multiplier and may exceed `1.0` — that is intended, not a bug.
+
 Deliberately **no canvas and no DOM**, so it runs and gets asserted in Node under vitest —
 the same testability posture as `glassesScale.js`.
 
@@ -85,6 +89,18 @@ createLensEnvironment(renderer, options) -> { texture, dispose }
 Wraps `createSkyPixels` output in a `THREE.DataTexture` with equirectangular mapping, runs
 it through `PMREMGenerator.fromEquirectangular()`, returns the prefiltered texture plus a
 `dispose` for teardown.
+
+**Color space:** the `DataTexture` is explicitly tagged `THREE.LinearSRGBColorSpace` to match
+the linear radiance `createSkyPixels` emits. `DataTexture` defaults to `NoColorSpace`, so this
+tag is required, not decorative — leaving it unset decouples the rendered sun brightness from
+`sunIntensity`, and that failure mode is indistinguishable from "intensity needs tuning". It
+would be chased with `?lensrefl` and never found.
+
+**`dispose()` contract:** frees all three GPU resources — the source `DataTexture`, the
+`WebGLRenderTarget` returned by `fromEquirectangular()` (whose `.texture` is the env map), and
+the `PMREMGenerator` instance. Disposing only the returned texture leaks the other two. This is
+concrete rather than hypothetical: `RenderLoop` builds the env map once at construction, so a
+`RenderLoop` rebuilt on product/model swap leaks once per swap.
 
 The only component requiring a live GPU context, so it stays thin — construction and
 delegation, no math.
@@ -153,6 +169,8 @@ which the glint appears.
   fall back to defaults; mirrors `glassesScale.test.js` case-for-case.
 - Roughness clamp — an authored `0` lens comes out at the floor; an authored `0.3` lens is
   left alone.
+- `dispose()` completeness — with a stubbed renderer, assert all three resources are disposed
+  (source texture, render target, generator), not just the env map texture.
 
 **Device (the only test that can actually validate this):**
 Real phone, in the Shopify storefront. Turn the head through the full range and confirm the
