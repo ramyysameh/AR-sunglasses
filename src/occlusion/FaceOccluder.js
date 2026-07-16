@@ -132,12 +132,27 @@ export class FaceOccluder {
     this.show()
   }
 
-  updateFromFaceMesh(faceWorldPoints, anchorWorldPoints = {}) {
+  updateFromFaceMesh(faceWorldPoints, anchorWorldPoints = {}, smoothingAlpha = 1) {
     if (!this.occluderMesh || !Array.isArray(faceWorldPoints)) {
       return
     }
 
     const position = this.occluderMesh.geometry.attributes.position
+
+    // The mask vertices come from RAW per-frame landmarks (unlike the frame, which
+    // is One-Euro filtered), so at rest their noise shimmers the mask edge against
+    // the steady frame — visible as jitter where the bridge meets the nose. Smooth
+    // each vertex toward its target: alpha≈0 (rest) is heavy smoothing, alpha≈1
+    // (motion) tracks tightly, and a large jump snaps (face re-acquisition) so the
+    // mask never eases in from a stale pose.
+    const a = Number.isFinite(smoothingAlpha) ? Math.min(Math.max(smoothingAlpha, 0), 1) : 1
+    const SNAP_DIST_SQ = 0.05 * 0.05 // >5 cm jump = re-acquisition, not jitter
+    if (!this._smoothedPts || this._smoothedPts.length !== OCCLUDER_POINTS.length * 3) {
+      this._smoothedPts = null
+    }
+    const seed = !this._smoothedPts
+    if (seed) this._smoothedPts = new Float32Array(OCCLUDER_POINTS.length * 3)
+    const s = this._smoothedPts
 
     OCCLUDER_POINTS.forEach((definition, vertexIndex) => {
       const point = faceWorldPoints[definition.index] ??
@@ -146,7 +161,20 @@ export class FaceOccluder {
         return
       }
 
-      position.setXYZ(vertexIndex, point.x, point.y, point.z)
+      const i = vertexIndex * 3
+      const dx = point.x - s[i]
+      const dy = point.y - s[i + 1]
+      const dz = point.z - s[i + 2]
+      if (seed || dx * dx + dy * dy + dz * dz > SNAP_DIST_SQ) {
+        s[i] = point.x
+        s[i + 1] = point.y
+        s[i + 2] = point.z
+      } else {
+        s[i] += dx * a
+        s[i + 1] += dy * a
+        s[i + 2] += dz * a
+      }
+      position.setXYZ(vertexIndex, s[i], s[i + 1], s[i + 2])
     })
 
     position.needsUpdate = true

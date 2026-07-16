@@ -248,6 +248,9 @@ export function registerRuntimeGlassesConfig(key, engineModelConfig) {
     // white glare on the frame is the scene lighting reflecting off the authored
     // gloss, addressed in the lighting, not by altering the model's material.
     preserveMaterials: true,
+    // The geometric fit tends to seat auto-calibrated frames a touch high on the
+    // nose; nudge block models down slightly (metres). ?voffset=<n> overrides.
+    verticalOffset: -0.01,
   }
 
   for (const field of VECTOR3_FIELDS) {

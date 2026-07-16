@@ -579,16 +579,18 @@ export class RenderLoop {
       this._glassesScaleMultiplier = resolveGlassesScaleMultiplier(window.location.search, isPortrait)
     }
     // Vertical placement fine-tune, in world metres (negative = lower on the
-    // nose). Resolved once from ?voffset=<n> for live tuning; 0 by default.
-    if (this._verticalOffset == null) {
+    // nose). ?voffset=<n> overrides for live tuning; otherwise the per-model
+    // config value (block models nudge down slightly); 0 by default.
+    if (this._urlVerticalOffset === undefined) {
       const v = parseFloat(new URLSearchParams(window.location.search).get('voffset'))
-      this._verticalOffset = Number.isFinite(v) ? v : 0
+      this._urlVerticalOffset = Number.isFinite(v) ? v : null
     }
+    const verticalOffset = this._urlVerticalOffset ?? this.modelConfig?.verticalOffset ?? 0
     const scale = transform.scale * this._glassesScaleMultiplier
 
     this.glassesRoot.visible = true
     this.glassesRoot.position.copy(transform.position)
-    this.glassesRoot.position.y += this._verticalOffset
+    this.glassesRoot.position.y += verticalOffset
     this.glassesRoot.quaternion.copy(transform.quaternion)
     this.glassesRoot.scale.setScalar(scale)
 
@@ -605,9 +607,13 @@ export class RenderLoop {
     if (!this.occlusionEnabled) {
       this.faceOccluder?.hide?.()
     } else if (transform.occlusionMesh?.faceWorldPoints) {
+      // Smooth the mask like the frame: heavy at rest (kills nose-bridge jitter),
+      // tight during motion so the mask still tracks the face without lag.
+      const occluderAlpha = THREE.MathUtils.lerp(0.15, 0.9, this.motionLevel ?? 0)
       this.faceOccluder?.updateFromFaceMesh?.(
         transform.occlusionMesh.faceWorldPoints,
-        transform.anchorWorldPoints
+        transform.anchorWorldPoints,
+        occluderAlpha
       )
     } else if (transform.anchorWorldPoints) {
       this.faceOccluder?.updateFromAnchors(transform.anchorWorldPoints)
