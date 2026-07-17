@@ -100,7 +100,9 @@ describe('createSkyPixels', () => {
       sunAzimuthDeg: 35,
       sunElevationDeg: 28,
     })
-    // Sample the column opposite the sun so the disc cannot contaminate it.
+    // Sample a column far from the sun so the disc cannot contaminate it. Columns map to
+    // phi = atan2(dir.z, dir.x) = (u - 0.5) * 360, so this is phi = -145deg; the sun sits at
+    // phi = 90 - 35 = 55deg, ~160deg away and well outside the 9deg disc.
     const x = Math.floor(((-145 + 180) / 360) * WIDTH)
     const up = rgbAt(pixels, x, rowForDirY(1))
     const down = rgbAt(pixels, x, rowForDirY(-1))
@@ -152,7 +154,9 @@ describe('createSkyPixels', () => {
       sunAzimuthDeg: 35,
       sunElevationDeg: 28,
     })
-    // Sample the column opposite the sun so the disc cannot contaminate it.
+    // Sample a column far from the sun so the disc cannot contaminate it. Columns map to
+    // phi = atan2(dir.z, dir.x) = (u - 0.5) * 360, so this is phi = -145deg; the sun sits at
+    // phi = 90 - 35 = 55deg, ~160deg away and well outside the 9deg disc.
     const x = Math.floor(((-145 + 180) / 360) * WIDTH)
     // Walk the true sky hemisphere: from the top row downward, stopping at the
     // horizon. The bound comes from the elevation formula, not a magic HEIGHT/2.

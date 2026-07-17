@@ -182,6 +182,11 @@ Expected: FAIL — `Failed to resolve import "../../src/core/skyTexture.js"`
 
 - [ ] **Step 3: Write minimal implementation**
 
+> **Superseded.** The listing below encodes texels with `elevation = 90 - v * 180` and
+> `azimuth = u * 360 - 180` — three's convention negated in elevation and mirrored in azimuth
+> (see the ⚠️ note in the Pixel mapping contract above). It shipped and was fixed in `6c819de`.
+> `src/core/skyTexture.js` in the tree is now the reference. Do not copy this listing.
+
 Create `src/core/skyTexture.js`:
 
 ```js
