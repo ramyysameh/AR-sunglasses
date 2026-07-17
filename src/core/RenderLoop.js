@@ -8,6 +8,8 @@ import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
 import { FaceFitSolver } from '../fit/FaceFitSolver.js'
 import { coverNDC } from '../fit/coverMap.js'
 import { resolveGlassesScaleMultiplier } from './glassesScale.js'
+import { createLensEnvironment } from './lensEnvironment.js'
+import { resolveLensReflectionConfig } from './lensReflection.js'
 
 const TRACK_LOSS_RESET_MS = 180
 // Lower lead than before (was 0.85): heavy lead on an already-smoothed signal
@@ -96,6 +98,17 @@ export class RenderLoop {
     this.renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.0
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio ?? 1, 2))
+
+    // Lens reflections. Ambient light casts no specular, so a glossy lens has
+    // nothing to bounce; this env map is the thing being reflected. Assigned
+    // per-material to lenses only (never scene.environment) so the frame keeps
+    // the flat look 2e12c0f deliberately gave it.
+    this.lensReflection = resolveLensReflectionConfig(window.location.search)
+    this.lensEnvironment = createLensEnvironment(this.renderer, {
+      sunAzimuthDeg: this.lensReflection.sunAzimuthDeg,
+      sunElevationDeg: this.lensReflection.sunElevationDeg,
+    })
+    this.lensEnvMap = this.lensEnvironment.texture
 
     this.scene = new THREE.Scene()
     this.camera = new THREE.PerspectiveCamera(48, 1, 0.01, 100)
@@ -699,6 +712,13 @@ export class RenderLoop {
       cancelAnimationFrame(this.rafId)
       this.rafId = null
     }
+  }
+
+  dispose() {
+    this.stop()
+    this.lensEnvironment?.dispose?.()
+    this.lensEnvironment = null
+    this.lensEnvMap = null
   }
 
   _syncSize() {

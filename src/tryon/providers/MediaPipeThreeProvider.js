@@ -77,7 +77,10 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     this.video.addEventListener('loadedmetadata', this.resizeHandler)
     window.addEventListener('resize', this.resizeHandler)
 
-    this.glassesLoader = await new GlassesModelLoader().init()
+    this.glassesLoader = await new GlassesModelLoader({
+      lensEnvMap: this.renderLoop.lensEnvMap,
+      lensReflection: this.renderLoop.lensReflection,
+    }).init()
     await this.loadSku(config.defaultSkuKey)
 
     const faceOccluder = await new FaceOccluder().init(this.renderLoop.scene)
@@ -153,6 +156,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     this.video?.removeEventListener?.('loadedmetadata', this.resizeHandler)
     window.removeEventListener('resize', this.resizeHandler)
     this.faceTracker?.dispose?.()
+    this.renderLoop?.dispose?.()
     stopStream(this.stream)
     this.stream = null
     this.container?.classList?.remove('is-mediapipe-provider')

@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { getGlassesConfig } from '../config/arConfig.js'
+import { applyLensReflection } from '../core/lensReflection.js'
 
 /**
  * Fades the rear of the temple arms to transparent based on the model's local Z.
@@ -35,6 +36,8 @@ function applyTempleFade(material, fade) {
 export class GlassesModelLoader {
   constructor(options = {}) {
     this.dracoDecoderPath = options.dracoDecoderPath ?? 'draco/gltf/'
+    this.lensEnvMap = options.lensEnvMap ?? null
+    this.lensReflection = options.lensReflection ?? null
     this.loader = null
     this.dracoLoader = null
     this.cache = new Map()
@@ -118,6 +121,7 @@ export class GlassesModelLoader {
             material.transparent = true
             material.opacity = Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : 0.5
             material.depthWrite = false
+            applyLensReflection(material, this.lensEnvMap, this.lensReflection)
           }
           material.needsUpdate = true
           continue
@@ -144,6 +148,8 @@ export class GlassesModelLoader {
           if ('opacity' in material) {
             material.opacity = materialProfile.lensOpacity ?? 0.62
           }
+
+          applyLensReflection(material, this.lensEnvMap, this.lensReflection)
         }
 
         applyTempleFade(material, templeFade)
