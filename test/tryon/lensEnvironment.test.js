@@ -45,8 +45,11 @@ describe('createLensEnvironment', () => {
   })
 
   it('disposes all three GPU resources, not just the env texture', () => {
-    // RenderLoop builds the env map at construction, so an incomplete dispose
-    // leaks once per model swap.
+    // dispose() frees all three resources on the destroy() teardown path;
+    // disposing only the returned texture leaks the source DataTexture and the
+    // PMREMGenerator. The env map is built once per RenderLoop and RenderLoop is
+    // constructed once per provider, so this is a teardown-completeness
+    // contract, not a per-swap leak.
     const textureDispose = vi.spyOn(THREE.Texture.prototype, 'dispose')
     const env = createLensEnvironment({})
     env.dispose()

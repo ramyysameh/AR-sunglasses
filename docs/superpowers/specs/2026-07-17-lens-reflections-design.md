@@ -73,6 +73,14 @@ createSkyPixels({ width, height, sunAzimuthDeg, sunElevationDeg, sunSize, sunInt
 Pure pixel math. Computes a vertical gradient (sky → horizon → ground) and composites a
 soft-edged sun disc at the given direction.
 
+**Pixel mapping:** texels are decoded with the exact inverse of three's `equirectUv`
+(`u = atan(dir.z, dir.x)/2π + 0.5`, `v = asin(dir.y)/π + 0.5`), which is what
+`PMREMGenerator` samples with. `DataTexture` sets `flipY = false`, so **data row 0 is
+`v = 0` → `dir.y = -1`, straight DOWN**. The author-facing az/el → vector definition
+(`x = sin(az)cos(el)`, `y = sin(el)`, `z = cos(az)cos(el)`) is separate and is used only for the
+sun vector, so `sunAzimuthDeg` / `sunElevationDeg` keep their human meaning while the texture
+matches three. Conflating the two negates elevation and mirrors azimuth.
+
 **Values are linear radiance, not sRGB-encoded.** `PMREMGenerator` expects linear input, so
 the gradient and disc math operate in linear space and are never gamma-encoded. `sunIntensity`
 is therefore a linear multiplier and may exceed `1.0` — that is intended, not a bug.
@@ -98,9 +106,10 @@ would be chased with `?lensrefl` and never found.
 
 **`dispose()` contract:** frees all three GPU resources — the source `DataTexture`, the
 `WebGLRenderTarget` returned by `fromEquirectangular()` (whose `.texture` is the env map), and
-the `PMREMGenerator` instance. Disposing only the returned texture leaks the other two. This is
-concrete rather than hypothetical: `RenderLoop` builds the env map once at construction, so a
-`RenderLoop` rebuilt on product/model swap leaks once per swap.
+the `PMREMGenerator` instance. `dispose()` frees all three resources on the `destroy()` teardown
+path; disposing only the returned texture leaks the source `DataTexture` and the
+`PMREMGenerator`. The env map is built once per `RenderLoop` and `RenderLoop` is constructed once
+per provider, so this is a teardown-completeness contract, not a per-swap leak.
 
 The only component requiring a live GPU context, so it stays thin — construction and
 delegation, no math.
@@ -162,8 +171,11 @@ which the glint appears.
 ## Testing
 
 **Unit (vitest, Node):**
-- `createSkyPixels` — sun lands at the expected pixel coordinates for a given azimuth and
-  elevation; gradient is monotonic top-to-bottom; disc falls off smoothly rather than
+- `createSkyPixels` — the brightest texel's **world direction** matches the requested azimuth and
+  elevation, decoded with **three's** `equirectUv` convention rather than the producer's own
+  formulas (decoding with the encoder's maths proves only self-consistency and passes even when
+  the convention does not match three's); looking up samples sky and looking down samples ground;
+  gradient is monotonic from the sky top down to the horizon; disc falls off smoothly rather than
   hard-clipping.
 - `resolveLensReflectionConfig` — overrides parse; non-finite, negative, and garbage input
   fall back to defaults; mirrors `glassesScale.test.js` case-for-case.

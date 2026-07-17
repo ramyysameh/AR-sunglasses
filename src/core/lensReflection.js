@@ -20,6 +20,7 @@ export function resolveLensReflectionConfig(search) {
   return {
     intensity: resolveParam(search, 'lensrefl', DEFAULTS.intensity, (v) => v >= 0),
     roughness: resolveParam(search, 'lensrough', DEFAULTS.roughness, (v) => v >= 0 && v <= 1),
+    // Unbounded on purpose: azimuth wraps, so any finite value is meaningful.
     sunAzimuthDeg: resolveParam(search, 'sunaz', DEFAULTS.sunAzimuthDeg, () => true),
     sunElevationDeg: resolveParam(search, 'sunel', DEFAULTS.sunElevationDeg, (v) => v >= -90 && v <= 90),
   }
@@ -31,7 +32,10 @@ export function resolveLensReflectionConfig(search) {
  * specular read as a distracting white glare).
  */
 export function applyLensReflection(material, envMap, config) {
-  if (!material || !envMap) {
+  // config is guarded alongside envMap because GlassesModelLoader defaults
+  // lensReflection to null independently of lensEnvMap: they are separately
+  // nullable, so a present envMap does not imply a present config.
+  if (!material || !envMap || !config) {
     return
   }
 

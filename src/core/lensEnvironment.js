@@ -9,11 +9,16 @@
 import * as THREE from 'three'
 import { createSkyPixels } from './skyTexture.js'
 
+// Also determines PMREM cube-face resolution: fromEquirectangular sizes the
+// cubemap at width/4, so 128 gives 32px faces. Lowering this for memory blurs
+// the sun glint away — the thing the whole feature exists to render.
 const WIDTH = 128
 const HEIGHT = 64
 
 export function createLensEnvironment(renderer, options = {}) {
-  const pixels = createSkyPixels({ width: WIDTH, height: HEIGHT, ...options })
+  // options is spread FIRST so the mandated resolution wins: a caller passing
+  // width/height must not silently resize the source or the PMREM cube faces.
+  const pixels = createSkyPixels({ ...options, width: WIDTH, height: HEIGHT })
 
   const source = new THREE.DataTexture(pixels, WIDTH, HEIGHT, THREE.RGBAFormat, THREE.FloatType)
   source.mapping = THREE.EquirectangularReflectionMapping

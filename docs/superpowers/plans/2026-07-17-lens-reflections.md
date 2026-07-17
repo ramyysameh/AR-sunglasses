@@ -15,7 +15,7 @@
 - **Linear radiance only.** `createSkyPixels` emits linear values, never gamma-encoded. `sunIntensity` is a linear multiplier and **may exceed 1.0** — that is intended, not a bug.
 - **The `DataTexture` MUST be tagged `THREE.LinearSRGBColorSpace`.** It defaults to `NoColorSpace`; leaving it unset silently decouples rendered sun brightness from `sunIntensity`, and that failure looks identical to "intensity needs tuning".
 - **Never assign `scene.environment`.** Lens materials get `material.envMap` individually. This is what structurally protects the frame from the glare regression fixed in `2e12c0f`.
-- **`dispose()` frees all three GPU resources:** source `DataTexture`, the `WebGLRenderTarget` from `fromEquirectangular()`, and the `PMREMGenerator`.
+- **`dispose()` frees all three GPU resources** on the `destroy()` teardown path: source `DataTexture`, the `WebGLRenderTarget` from `fromEquirectangular()`, and the `PMREMGenerator`. Disposing only the returned texture leaks the other two. The env map is built once per `RenderLoop` and `RenderLoop` is constructed once per provider, so this is a teardown-completeness contract, not a per-swap leak.
 - **No DOM in `skyTexture.js`.** No canvas, no `window`. Tests run under `environment: 'node'`.
 - Baked defaults: `intensity 1.8`, `roughness 0.06`, `sunAzimuthDeg 35`, `sunElevationDeg 28`. These are starting points to be tuned on-device and re-baked.
 - Run tests with `npx vitest run test/tryon`.
@@ -44,10 +44,39 @@
 - Produces: `createSkyPixels({ width, height, sunAzimuthDeg, sunElevationDeg, sunSizeDeg, sunIntensity }) -> Float32Array` (RGBA, length `width * height * 4`, linear radiance).
 
 **Pixel mapping contract** (later tasks and tests depend on it exactly):
-- `u = (x + 0.5) / width`, `azimuth = u * 360 - 180` (degrees, so `u=0.5` → azimuth `0`)
-- `v = (y + 0.5) / height`, `elevation = 90 - v * 180` (degrees, so `y=0` is straight up)
+
+The texel decode MUST be the exact inverse of three's `equirectUv`
+(`renderers/shaders/ShaderChunk/common.glsl.js`), which `PMREMGenerator` calls as
+`equirectUv(outputDirection)`:
+- `u = atan(dir.z, dir.x) / (2*PI) + 0.5`
+- `v = asin(dir.y) / PI + 0.5`
+
+and `DataTexture` sets `flipY = false`, so **data row 0 is `v = 0`, i.e. `dir.y = -1` — straight
+DOWN**. Therefore:
+- `u = (x + 0.5) / width`, `phi = (u - 0.5) * 2 * PI` — this is `atan2(dir.z, dir.x)`, **not** an
+  author-facing azimuth.
+- `v = (y + 0.5) / height`, `elevation = (v - 0.5) * 180` (degrees, so `y = 0` is straight DOWN
+  and `y = height-1` is straight up)
+- `direction = [cos(phi)*cos(theta), sin(theta), sin(phi)*cos(theta)]` where `theta = elevation` in
+  radians.
+
+This is deliberately NOT the author-facing az/el convention. `directionFromAngles`
+(`x = sin(az)cos(el)`, `y = sin(el)`, `z = cos(az)cos(el)`) defines what `sunAzimuthDeg` /
+`sunElevationDeg` mean to a human and is used only for the sun vector; the two are then compared
+in world space, which is what keeps the author-facing semantics intact.
+
+⚠️ A previous revision of this contract mandated `elevation = 90 - v * 180` (row 0 = up) and
+`azimuth = u * 360 - 180`. That is three's convention **negated in elevation and mirrored in
+azimuth**, and it shipped. Any test that decodes with the producer's own formulas asserts only
+self-consistency and passes either way — decode with three's formulas and assert the **world
+direction**.
 
 - [ ] **Step 1: Write the failing test**
+
+> **Superseded.** The listing below decodes with the producer's own formulas, so it asserts only
+> self-consistency and passed against the negated/mirrored mapping described in the ⚠️ note above.
+> `test/tryon/skyTexture.test.js` in the tree is now the reference: it decodes with three's
+> convention and asserts the brightest texel's **world direction**. Do not copy this listing.
 
 Create `test/tryon/skyTexture.test.js`:
 
@@ -465,8 +494,11 @@ describe('createLensEnvironment', () => {
   })
 
   it('disposes all three GPU resources, not just the env texture', () => {
-    // RenderLoop builds the env map at construction, so an incomplete dispose
-    // leaks once per model swap.
+    // dispose() frees all three resources on the destroy() teardown path;
+    // disposing only the returned texture leaks the source DataTexture and the
+    // PMREMGenerator. The env map is built once per RenderLoop and RenderLoop is
+    // constructed once per provider, so this is a teardown-completeness
+    // contract, not a per-swap leak.
     const textureDispose = vi.spyOn(THREE.Texture.prototype, 'dispose')
     const env = createLensEnvironment({})
     env.dispose()
