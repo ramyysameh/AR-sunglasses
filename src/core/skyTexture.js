@@ -27,11 +27,19 @@
  * sunAzimuthDeg / sunElevationDeg mean to a human, and the sun vector uses it.
  */
 
-// Linear radiance. Horizon is the bright band; sky darkens upward, ground
-// darkens downward.
-const SKY_TOP = [0.10, 0.22, 0.48]
-const HORIZON = [0.72, 0.80, 0.92]
-const GROUND = [0.09, 0.08, 0.07]
+// Linear radiance, deliberately DIM. A lens is near-flat and faces the camera, so
+// its reflected ray sits on the elevation-0 ring (see the sun-elevation note below)
+// — it samples the horizon band and almost nothing else. A bright horizon therefore
+// does not read as "sky", it washes the whole lens white at every head angle. Keep
+// these low so the sun is the only bright thing the lens can find: measured, a lens
+// reflected the old horizon at luminance 0.783 (near-white) uniformly across a
+// +/-40deg yaw sweep. Horizon stays the brightest of the three so the gradient still
+// reads as sky-above / ground-below where curvature does sample off-ring.
+const SKY_TOP = [0.03, 0.05, 0.12]
+const HORIZON = [0.08, 0.10, 0.14]
+// Warm, not neutral grey: a neutral ground blends toward the blue-ish horizon and
+// ends up faintly blue, which reads as sky in the wrong hemisphere.
+const GROUND = [0.03, 0.025, 0.018]
 
 const DEG = Math.PI / 180
 
@@ -55,8 +63,17 @@ export function createSkyPixels({
   width = 128,
   height = 64,
   sunAzimuthDeg = 35,
-  sunElevationDeg = 28,
-  sunSizeDeg = 9,
+  // Near the horizon ON PURPOSE. Reflecting off a near-flat lens facing the camera,
+  // the reflected ray is R = reflect((0,0,-1), N); for head yaw t the normal is
+  // (sin t, 0, cos t), giving R = (sin 2t, 0, cos 2t) — elevation pinned at 0 for ANY
+  // yaw, azimuth sweeping at 2x the head turn. A sun above that ring can never be
+  // reflected: at elevation 28 it was invisible at every angle while the horizon
+  // washed the lens white. Keep this small so the sun sits on the ring the lens
+  // actually sees; ?sunel overrides.
+  sunElevationDeg = 5,
+  // Wide enough that lens curvature and pantoscopic tilt (which nudge the reflected
+  // ray off the elevation-0 ring) still land inside the disc.
+  sunSizeDeg = 12,
   sunIntensity = 14,
 } = {}) {
   const pixels = new Float32Array(width * height * 4)

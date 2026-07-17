@@ -7,7 +7,9 @@ describe('resolveLensReflectionConfig', () => {
     expect(config.intensity).toBeCloseTo(1.8)
     expect(config.roughness).toBeCloseTo(0.06)
     expect(config.sunAzimuthDeg).toBeCloseTo(35)
-    expect(config.sunElevationDeg).toBeCloseTo(28)
+    // Near the horizon on purpose: a lens facing the camera reflects the
+    // elevation-0 ring at any head yaw, so a high sun is never reflected at all.
+    expect(config.sunElevationDeg).toBeCloseTo(5)
   })
 
   it('honours every override', () => {
@@ -22,7 +24,7 @@ describe('resolveLensReflectionConfig', () => {
     const config = resolveLensReflectionConfig('?lensrefl=abc&lensrough=5&sunel=400')
     expect(config.intensity).toBeCloseTo(1.8)
     expect(config.roughness).toBeCloseTo(0.06)
-    expect(config.sunElevationDeg).toBeCloseTo(28)
+    expect(config.sunElevationDeg).toBeCloseTo(5)
   })
 
   it('allows a zero intensity so reflections can be switched off for comparison', () => {

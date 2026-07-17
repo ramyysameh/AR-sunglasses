@@ -52,6 +52,37 @@ The sweep requires no animation code. The env map is fixed in world space while
 `glassesRoot` rotates with the head, so the reflection vector changes per-frame and the
 hotspot travels across the lens on its own.
 
+### The elevation-0 ring (learned on device — this constrains the sky)
+
+The sentence above is only half the story, and the first build shipped on the missing half.
+
+A lens is near-flat and faces the camera. With view direction `(0,0,-1)` and a normal of
+`(sin t, 0, cos t)` for head yaw `t`, the reflected ray is
+`R = reflect(I, N) = (sin 2t, 0, cos 2t)`. **Elevation is pinned at 0 for any yaw** — only
+azimuth moves, at twice the head turn. So a lens can only ever reflect a thin ring of the
+sky around the horizon.
+
+Two consequences, both violated by the first build and both reported from a real phone
+("the lenses are so white", and no glint at any `?lensrefl`):
+
+- **The sun must sit on that ring.** At the original `sunElevationDeg: 28` it was 27° off
+  and reflected at *no* head angle. Measured: luminance was identical (`0.783`) at every
+  yaw from −40° to +40°, with the sun (`13.11`) never sampled — a peak/floor ratio of
+  exactly 1.0. `?lensrefl` could not fix this; it scales sun and sky together.
+- **The sky must be dim.** Since the lens sees essentially only the horizon band, a bright
+  horizon is not "sky", it is a uniform white wash. The original `HORIZON` of
+  `[0.72, 0.80, 0.92]` was the whiteness.
+
+Hence `sunElevationDeg` defaults near the horizon, the sun disc is widened so lens curvature
+and pantoscopic tilt still land inside it, and the gradient bands are deliberately dark.
+After the fix the same measurement gives a peak/floor ratio of **89**, floor `0.098`, and a
+glint peaking at 17.5° of yaw — half of the sun's 35° azimuth, as the 2× relationship
+predicts.
+
+`test/tryon/skyTexture.test.js` pins all three properties ("what a lens can actually
+reflect"): the sun is reachable within a normal head turn, the floor stays dark, and the
+luminance actually varies across the turn.
+
 ### Alternatives rejected
 
 - **Ship an HDRI** (`RGBELoader` + PMREM). Most photographically believable, but adds a

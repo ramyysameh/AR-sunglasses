@@ -7,8 +7,13 @@ const DEFAULTS = {
   // Roughness floor. Smoke_Lens is authored at 0 (perfect mirror), which makes
   // the sun a hard aliased dot; a little roughness blooms it into a glint.
   roughness: 0.06,
+  // Caught at ~17.5deg of head yaw: a yawing lens sweeps the reflected azimuth at
+  // 2x the head turn, so the glint hits at half this angle.
   sunAzimuthDeg: 35,
-  sunElevationDeg: 28,
+  // Must stay near 0 — the reflected ray off a lens facing the camera is pinned to
+  // the elevation-0 ring at any yaw, so a higher sun is simply never reflected. See
+  // the sunElevationDeg note in skyTexture.js. ?sunel overrides.
+  sunElevationDeg: 5,
 }
 
 function resolveParam(search, key, fallback, isValid) {
