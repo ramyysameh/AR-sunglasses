@@ -7,7 +7,18 @@
 Investigation of the app before writing deployment config. Three findings materially
 shape how Phase 1 is executed.
 
-## Finding 1 — Local-disk storage is incompatible with Vercel *(blocker)*
+## Finding 1 — Local-disk storage is incompatible with Vercel *(blocker — ✅ RESOLVED 2026-07-18, commit 1bd01a3)*
+
+**Resolved:** storage backend swapped to **Cloudflare R2** (S3-compatible). `saveModelGlb`
+puts, new `readModelGlb` gets; the S3 client is built lazily so a missing-env import can't
+take down the app at boot. `readModelGlb` returns null only for a genuinely absent object —
+credential/network faults rethrow, so an outage surfaces as a 500 rather than telling every
+merchant their model doesn't exist (the old route swallowed every error into a 404). No `fs`
+left in `app/`. The two tests that asserted bytes on disk now stub storage with an in-memory
+map. App tests 16/16, `react-router build` clean. New env vars documented in `.env.example`.
+
+*Original analysis below.*
+
 
 `apps/shopify-app/app/storage.server.js` writes calibrated GLBs to
 `join(process.cwd(), 'storage')`. Its own comment says: *"dev-slice local-disk storage
