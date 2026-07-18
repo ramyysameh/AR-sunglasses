@@ -1,11 +1,20 @@
 import { describe, it, expect, afterAll, vi } from 'vitest'
-import { readFile, rm } from 'node:fs/promises'
 import { NodeIO } from '@gltf-transform/core'
 import { KHRONOS_EXTENSIONS } from '@gltf-transform/extensions'
 import { buildDoc } from '@artryon/calibration/test/helpers/buildDoc.js'
 import prisma from '../app/db.server.js'
-import { registerModelByUrl } from '../app/models.server.js'
-import { resolveStoragePath } from '../app/storage.server.js'
+
+// Storage is object-backed (R2) in production; stub it with an in-memory store so
+// this test exercises fetch→calibrate→store→persist without real object storage.
+const storage = vi.hoisted(() => ({ objects: new Map() }))
+vi.mock('../app/storage.server.js', () => ({
+  saveModelGlb: async (ref, bytes) => {
+    storage.objects.set(ref, Buffer.from(bytes))
+  },
+  readModelGlb: async (ref) => storage.objects.get(ref) ?? null,
+}))
+
+const { registerModelByUrl } = await import('../app/models.server.js')
 
 const URL_A = 'https://cdn.shopify.com/s/files/1/0001/registerModelByUrl-a.glb'
 const URL_B = 'https://cdn.shopify.com/s/files/1/0001/registerModelByUrl-b.glb'
@@ -32,8 +41,7 @@ function stubFetchReturning(bytes) {
 
 afterAll(async () => {
   vi.unstubAllGlobals()
-  const assets = await prisma.modelAsset.findMany({ where: { sourceUrl: { in: [URL_A, URL_B] } } })
-  for (const a of assets) await rm(resolveStoragePath(a.storageRef), { force: true })
+  storage.objects.clear()
   await prisma.modelAsset.deleteMany({ where: { sourceUrl: { in: [URL_A, URL_B] } } })
 })
 
@@ -51,7 +59,8 @@ describe('registerModelByUrl', () => {
     const asset = await prisma.modelAsset.findFirst({ where: { sourceUrl: URL_A } })
     expect(asset).not.toBeNull()
     expect(asset.shop).toBe('__block__')
-    const stored = await readFile(resolveStoragePath(asset.storageRef))
+    const stored = storage.objects.get(asset.storageRef)
+    expect(stored).toBeDefined()
     expect(stored.length).toBeGreaterThan(0)
   })
 

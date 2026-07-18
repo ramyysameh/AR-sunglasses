@@ -1,11 +1,20 @@
-import { describe, it, expect, afterAll } from 'vitest'
-import { readFile, rm } from 'node:fs/promises'
+import { describe, it, expect, afterAll, vi } from 'vitest'
 import { NodeIO } from '@gltf-transform/core'
 import { KHRONOS_EXTENSIONS } from '@gltf-transform/extensions'
 import { buildDoc } from '@artryon/calibration/test/helpers/buildDoc.js'
 import prisma from '../app/db.server.js'
-import { saveCalibratedModel } from '../app/models.server.js'
-import { resolveStoragePath } from '../app/storage.server.js'
+
+// Storage is object-backed (R2) in production; stub it with an in-memory store so
+// this test exercises calibrate→store→persist without reaching real object storage.
+const storage = vi.hoisted(() => ({ objects: new Map() }))
+vi.mock('../app/storage.server.js', () => ({
+  saveModelGlb: async (ref, bytes) => {
+    storage.objects.set(ref, Buffer.from(bytes))
+  },
+  readModelGlb: async (ref) => storage.objects.get(ref) ?? null,
+}))
+
+const { saveCalibratedModel } = await import('../app/models.server.js')
 
 const shop = 'upload-test.myshopify.com'
 
@@ -24,8 +33,7 @@ async function taggedGlbBytes() {
 }
 
 afterAll(async () => {
-  const assets = await prisma.modelAsset.findMany({ where: { shop } })
-  for (const a of assets) await rm(resolveStoragePath(a.storageRef), { force: true })
+  storage.objects.clear()
   await prisma.modelAsset.deleteMany({ where: { shop } })
 })
 
@@ -41,7 +49,8 @@ describe('saveCalibratedModel', () => {
     expect(asset.status).toBe('ready')
     expect(asset.fitMetadata.version).toBe('eyewear-v1')
 
-    const stored = await readFile(resolveStoragePath(asset.storageRef))
+    const stored = storage.objects.get(asset.storageRef)
+    expect(stored).toBeDefined()
     expect(stored.length).toBeGreaterThan(0)
   })
 })
