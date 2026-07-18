@@ -15,11 +15,14 @@ node_modules
 /prisma/dev.sqlite-journal
 database.sqlite
 
-# Uploaded/normalized model GLBs (dev-slice local storage)
+# Legacy dev-slice local model storage. Production stores calibrated GLBs in R2
+# (app/storage.server.js); nothing writes here anymore.
 /storage/
 
 .env
 .env.*
+# ...but the committed template carries no secrets and must stay tracked.
+!.env.example
 
 
 
