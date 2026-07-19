@@ -25,10 +25,10 @@ vi.mock('@aws-sdk/client-s3', () => {
   return { S3Client: FakeClient, PutObjectCommand, GetObjectCommand }
 })
 
-process.env.R2_ACCOUNT_ID = 'acct123'
-process.env.R2_ACCESS_KEY_ID = 'key'
-process.env.R2_SECRET_ACCESS_KEY = 'secret'
-process.env.R2_BUCKET = 'models-bucket'
+process.env.AWS_REGION = 'eu-west-3'
+process.env.AWS_ACCESS_KEY_ID = 'key'
+process.env.AWS_SECRET_ACCESS_KEY = 'secret'
+process.env.S3_BUCKET = 'models-bucket'
 
 const { saveModelGlb, readModelGlb } = await import('../app/storage.server.js')
 

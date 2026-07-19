@@ -1,35 +1,37 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
 
 /**
- * Object storage for calibrated GLBs, backed by Cloudflare R2 (S3-compatible).
+ * Object storage for calibrated GLBs.
  *
  * Replaces the dev-slice local-disk store: serverless hosting has an ephemeral
  * filesystem, so anything written to disk is gone on the next invocation and every
- * merchant upload would silently vanish. R2 specifically (over S3/Blob) because it
- * charges no egress, and each try-on pulls a multi-MB GLB.
+ * merchant upload would silently vanish.
+ *
+ * Talks plain S3 by default. Setting S3_ENDPOINT points the same client at any
+ * S3-compatible store (Cloudflare R2, MinIO) — so moving off AWS later, e.g. to R2
+ * for its zero egress fees once traffic makes that matter, is a config change
+ * rather than a code change.
  *
  * `storageRef` (stored on ModelAsset) is the object key.
  */
-
-const BUCKET = process.env.R2_BUCKET
 
 let client = null
 
 /**
  * Built lazily, not at module load: importing this file must not throw when the
- * R2 env vars are absent (builds, tests, and any code path that never touches
+ * storage env vars are absent (builds, tests, and any code path that never touches
  * storage). Failing at import would take down the whole app instead of one request.
+ *
+ * Credentials come from the AWS SDK's standard chain — AWS_ACCESS_KEY_ID and
+ * AWS_SECRET_ACCESS_KEY, which is how both Vercel and local .env supply them.
  */
 function getClient() {
   if (!client) {
+    const endpoint = process.env.S3_ENDPOINT
     client = new S3Client({
-      // R2 ignores region, but the SDK requires one.
-      region: 'auto',
-      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID,
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-      },
+      region: process.env.AWS_REGION ?? 'us-east-1',
+      // S3-compatible stores need path-style addressing; AWS itself does not.
+      ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
     })
   }
   return client
@@ -38,7 +40,7 @@ function getClient() {
 export async function saveModelGlb(storageRef, bytes) {
   await getClient().send(
     new PutObjectCommand({
-      Bucket: BUCKET,
+      Bucket: process.env.S3_BUCKET,
       Key: storageRef,
       Body: bytes,
       ContentType: 'model/gltf-binary',
@@ -54,7 +56,7 @@ export async function saveModelGlb(storageRef, bytes) {
 export async function readModelGlb(storageRef) {
   try {
     const result = await getClient().send(
-      new GetObjectCommand({ Bucket: BUCKET, Key: storageRef }),
+      new GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: storageRef }),
     )
     return Buffer.from(await result.Body.transformToByteArray())
   } catch (error) {
