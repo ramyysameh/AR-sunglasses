@@ -3,6 +3,10 @@
 
 generator client {
   provider = "prisma-client-js"
+  // Vercel's Node runtime is Amazon Linux with OpenSSL 3.0. Without this target
+  // the client generated at build time has no engine matching the runtime and
+  // every query throws at invocation. "native" keeps local dev working.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 // Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
