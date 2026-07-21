@@ -2,12 +2,11 @@
 
 client_id = "f2a93eb007cec5748830afd8ccd04203"
 name = "AR Try-on"
-application_url = "https://example.com"
+application_url = "https://ar-sunglasses-shopify-app.vercel.app"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-10"
@@ -19,4 +18,6 @@ api_version = "2026-10"
 scopes = "write_products,write_metaobjects,write_metaobject_definitions"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+# Path is /auth/callback, not the legacy /api/auth: shopify.server.js sets
+# authPathPrefix "/auth", so OAuth returns through app/routes/auth.$.jsx.
+redirect_urls = [ "https://ar-sunglasses-shopify-app.vercel.app/auth/callback" ]
