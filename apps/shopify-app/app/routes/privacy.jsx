@@ -45,10 +45,10 @@ export default function Privacy() {
 
       <h2>Retention and deletion</h2>
       <p>
-        Uninstalling the app immediately revokes our access to the store. All
-        remaining store data is permanently deleted when Shopify notifies us of
-        the uninstall, approximately 48 hours later. This includes uploaded
-        models and their stored files.
+        Uninstalling the app immediately revokes our access to the store.
+        Shopify then sends us a data-erasure request approximately 48 hours
+        later, at which point all remaining store data is permanently deleted.
+        This includes uploaded models and their stored files.
       </p>
 
       <h2>Service providers</h2>
