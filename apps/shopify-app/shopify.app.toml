@@ -9,9 +9,38 @@ embedded = true
 automatically_update_urls_on_dev = true
 
 [webhooks]
-api_version = "2026-10"
-# Lifecycle webhook subscriptions removed for local dev (--use-localhost can't register
-# localhost webhook URIs). Not needed for this slice; restore before production (sub-project D).
+# Must match the ApiVersion pinned in app/shopify.server.js (October25 = 2025-10).
+# This previously read "2026-10", which is not a version the installed
+# @shopify/shopify-api knows about at all -- its enum tops out at 2026-07.
+# Webhook payload shapes are versioned, so the two must not drift.
+api_version = "2025-10"
+
+# Handled by: app/routes/webhooks.app.uninstalled.jsx
+[[webhooks.subscriptions]]
+topics = [ "app/uninstalled" ]
+uri = "/webhooks/app/uninstalled"
+
+# Handled by: app/routes/webhooks.app.scopes_update.jsx
+[[webhooks.subscriptions]]
+topics = [ "app/scopes_update" ]
+uri = "/webhooks/app/scopes_update"
+
+# Mandatory GDPR topics. Note these use `compliance_topics`, NOT `topics` --
+# the CLI silently ignores compliance topics declared under `topics`.
+# Handled by: app/routes/webhooks.customers.data_request.jsx
+[[webhooks.subscriptions]]
+compliance_topics = [ "customers/data_request" ]
+uri = "/webhooks/customers/data_request"
+
+# Handled by: app/routes/webhooks.customers.redact.jsx
+[[webhooks.subscriptions]]
+compliance_topics = [ "customers/redact" ]
+uri = "/webhooks/customers/redact"
+
+# Handled by: app/routes/webhooks.shop.redact.jsx
+[[webhooks.subscriptions]]
+compliance_topics = [ "shop/redact" ]
+uri = "/webhooks/shop/redact"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
