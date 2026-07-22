@@ -3,6 +3,7 @@ import { getTryOnRuntimeConfig } from './src/config/tryOnConfig.js'
 import { checkEnvironment } from './src/support/capabilities.js'
 import { defaultGlassesKey, registerRuntimeGlassesConfig } from './src/config/arConfig.js'
 import { toEngineModelConfig } from './src/tryon/fitMetadataAdapter.js'
+import { buildRegisterModelUrl } from './src/tryon/registerModelUrl.js'
 
 const video = document.getElementById('camera-feed')
 const canvas = document.getElementById('overlay-canvas')
@@ -76,7 +77,7 @@ async function resolveBlockModelKey() {
   }
 
   try {
-    const response = await fetch(`/api/register-model?url=${encodeURIComponent(modelUrl)}`)
+    const response = await fetch(buildRegisterModelUrl(modelUrl, shop))
     if (!response.ok) {
       throw new Error(`register-model request failed with status ${response.status}`)
     }
