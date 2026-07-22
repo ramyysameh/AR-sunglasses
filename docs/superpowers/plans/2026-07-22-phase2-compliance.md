@@ -905,7 +905,379 @@ git commit -m "feat(app): add public privacy policy at /privacy"
 
 ---
 
+### Task 9: Attribute block-registered models to the real shop
+
+**Added 2026-07-22 during execution.** Task 2's review surfaced that
+`registerModelByUrl` stores every block-registered model under
+`BLOCK_SHOP = '__block__'`, so `purgeShopData(shop)` never erases them. Those
+rows carry `sourceUrl`, a Shopify CDN URL embedding the merchant's store ID, so
+they are merchant-identifiable and would survive redaction permanently. This
+task closes that hole; without it `shop/redact` is incomplete and the phase's
+exit criteria are not met.
+
+The live database has **zero** `ModelAsset` rows, so no backfill is required.
+
+**Files:**
+- Modify: `prisma/schema.prisma`
+- Create: `prisma/migrations/<timestamp>_model_asset_shop_source_url/migration.sql`
+- Modify: `app/models.server.js:49-78`
+- Modify: `app/routes/api.register-model.jsx`
+- Test: `test/registerModelByUrl.server.test.js`, `test/api.register-model.test.js`
+
+**Interfaces:**
+- Consumes: `purgeShopData` from Task 2 (unchanged — it already filters on `shop`; this task makes the data match).
+- Produces: `registerModelByUrl(prisma, url, shop) => Promise<{ modelUrl, fitMetadata }>` — **note the new third parameter.** Task 10's engine change supplies it over the wire.
+
+- [ ] **Step 1: Change the schema**
+
+In `prisma/schema.prisma`, drop the global unique on `sourceUrl` and add a
+composite unique. Replace the `sourceUrl` line and add the index:
+
+```prisma
+model ModelAsset {
+  id          String   @id @default(uuid())
+  shop        String
+  sourceUrl   String?
+  storageRef  String
+  fitMetadata Json
+  confidence  Float?
+  status      String   @default("ready")
+  createdAt   DateTime @default(now())
+  mappings    ProductMapping[]
+
+  // Was @unique on sourceUrl alone, which shared one calibrated asset across
+  // every shop. Attribution is now per-shop so shop/redact can erase a
+  // merchant's block models, which means the same URL may legitimately exist
+  // once per shop.
+  @@unique([shop, sourceUrl])
+}
+```
+
+- [ ] **Step 2: Generate the migration offline**
+
+Do NOT run `prisma migrate dev` — it wants a shadow database. Use the same
+offline diff approach Phase 1 used:
+
+```bash
+mkdir -p prisma/migrations/20260722000000_model_asset_shop_source_url
+npx prisma migrate diff \
+  --from-migrations prisma/migrations \
+  --to-schema-datamodel prisma/schema.prisma \
+  --shadow-database-url "$DATABASE_URL" \
+  --script > prisma/migrations/20260722000000_model_asset_shop_source_url/migration.sql
+cat prisma/migrations/20260722000000_model_asset_shop_source_url/migration.sql
+```
+
+Expected SQL, roughly:
+
+```sql
+DROP INDEX "ModelAsset_sourceUrl_key";
+CREATE UNIQUE INDEX "ModelAsset_shop_sourceUrl_key" ON "ModelAsset"("shop", "sourceUrl");
+```
+
+Then apply and regenerate:
+
+```bash
+npx prisma migrate deploy && npx prisma generate
+```
+
+- [ ] **Step 3: Write the failing tests**
+
+In `test/registerModelByUrl.server.test.js`, add a shop constant near `URL_A`:
+
+```js
+const SHOP = 'block-attr-test.myshopify.com'
+```
+
+Update the `afterAll` cleanup to also clear by shop:
+
+```js
+afterAll(async () => {
+  vi.unstubAllGlobals()
+  storage.objects.clear()
+  await prisma.modelAsset.deleteMany({ where: { sourceUrl: { in: [URL_A, URL_B] } } })
+  await prisma.modelAsset.deleteMany({ where: { shop: SHOP } })
+})
+```
+
+Change both existing calls to pass the shop — `registerModelByUrl(prisma, URL_A, SHOP)` and both `URL_B` calls — and replace the `'__block__'` assertion:
+
+```js
+    expect(asset.shop).toBe(SHOP)
+```
+
+Then append:
+
+```js
+describe('registerModelByUrl shop attribution', () => {
+  it('refuses to register without a valid shop, so no unattributable row is created', async () => {
+    // An unattributed row can never be erased by shop/redact. Rejecting is the
+    // only safe outcome.
+    for (const bad of [undefined, null, '', 'not-a-shop', 123]) {
+      await expect(registerModelByUrl(prisma, URL_A, bad)).rejects.toThrow(TypeError)
+    }
+    expect(await prisma.modelAsset.count({ where: { sourceUrl: URL_A } })).toBe(0)
+  })
+
+  it('purgeShopData erases a block-registered model', async () => {
+    const bytes = await taggedGlbBytes()
+    stubFetchReturning(bytes)
+    await registerModelByUrl(prisma, URL_A, SHOP)
+    expect(await prisma.modelAsset.count({ where: { shop: SHOP } })).toBe(1)
+
+    const { purgeShopData } = await import('../app/webhooks.server.js')
+    await purgeShopData(prisma, SHOP)
+
+    // The whole point of this task.
+    expect(await prisma.modelAsset.count({ where: { shop: SHOP } })).toBe(0)
+  })
+})
+```
+
+Note the second test runs the real `purgeShopData` with storage stubbed by this
+file's existing mock, so `deleteModelGlb` must be added to that mock's return
+object:
+
+```js
+vi.mock('../app/storage.server.js', () => ({
+  saveModelGlb: async (ref, bytes) => {
+    storage.objects.set(ref, Buffer.from(bytes))
+  },
+  readModelGlb: async (ref) => storage.objects.get(ref) ?? null,
+  deleteModelGlb: async (ref) => {
+    storage.objects.delete(ref)
+  },
+}))
+```
+
+- [ ] **Step 4: Run the tests to verify they fail**
+
+Run: `npm test -- test/registerModelByUrl.server.test.js`
+Expected: FAIL — `registerModelByUrl` ignores the third argument, so the shop
+assertion sees `__block__` and the guard test does not throw.
+
+- [ ] **Step 5: Implement**
+
+In `app/models.server.js`, replace lines 49-57 (the `BLOCK_SHOP` constant, the
+comment above it, and the function signature + dedupe lookup) with:
+
+```js
+// Block-level GLB: calibrate a merchant-hosted GLB once and cache it, keyed by
+// (shop, sourceUrl).
+//
+// Previously keyed by sourceUrl alone under a synthetic '__block__' shop, which
+// shared one calibrated asset across every shop. That made the row invisible to
+// purgeShopData: a merchant's block models survived shop/redact permanently,
+// even though sourceUrl embeds their CDN store ID. Attribution is per-shop so
+// redaction can find them. The cost is that two shops pasting the same URL each
+// get their own calibration, which is correct and effectively never happens —
+// Shopify CDN URLs embed the store id.
+export async function registerModelByUrl(prisma, url, shop) {
+  // An unattributed row can never be erased by shop/redact, so refuse to create
+  // one. NOTE: this route is public and unauthenticated, so `shop` is caller-
+  // supplied and this check is a data-integrity guard, NOT a security boundary
+  // — it does not prove the caller owns the shop. Authenticating this endpoint
+  // is Phase 3 (register-model hardening).
+  if (!shop || typeof shop !== 'string' || !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shop)) {
+    throw new TypeError(`registerModelByUrl: invalid shop: ${String(shop)}`)
+  }
+
+  const existing = await prisma.modelAsset.findFirst({ where: { shop, sourceUrl: url } })
+  if (existing) {
+    return { modelUrl: `/models/${existing.id}.glb`, fitMetadata: existing.fitMetadata }
+  }
+```
+
+and change the `create` data's shop (was `shop: BLOCK_SHOP`):
+
+```js
+      shop,
+```
+
+- [ ] **Step 6: Wire the route**
+
+Replace the `loader` in `app/routes/api.register-model.jsx`:
+
+```jsx
+export const loader = async ({ request }) => {
+  const url = new URL(request.url)
+  const modelUrl = url.searchParams.get('url')
+  const shop = url.searchParams.get('shop')
+  if (!modelUrl || !/^https:\/\//i.test(modelUrl)) {
+    return Response.json({ error: 'a valid https url is required' }, { status: 400, headers: CORS })
+  }
+  // Required so the resulting ModelAsset is attributable and therefore
+  // erasable by shop/redact. The engine always has this — the theme block
+  // passes shop.permanent_domain into the iframe URL.
+  if (!shop) {
+    return Response.json({ error: 'shop is required' }, { status: 400, headers: CORS })
+  }
+  try {
+    const cfg = await registerModelByUrl(db, modelUrl, shop)
+    return Response.json(cfg, { headers: CORS })
+  } catch (err) {
+    const message = err?.message ?? 'registration failed'
+    const status = /^fetch failed/i.test(message) ? 502 : 422
+    return Response.json({ error: message }, { status, headers: CORS })
+  }
+}
+```
+
+- [ ] **Step 7: Add the route test**
+
+Append to `test/api.register-model.test.js`:
+
+```js
+it('rejects a request with no shop so no unattributable asset is created', async () => {
+  const response = await loader({
+    request: new Request('https://app.test/api/register-model?url=https%3A%2F%2Fcdn.shopify.com%2Fa.glb'),
+  })
+  expect(response.status).toBe(400)
+  expect((await response.json()).error).toMatch(/shop is required/)
+})
+```
+
+- [ ] **Step 8: Run the full suite**
+
+Run: `npm test`
+Expected: PASS, all suites.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add prisma/schema.prisma prisma/migrations app/models.server.js app/routes/api.register-model.jsx test/registerModelByUrl.server.test.js test/api.register-model.test.js
+git commit -m "fix(compliance): attribute block-registered models to the real shop
+
+Block models were stored under a synthetic '__block__' shop, so
+purgeShopData never erased them -- and sourceUrl embeds the merchant's
+CDN store id, making those rows merchant-identifiable data that survived
+shop/redact permanently.
+
+Keys ModelAsset by (shop, sourceUrl) instead of sourceUrl alone and
+requires shop at the public route. The shop check is a data-integrity
+guard, not a security boundary; authenticating this endpoint is Phase 3."
+```
+
+---
+
+### Task 10: Forward the shop from the engine to register-model
+
+**Files:**
+- Create: `src/tryon/registerModelUrl.js`
+- Modify: `main.js:79`
+- Test: `test/tryon/registerModelUrl.test.js`
+
+Run from the **repo root**, not `apps/shopify-app` — this is the engine.
+
+**Interfaces:**
+- Consumes: Task 9's `?shop=` requirement on `/api/register-model`.
+- Produces: `buildRegisterModelUrl(modelUrl, shop) => string`.
+
+The theme block already passes `shop.permanent_domain` into the iframe URL and
+`main.js:18` already parses it into `shop`. The only gap is that
+`resolveBlockModelKey` does not forward it. Extracting a pure helper keeps the
+change testable — `main.js` runs side effects at import and cannot be unit
+tested directly.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `test/tryon/registerModelUrl.test.js`:
+
+```js
+import { describe, it, expect } from 'vitest'
+import { buildRegisterModelUrl } from '../../src/tryon/registerModelUrl.js'
+
+describe('buildRegisterModelUrl', () => {
+  it('includes both the model url and the shop, encoded', () => {
+    const url = buildRegisterModelUrl(
+      'https://cdn.shopify.com/s/files/1/0868/a b.glb',
+      'demo-shop.myshopify.com',
+    )
+    expect(url).toBe(
+      '/api/register-model?url=https%3A%2F%2Fcdn.shopify.com%2Fs%2Ffiles%2F1%2F0868%2Fa%20b.glb&shop=demo-shop.myshopify.com',
+    )
+  })
+
+  it('throws without a shop, since the app rejects an unattributed registration', () => {
+    // Failing loudly here beats a 400 the engine would silently swallow into a
+    // fallback, hiding the real cause.
+    expect(() => buildRegisterModelUrl('https://cdn.shopify.com/a.glb', undefined)).toThrow()
+  })
+})
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `npm test -- test/tryon/registerModelUrl.test.js`
+Expected: FAIL — cannot resolve `../../src/tryon/registerModelUrl.js`.
+
+- [ ] **Step 3: Implement**
+
+Create `src/tryon/registerModelUrl.js`:
+
+```js
+/**
+ * Builds the register-model request URL.
+ *
+ * `shop` is required: the app stores the resulting ModelAsset under it so that
+ * shop/redact can erase the merchant's block models. Registering without one
+ * would create a row no redaction could ever find.
+ */
+export function buildRegisterModelUrl(modelUrl, shop) {
+  if (!shop) {
+    throw new Error('buildRegisterModelUrl: shop is required')
+  }
+  return `/api/register-model?url=${encodeURIComponent(modelUrl)}&shop=${encodeURIComponent(shop)}`
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `npm test -- test/tryon/registerModelUrl.test.js`
+Expected: PASS, 2 tests.
+
+- [ ] **Step 5: Wire it into main.js**
+
+Add the import alongside the other `src/tryon` imports at the top of `main.js`:
+
+```js
+import { buildRegisterModelUrl } from './src/tryon/registerModelUrl.js'
+```
+
+(Match the exact relative path style used by the neighbouring imports in that
+file — check them before writing.)
+
+Replace line 79:
+
+```js
+    const response = await fetch(buildRegisterModelUrl(modelUrl, shop))
+```
+
+- [ ] **Step 6: Verify the engine still builds and the suite passes**
+
+```bash
+npm test
+npm run build:engine
+```
+
+Expected: all engine tests pass, build clean.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/tryon/registerModelUrl.js test/tryon/registerModelUrl.test.js main.js
+git commit -m "fix(engine): forward shop to register-model
+
+The app now requires shop so block-registered models are attributable
+and erasable by shop/redact. The theme block already supplies it and
+main.js already parses it -- it just was not being sent."
+```
+
+---
+
 ### Task 8: Deploy and verify against the live app
+
+**Run this task LAST — after Tasks 9 and 10.**
 
 **This task cannot be satisfied by unit tests.** Tasks 1-7 stub S3, so the whole suite passes green whether or not the IAM policy grants `s3:DeleteObject`. CI-green and exit-criteria-met are independent conditions here, and the gap is easy to forget precisely because nothing fails. Only a live 200 from a real purge closes it.
 
@@ -1018,5 +1390,6 @@ Mapped from the spec. The phase is done when every box is checked:
 - [ ] Lifecycle subscriptions `app/uninstalled` and `app/scopes_update` restored (Task 6).
 - [ ] HMAC rejection demonstrated by test (Tasks 3, 4) **and** in production (Task 8 Step 6).
 - [ ] `shop/redact` provably erases all shop data in Postgres and S3 (Task 2 tests; Task 8 Step 7 live).
+- [ ] Block-registered models are attributed to the real shop and erased by `shop/redact` (Tasks 9, 10). Without this the redaction path is incomplete regardless of the tests above.
 - [ ] Public privacy policy URL discloses camera-data handling (Task 7; verified Task 8 Step 5).
 - [ ] `s3:DeleteObject` granted to `artryon-app` (Task 8 Step 1).
