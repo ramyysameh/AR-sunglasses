@@ -30,7 +30,7 @@ export default function Privacy() {
       <h2>What we store</h2>
       <p>We store only data belonging to the merchant operating the store:</p>
       <ul>
-        <li>The store's myshopify domain.</li>
+        <li>The store&rsquo;s myshopify domain.</li>
         <li>
           Authentication credentials and the name and email of the staff member
           who installed the app, supplied by Shopify during installation.
