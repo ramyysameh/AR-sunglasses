@@ -5,9 +5,13 @@ import { mapProductToModel, listMappings } from '../app/models.server.js'
 const shop = 'map-test.myshopify.com'
 const productId = 'gid://shopify/Product/123'
 
+const otherShop = `map-test-other-${Date.now()}-${Math.floor(Math.random() * 1e6)}.myshopify.com`
+
 afterAll(async () => {
   await prisma.productMapping.deleteMany({ where: { shop } })
   await prisma.modelAsset.deleteMany({ where: { shop } })
+  await prisma.productMapping.deleteMany({ where: { shop: otherShop } })
+  await prisma.modelAsset.deleteMany({ where: { shop: otherShop } })
 })
 
 describe('mapProductToModel + listMappings', () => {
@@ -31,5 +35,18 @@ describe('mapProductToModel + listMappings', () => {
     maps = await listMappings(prisma, shop)
     expect(maps).toHaveLength(1)
     expect(maps[0].modelAssetId).toBe(asset2.id)
+  })
+
+  it('rejects mapping a product to another shop\'s asset (cross-tenant guard)', async () => {
+    const foreignAsset = await prisma.modelAsset.create({
+      data: { shop: otherShop, storageRef: 'foreign-r1', fitMetadata: { version: 'eyewear-v1' }, confidence: null },
+    })
+
+    await expect(
+      mapProductToModel(prisma, shop, productId, foreignAsset.id),
+    ).rejects.toThrow('model asset does not belong to this shop')
+
+    const maps = await prisma.productMapping.findMany({ where: { shop, modelAssetId: foreignAsset.id } })
+    expect(maps).toHaveLength(0)
   })
 })

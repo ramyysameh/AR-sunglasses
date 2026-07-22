@@ -31,6 +31,14 @@ export async function saveCalibratedModel(prisma, shop, glbBytes) {
 // Task 9: map a product to a calibrated model. Upsert on (shop, productId) so
 // re-mapping a product replaces its model instead of creating a duplicate.
 export async function mapProductToModel(prisma, shop, productId, modelAssetId) {
+  // The asset must belong to this shop. Without this, a client-supplied
+  // modelAssetId can create a cross-shop mapping -- and because the FK is
+  // ON DELETE RESTRICT, that mapping makes the owning shop's redaction throw
+  // on every retry, permanently blocking erasure.
+  const owned = await prisma.modelAsset.findFirst({ where: { id: modelAssetId, shop } })
+  if (!owned) {
+    throw new Error('model asset does not belong to this shop')
+  }
   return prisma.productMapping.upsert({
     where: { shop_productId: { shop, productId } },
     update: { modelAssetId },
