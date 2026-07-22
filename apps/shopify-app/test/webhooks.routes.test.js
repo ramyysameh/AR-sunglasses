@@ -65,3 +65,33 @@ describe('shop/redact route', () => {
     await expect(shopRedact.action({ request: request() })).rejects.toThrow('denied')
   })
 })
+
+describe('customers compliance routes', () => {
+  it.each([
+    ['webhooks.customers.data_request.jsx', 'CUSTOMERS_DATA_REQUEST'],
+    ['webhooks.customers.redact.jsx', 'CUSTOMERS_REDACT'],
+  ])('%s acknowledges with 200 and purges nothing', async (file, topic) => {
+    hoisted.webhookResult = { shop: 'acme.myshopify.com', topic, payload: {} }
+    const mod = await import(`../app/routes/${file}`)
+
+    const response = await mod.action({
+      request: new Request('https://app.test/webhooks', { method: 'POST' }),
+    })
+
+    expect(response.status).toBe(200)
+    // The app stores no shopper data, so these must never touch shop data.
+    expect(hoisted.purgeCalls).toEqual([])
+  })
+
+  it.each([
+    'webhooks.customers.data_request.jsx',
+    'webhooks.customers.redact.jsx',
+  ])('%s rejects an unverified request', async (file) => {
+    hoisted.webhookError = new Response('Unauthorized', { status: 401 })
+    const mod = await import(`../app/routes/${file}`)
+
+    await expect(
+      mod.action({ request: new Request('https://app.test/webhooks', { method: 'POST' }) }),
+    ).rejects.toBeInstanceOf(Response)
+  })
+})
