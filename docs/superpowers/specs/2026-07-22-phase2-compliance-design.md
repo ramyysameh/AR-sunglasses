@@ -49,9 +49,49 @@ Investigation during design surfaced three facts that shaped the result:
 | D4 | Privacy policy served from the app at `/privacy` | Stable URL, no external hosting, immediately available for the Phase 6 listing |
 | D5 | S3 deletion happens **before** any DB deletion | See "Failure semantics" — this is the load-bearing decision |
 | D6 | TOML `api_version` aligned **down** to `2025-10` | Matches the code's pin exactly; bumping to `2026-07` changes payload shapes and does not belong in a compliance phase |
+| D7 | `purgeShopData` hard-guards its `shop` argument and throws on anything falsy or non-string | Prevents a whole-table, all-tenant wipe via Prisma's undefined-filter semantics — see "The undefined-shop guard" |
 
 D2 deliberately contradicts the roadmap's item 4 note ("verify `app/uninstalled`
 actually purges shop data"). Approved on 2026-07-22.
+
+### The undefined-shop guard
+
+`purgeShopData` is designed for reuse beyond the webhook route (support tooling,
+manual redaction). Every such caller sits outside the HMAC-verified path that
+guarantees `shop` is a real string, and that reusability is exactly what opens
+the hole.
+
+Prisma drops `undefined` filter values rather than matching nothing, so
+`deleteMany({ where: { shop: undefined } })` degrades to `deleteMany({})` —
+deleting **every row for every tenant**. This is the same cross-tenant
+destruction that test #2 guards against, but reachable through an ordinary bug
+rather than a bad WHERE clause.
+
+Verified empirically against Neon on Prisma 6.19.3 (probe rows, unique shop
+domains, cleaned up after):
+
+```
+total rows                    : 3
+count(where shop: undefined)  : 3   <-- filter dropped, matches EVERY row
+count(where shop: "")         : 0   <-- empty string is a REAL filter
+count(where shop: shopA)      : 2
+```
+
+`purgeShopData` therefore begins with:
+
+```js
+if (!shop || typeof shop !== 'string') {
+  throw new TypeError(`purgeShopData: refusing to purge with invalid shop: ${shop}`)
+}
+```
+
+The guard runs before any client call, so a bad argument cannot reach Prisma or
+S3.
+
+**Note the asymmetry, because it dictates how this is tested:** `''` is a real
+filter matching zero rows, so an empty-string call is merely wrong and harmless.
+Only `undefined` is catastrophic. A test asserting `purgeShopData('')` deletes
+nothing passes against unguarded code and proves nothing. See testing #6.
 
 ## Architecture
 
@@ -102,12 +142,27 @@ or leaked — but the phase is not complete until the policy is updated.
 
 ### `customers/data_request`, `customers/redact` — no-op with 200
 
-The app stores **no shopper personal data**. MediaPipe face tracking runs
-entirely client-side; the camera feed never leaves the device and no frame is
-ever transmitted. Persisted data is limited to: shop domain, merchant *staff*
-identity from the OAuth session (`Session.email`/`firstName`/`lastName`),
-merchant-uploaded GLB assets, and product↔model mappings. None of it belongs to
-a shopper.
+The app stores **no shopper personal data** — verified against the schema, not
+assumed. The client-side-MediaPipe argument covers camera data only; the no-op
+handlers are compliant *only* if no shopper-keyed row exists anywhere, including
+try-on event logs, analytics, or anonymous-visitor counters. An anonymized
+per-visitor try-on tally would make a bare 200 non-compliant, and Shopify's
+automated check would not catch it — a later audit would.
+
+Verification performed 2026-07-22, re-runnable:
+
+```
+grep -E "^model " prisma/schema.prisma        -> Session, ModelAsset, ProductMapping
+grep -rhE "CREATE TABLE" prisma/migrations/   -> same three, migrations agree
+grep -rniE "customer|visitor|shopper|analytic|event|usage" prisma/  -> no matches
+```
+
+Persisted data is limited to: shop domain, merchant *staff* identity from the
+OAuth session (`Session.email`/`firstName`/`lastName`), merchant-uploaded GLB
+assets, and product↔model mappings. None of it belongs to a shopper.
+
+**This verification must be re-run if any table is added before submission.**
+Adding shopper-keyed storage later silently invalidates the no-op handlers.
 
 There is therefore nothing to return for a data request and nothing to erase for
 a redaction. Both handlers verify HMAC, log `topic + shop + timestamp`, return
@@ -185,6 +240,20 @@ Assertions:
 4. Storage-failure abort — when `deleteModelGlb` throws, no DB row is deleted.
 5. Every `storageRef` for the shop is passed to deletion, and none belonging to
    another shop.
+6. **Invalid-shop guard (D7)** — `purgeShopData(undefined)` throws and deletes
+   zero rows. `null`, `''`, and non-string arguments likewise throw.
+
+**Every assertion above must be written to be non-vacuous.** Each of these is a
+"nothing was deleted" claim, and against an empty table that is trivially true
+whether or not the code is correct — a guard test on an empty table proves
+nothing. So tests 2, 4, 5 and 6 must each seed rows belonging to a *second*
+shop and assert that count is unchanged after the call. Concretely for #6: seed
+shop B, call `purgeShopData(undefined)`, assert it threw **and** that shop B's
+row count is exactly what it was.
+
+This is not hypothetical fussiness. The first attempt at verifying D7 during
+design ran against an empty table and reported a passing-looking `0 === 0` that
+proved nothing; the real behavior only appeared once fixture rows existed.
 
 Plus the HMAC 401/200 matrix across all five routes.
 
