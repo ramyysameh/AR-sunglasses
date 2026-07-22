@@ -22,7 +22,13 @@ vi.mock('@aws-sdk/client-s3', () => {
       this.type = 'Get'
     }
   }
-  return { S3Client: FakeClient, PutObjectCommand, GetObjectCommand }
+  class DeleteObjectCommand {
+    constructor(input) {
+      this.input = input
+      this.type = 'Delete'
+    }
+  }
+  return { S3Client: FakeClient, PutObjectCommand, GetObjectCommand, DeleteObjectCommand }
 })
 
 process.env.AWS_REGION = 'eu-west-3'
@@ -30,7 +36,7 @@ process.env.AWS_ACCESS_KEY_ID = 'key'
 process.env.AWS_SECRET_ACCESS_KEY = 'secret'
 process.env.S3_BUCKET = 'models-bucket'
 
-const { saveModelGlb, readModelGlb } = await import('../app/storage.server.js')
+const { saveModelGlb, readModelGlb, deleteModelGlb } = await import('../app/storage.server.js')
 
 beforeEach(() => {
   hoisted.sent = []
@@ -92,5 +98,33 @@ describe('readModelGlb', () => {
       $metadata: { httpStatusCode: 403 },
     })
     await expect(readModelGlb('x.glb')).rejects.toThrow('denied')
+  })
+})
+
+describe('deleteModelGlb', () => {
+  it('deletes the object from the configured bucket', async () => {
+    await deleteModelGlb('abc-123.glb')
+
+    expect(hoisted.sent).toHaveLength(1)
+    const cmd = hoisted.sent[0]
+    expect(cmd.type).toBe('Delete')
+    expect(cmd.input.Bucket).toBe('models-bucket')
+    expect(cmd.input.Key).toBe('abc-123.glb')
+  })
+
+  it('treats an already-absent object as success so redact retries are idempotent', async () => {
+    hoisted.nextError = Object.assign(new Error('missing'), { name: 'NoSuchKey' })
+    await expect(deleteModelGlb('gone.glb')).resolves.toBeUndefined()
+  })
+
+  it('rethrows real failures so a purge aborts before touching the database', async () => {
+    // AccessDenied is the expected error until s3:DeleteObject is granted.
+    // It MUST propagate: swallowing it would let the DB purge proceed and
+    // orphan the GLBs whose only index is the rows about to be deleted.
+    hoisted.nextError = Object.assign(new Error('denied'), {
+      name: 'AccessDenied',
+      $metadata: { httpStatusCode: 403 },
+    })
+    await expect(deleteModelGlb('x.glb')).rejects.toThrow('denied')
   })
 })

@@ -1,4 +1,9 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3'
 
 /**
  * Object storage for calibrated GLBs.
@@ -66,5 +71,30 @@ export async function readModelGlb(storageRef) {
       return null
     }
     throw error
+  }
+}
+
+/**
+ * Deletes one stored GLB. Used by the shop/redact purge.
+ *
+ * An absent object resolves successfully: S3 delete is idempotent by design and
+ * a redact webhook can be delivered more than once.
+ *
+ * Every other failure rethrows. This is load-bearing — `purgeShopData` deletes
+ * objects before database rows precisely so that a storage failure aborts the
+ * purge with the rows still intact, leaving the retry able to recompute the
+ * same object list. Swallowing an error here would defeat that.
+ */
+export async function deleteModelGlb(storageRef) {
+  try {
+    await getClient().send(
+      new DeleteObjectCommand({ Bucket: process.env.S3_BUCKET, Key: storageRef }),
+    )
+  } catch (error) {
+    const missing =
+      error?.name === 'NoSuchKey' || error?.$metadata?.httpStatusCode === 404
+    if (!missing) {
+      throw error
+    }
   }
 }
