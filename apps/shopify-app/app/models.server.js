@@ -47,11 +47,26 @@ export async function listMappings(prisma, shop) {
 }
 
 // Block-level GLB: calibrate a merchant-hosted GLB once and cache it, keyed by
-// its source URL so the same URL is shared across shops. Public route entry.
-const BLOCK_SHOP = '__block__'
+// (shop, sourceUrl).
+//
+// Previously keyed by sourceUrl alone under a synthetic '__block__' shop, which
+// shared one calibrated asset across every shop. That made the row invisible to
+// purgeShopData: a merchant's block models survived shop/redact permanently,
+// even though sourceUrl embeds their CDN store ID. Attribution is per-shop so
+// redaction can find them. The cost is that two shops pasting the same URL each
+// get their own calibration, which is correct and effectively never happens —
+// Shopify CDN URLs embed the store id.
+export async function registerModelByUrl(prisma, url, shop) {
+  // An unattributed row can never be erased by shop/redact, so refuse to create
+  // one. NOTE: this route is public and unauthenticated, so `shop` is caller-
+  // supplied and this check is a data-integrity guard, NOT a security boundary
+  // — it does not prove the caller owns the shop. Authenticating this endpoint
+  // is Phase 3 (register-model hardening).
+  if (!shop || typeof shop !== 'string' || !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shop)) {
+    throw new TypeError(`registerModelByUrl: invalid shop: ${String(shop)}`)
+  }
 
-export async function registerModelByUrl(prisma, url) {
-  const existing = await prisma.modelAsset.findFirst({ where: { sourceUrl: url } })
+  const existing = await prisma.modelAsset.findFirst({ where: { shop, sourceUrl: url } })
   if (existing) {
     return { modelUrl: `/models/${existing.id}.glb`, fitMetadata: existing.fitMetadata }
   }
@@ -68,7 +83,7 @@ export async function registerModelByUrl(prisma, url) {
 
   const asset = await prisma.modelAsset.create({
     data: {
-      shop: BLOCK_SHOP,
+      shop,
       sourceUrl: url,
       storageRef,
       fitMetadata: result.fitMetadata,

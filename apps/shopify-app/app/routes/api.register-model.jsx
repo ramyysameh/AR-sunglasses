@@ -13,11 +13,18 @@ const CORS = {
 export const loader = async ({ request }) => {
   const url = new URL(request.url)
   const modelUrl = url.searchParams.get('url')
+  const shop = url.searchParams.get('shop')
   if (!modelUrl || !/^https:\/\//i.test(modelUrl)) {
     return Response.json({ error: 'a valid https url is required' }, { status: 400, headers: CORS })
   }
+  // Required so the resulting ModelAsset is attributable and therefore
+  // erasable by shop/redact. The engine always has this — the theme block
+  // passes shop.permanent_domain into the iframe URL.
+  if (!shop) {
+    return Response.json({ error: 'shop is required' }, { status: 400, headers: CORS })
+  }
   try {
-    const cfg = await registerModelByUrl(db, modelUrl)
+    const cfg = await registerModelByUrl(db, modelUrl, shop)
     return Response.json(cfg, { headers: CORS })
   } catch (err) {
     const message = err?.message ?? 'registration failed'

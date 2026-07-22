@@ -40,13 +40,19 @@ model Session {
 model ModelAsset {
   id          String   @id @default(uuid())
   shop        String
-  sourceUrl   String?  @unique
+  sourceUrl   String?
   storageRef  String
   fitMetadata Json
   confidence  Float?
   status      String   @default("ready")
   createdAt   DateTime @default(now())
   mappings    ProductMapping[]
+
+  // Was @unique on sourceUrl alone, which shared one calibrated asset across
+  // every shop. Attribution is now per-shop so shop/redact can erase a
+  // merchant's block models, which means the same URL may legitimately exist
+  // once per shop.
+  @@unique([shop, sourceUrl])
 }
 
 model ProductMapping {

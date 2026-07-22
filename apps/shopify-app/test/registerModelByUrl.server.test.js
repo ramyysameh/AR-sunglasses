@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { NodeIO } from '@gltf-transform/core'
 import { KHRONOS_EXTENSIONS } from '@gltf-transform/extensions'
 import { buildDoc } from '@artryon/calibration/test/helpers/buildDoc.js'
@@ -12,12 +12,16 @@ vi.mock('../app/storage.server.js', () => ({
     storage.objects.set(ref, Buffer.from(bytes))
   },
   readModelGlb: async (ref) => storage.objects.get(ref) ?? null,
+  deleteModelGlb: async (ref) => {
+    storage.objects.delete(ref)
+  },
 }))
 
 const { registerModelByUrl } = await import('../app/models.server.js')
 
 const URL_A = 'https://cdn.shopify.com/s/files/1/0001/registerModelByUrl-a.glb'
 const URL_B = 'https://cdn.shopify.com/s/files/1/0001/registerModelByUrl-b.glb'
+const SHOP = 'block-attr-test.myshopify.com'
 
 const GOOD = [
   -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.024, 0.02,
@@ -43,6 +47,7 @@ afterAll(async () => {
   vi.unstubAllGlobals()
   storage.objects.clear()
   await prisma.modelAsset.deleteMany({ where: { sourceUrl: { in: [URL_A, URL_B] } } })
+  await prisma.modelAsset.deleteMany({ where: { shop: SHOP } })
 })
 
 describe('registerModelByUrl', () => {
@@ -50,7 +55,7 @@ describe('registerModelByUrl', () => {
     const bytes = await taggedGlbBytes()
     const fetchSpy = stubFetchReturning(bytes)
 
-    const res = await registerModelByUrl(prisma, URL_A)
+    const res = await registerModelByUrl(prisma, URL_A, SHOP)
 
     expect(res.modelUrl).toMatch(/^\/models\/.+\.glb$/)
     expect(res.fitMetadata.version).toBe('eyewear-v1')
@@ -58,7 +63,7 @@ describe('registerModelByUrl', () => {
 
     const asset = await prisma.modelAsset.findFirst({ where: { sourceUrl: URL_A } })
     expect(asset).not.toBeNull()
-    expect(asset.shop).toBe('__block__')
+    expect(asset.shop).toBe(SHOP)
     const stored = storage.objects.get(asset.storageRef)
     expect(stored).toBeDefined()
     expect(stored.length).toBeGreaterThan(0)
@@ -68,12 +73,43 @@ describe('registerModelByUrl', () => {
     const bytes = await taggedGlbBytes()
     const fetchSpy = stubFetchReturning(bytes)
 
-    const first = await registerModelByUrl(prisma, URL_B)
-    const second = await registerModelByUrl(prisma, URL_B)
+    const first = await registerModelByUrl(prisma, URL_B, SHOP)
+    const second = await registerModelByUrl(prisma, URL_B, SHOP)
 
     expect(second.modelUrl).toBe(first.modelUrl)
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     const count = await prisma.modelAsset.count({ where: { sourceUrl: URL_B } })
     expect(count).toBe(1)
+  })
+})
+
+describe('registerModelByUrl shop attribution', () => {
+  // The suite above already left a (SHOP, URL_A) row behind (afterAll cleans up
+  // once, at file end). These tests assert exact counts for SHOP/URL_A, so they
+  // need a clean slate rather than inheriting that state.
+  beforeAll(async () => {
+    await prisma.modelAsset.deleteMany({ where: { shop: SHOP } })
+  })
+
+  it('refuses to register without a valid shop, so no unattributable row is created', async () => {
+    // An unattributed row can never be erased by shop/redact. Rejecting is the
+    // only safe outcome.
+    for (const bad of [undefined, null, '', 'not-a-shop', 123]) {
+      await expect(registerModelByUrl(prisma, URL_A, bad)).rejects.toThrow(TypeError)
+    }
+    expect(await prisma.modelAsset.count({ where: { sourceUrl: URL_A } })).toBe(0)
+  })
+
+  it('purgeShopData erases a block-registered model', async () => {
+    const bytes = await taggedGlbBytes()
+    stubFetchReturning(bytes)
+    await registerModelByUrl(prisma, URL_A, SHOP)
+    expect(await prisma.modelAsset.count({ where: { shop: SHOP } })).toBe(1)
+
+    const { purgeShopData } = await import('../app/webhooks.server.js')
+    await purgeShopData(prisma, SHOP)
+
+    // The whole point of this task.
+    expect(await prisma.modelAsset.count({ where: { shop: SHOP } })).toBe(0)
   })
 })

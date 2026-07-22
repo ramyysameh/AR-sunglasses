@@ -14,4 +14,12 @@ describe('GET /api/register-model — validation', () => {
     const res = await call('https://app.test/api/register-model?url=http%3A%2F%2Fx%2Fm.glb')
     expect(res.status).toBe(400)
   })
+
+  it('rejects a request with no shop so no unattributable asset is created', async () => {
+    const response = await loader({
+      request: new Request('https://app.test/api/register-model?url=https%3A%2F%2Fcdn.shopify.com%2Fa.glb'),
+    })
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toMatch(/shop is required/)
+  })
 })
