@@ -1307,10 +1307,43 @@ const Bucket = process.env.S3_BUCKET, Key = 'iam-probe.txt';
 
 Expected: `s3:DeleteObject GRANTED`. If it prints `FAILED: AccessDenied`, the policy is not live yet — stop here.
 
+- [ ] **Step 1b: Check production for orphaned `__block__` rows — BEFORE migrating**
+
+Added from the final whole-branch review. Task 9 fixed the *code* so new models
+carry a real shop, and its migration is index-only — it does **not** remediate
+rows already sitting under `shop = '__block__'`. Any such row stays permanently
+invisible to `purgeShopData`, so `shop/redact` would report success while
+merchant-identifiable data survives.
+
+The dev database has zero rows, but **production is a different database** and
+the app has been live since Phase 1. Check it before `migrate deploy`:
+
+```bash
+cd apps/shopify-app && DATABASE_URL="<PRODUCTION_URL>" node -e "
+require('dotenv').config();
+const { PrismaClient } = require('@prisma/client');
+const p = new PrismaClient();
+p.modelAsset.findMany({ where: { shop: '__block__' }, select: { id:true, sourceUrl:true, storageRef:true } })
+ .then(r => { console.log('__block__ rows:', r.length); console.log(JSON.stringify(r,null,2)); return p.\$disconnect() })
+ .catch(e => { console.error(e.message); process.exit(1) });
+"
+```
+
+Expected: `__block__ rows: 0`.
+
+If non-zero, those rows are un-attributable and therefore un-erasable. Deleting
+them and their S3 objects is the only compliant outcome — do that before
+migrating, and record what was deleted.
+
 - [ ] **Step 2: Run the full suite**
 
 Run: `npm test`
 Expected: PASS, all suites.
+
+**Known flake:** `test/webhooks.server.test.js` fails intermittently (~1 run in
+18 measured after the `testTimeout` fix). If it fails, re-run and check whether
+the failure is in that file. Do not treat a single red run as a release blocker
+without reading the failure — but do not dismiss a failure elsewhere either.
 
 - [ ] **Step 3: Deploy**
 
