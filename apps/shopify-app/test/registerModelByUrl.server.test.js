@@ -46,7 +46,8 @@ function stubFetchReturning(bytes) {
 afterAll(async () => {
   vi.unstubAllGlobals()
   storage.objects.clear()
-  await prisma.modelAsset.deleteMany({ where: { sourceUrl: { in: [URL_A, URL_B] } } })
+  // Scoped to this file's fixture shop only: this runs against a live shared
+  // database, so a filter that could match rows we did not create is unsafe.
   await prisma.modelAsset.deleteMany({ where: { shop: SHOP } })
 })
 
