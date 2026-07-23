@@ -222,6 +222,30 @@ describe('registerModelByUrl security gates', () => {
     // above cannot leak rows into the shared database.
   })
 
+  it('rejects a disallowed url BEFORE the dedupe and quota queries', async () => {
+    // The design puts url validation ahead of any further database work. Two
+    // reasons: a junk url from an unauthenticated caller should cost one query
+    // rather than three, and a stored row whose sourceUrl is not allowlisted
+    // must not be resolvable just because it predates the rule -- if dedupe ran
+    // first it would return that row and the allowlist would be advisory.
+    //
+    // Asserting the queries never ran is the point; a bare rejects.toThrow()
+    // passes whether validation happens first or last.
+    const modelAssetFindFirst = vi.fn()
+    const count = vi.fn()
+    const spyPrisma = {
+      session: { findFirst: vi.fn(async () => ({ id: 'sess' })) },
+      modelAsset: { findFirst: modelAssetFindFirst, count, create: vi.fn() },
+    }
+
+    await expect(
+      registerModelByUrl(spyPrisma, 'https://evil.example.com/a.glb', 'ok.myshopify.com'),
+    ).rejects.toMatchObject({ code: 'URL_NOT_ALLOWED' })
+
+    expect(modelAssetFindFirst).not.toHaveBeenCalled()
+    expect(count).not.toHaveBeenCalled()
+  })
+
   it('refuses a url that is not on the allowlisted CDN', async () => {
     // Its own installed shop, deliberately. SHOP cannot be reused here: the
     // purge test above calls purgeShopData(SHOP), which deletes SHOP's Session

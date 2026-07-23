@@ -1,6 +1,6 @@
 import { calibrateUpload } from './calibration.server.js'
 import { saveModelGlb } from './storage.server.js'
-import { fetchRemoteGlb } from './remoteGlb.server.js'
+import { fetchRemoteGlb, assertAllowedGlbUrl } from './remoteGlb.server.js'
 import { tagged } from './errors.server.js'
 
 // Task 5 core pipeline (HTTP-free, so it's testable without the admin UI):
@@ -93,6 +93,15 @@ export async function registerModelByUrl(prisma, url, shop) {
   if (!installed) {
     throw tagged('SHOP_NOT_INSTALLED', `shop has no installed session: ${shop}`)
   }
+
+  // Validate the URL BEFORE any further database work, not merely inside
+  // fetchRemoteGlb further down. Two reasons, both from the design:
+  //   1. An unauthenticated caller with a junk url should cost one session
+  //      lookup, not three queries.
+  //   2. A stored asset whose sourceUrl is not on the allowlist must NOT be
+  //      resolvable just because it predates the rule. If dedupe ran first it
+  //      would happily return that row and the allowlist would be advisory.
+  assertAllowedGlbUrl(url)
 
   const existing = await prisma.modelAsset.findFirst({ where: { shop, sourceUrl: url } })
   if (existing) {
