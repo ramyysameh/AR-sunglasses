@@ -96,8 +96,21 @@ export async function fetchRemoteGlb(url, { timeoutMs = FETCH_TIMEOUT_MS, maxByt
   // or simply lie, and trusting it is how size caps get bypassed.
   const declared = Number(response.headers.get('content-length'))
   if (Number.isFinite(declared) && declared > maxBytes) {
-    await response.body?.cancel()
+    // Swallow a failing cancel: we are already throwing TOO_LARGE, and letting
+    // a cancel rejection replace it would escape UNTAGGED and become a 500.
+    try {
+      await response.body?.cancel()
+    } catch {
+      // nothing to salvage -- the caller gets TOO_LARGE either way
+    }
     throw tagged('TOO_LARGE', `declared size ${declared} exceeds ${maxBytes}`)
+  }
+
+  // A bodyless response would make getReader() throw a bare TypeError, which
+  // escapes with no `code` and is mapped to 500 instead of the intended 422.
+  // Verified: `new Response(null, { status: 200 })` reaches exactly that path.
+  if (!response.body) {
+    throw tagged('FETCH_FAILED', 'upstream returned no body')
   }
 
   const reader = response.body.getReader()

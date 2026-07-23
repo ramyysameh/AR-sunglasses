@@ -115,11 +115,17 @@ describe('fetchRemoteGlb', () => {
     // called response.body.cancel() from an abort listener, but the
     // implementation has already locked the body via getReader(), so cancel()
     // threw, was swallowed, and the test hung until the runner killed it.
+    // Captured and asserted AFTER the call, deliberately. An assertion placed
+    // inside the stub is useless here: it throws, the implementation's own
+    // catch tags it FETCH_FAILED, and the outer expectation passes anyway --
+    // the code under test swallows the failure. Verified that mistake first.
+    let seenSignal
     vi.stubGlobal('fetch', vi.fn(async (_u, init) => {
+      seenSignal = init?.signal
       const stream = new ReadableStream({
         async pull(controller) {
           await new Promise((r) => setTimeout(r, 20))
-          if (init.signal.aborted) {
+          if (seenSignal?.aborted) {
             controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }))
             return
           }
@@ -132,6 +138,19 @@ describe('fetchRemoteGlb', () => {
     await expect(
       fetchRemoteGlb(OK_URL, { timeoutMs: 120, maxBytes: 1024 * 1024 }),
     ).rejects.toMatchObject({ code: 'FETCH_FAILED' })
+
+    // These are what make the test about a TIMEOUT rather than about any
+    // stream error. Mutation-verified: deleting the signal fails them.
+    expect(seenSignal).toBeInstanceOf(AbortSignal)
+    expect(seenSignal.aborted).toBe(true)
+  })
+
+  it('tags a bodyless response instead of letting a TypeError escape untagged', async () => {
+    // getReader() on a null body throws a bare TypeError with no `code`, which
+    // the route maps to 500 rather than the intended 422.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 200 })))
+
+    await expect(fetchRemoteGlb(OK_URL)).rejects.toMatchObject({ code: 'FETCH_FAILED' })
   })
 
   it('rejects a non-OK upstream status', async () => {
