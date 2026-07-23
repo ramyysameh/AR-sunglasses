@@ -1,8 +1,11 @@
 import db from '../db.server'
 import { readModelGlb } from '../storage.server'
 
-// Public: stream the stored normalized GLB for an asset. Permissive CORS so the
-// cross-origin iframe engine can fetch it. assetId is an unguessable UUID.
+// Public: stream the stored normalized GLB for an asset. No CORS headers -- the
+// engine is served from this app and requests it relatively, so this is
+// same-origin. assetId is a genuinely unguessable UUID (ModelAsset.id is
+// @default(uuid())), unlike api.tryon-config, which is keyed by guessable
+// (shop, productId).
 export const loader = async ({ params }) => {
   const asset = await db.modelAsset.findUnique({ where: { id: params.assetId } })
   if (!asset) return new Response('not found', { status: 404 })
@@ -16,7 +19,6 @@ export const loader = async ({ params }) => {
   return new Response(bytes, {
     headers: {
       'Content-Type': 'model/gltf-binary',
-      'Access-Control-Allow-Origin': '*',
       'Cache-Control': 'public, max-age=3600',
     },
   })
