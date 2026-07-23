@@ -182,7 +182,11 @@ describe('fetchRemoteGlb', () => {
   })
 
   it('enforces the cap even when content-length under-reports the real size', async () => {
-    // Proves enforcement does not rely on the header, which can be absent or lie.
+    // Not hypothetical. The real CDN serves these files `content-encoding: br`,
+    // so content-length is the COMPRESSED size (2768571 for gripzpelmo.glb)
+    // while the decoded body is more than twice that (6064932). Any header-based
+    // cap is therefore measuring the wrong quantity, and a hostile server could
+    // declare a tiny length whose body decompresses to gigabytes.
     //
     // Three chunks, not two: the cap trips on the second, and a stream whose
     // last chunk has already been enqueued may have closed before cancel() is

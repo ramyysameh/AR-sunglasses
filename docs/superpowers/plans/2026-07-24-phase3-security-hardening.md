@@ -1035,11 +1035,18 @@ node --input-type=module -e "
 const { fetchRemoteGlb } = await import('./app/remoteGlb.server.js')
 const bytes = await fetchRemoteGlb('https://cdn.shopify.com/s/files/1/0868/5862/9313/files/gripzpelmo.glb?v=1783771184')
 console.log('fetched', bytes.byteLength, 'bytes')
-console.log(bytes.byteLength === 2768571 ? 'OK exact size match' : 'size differs - investigate')
+console.log(bytes.byteLength === 6064932 ? 'OK exact size match' : 'size differs - investigate')
 "
 ```
 
-Expected: `fetched 2768571 bytes` and `OK exact size match`. A failure here means the allowlist broke the legitimate path. (This is the one step that makes a real network call.)
+Expected: `fetched 6064932 bytes` and `OK exact size match`. A failure here means the allowlist broke the legitimate path. (This is the one step that makes a real network call.)
+
+**Corrected 2026-07-24.** This step originally expected `2768571`, which was
+wrong: that is the value of the `content-length` header, and the CDN serves
+these files `content-encoding: br`. `fetch` decompresses transparently, so the
+header is the COMPRESSED size and the decoded GLB is 6064932 bytes. The
+discrepancy is not a defect — it is the concrete justification for enforcing the
+size cap on decoded bytes while streaming rather than on the header.
 
 - [ ] **Step 3: Merge and deploy**
 

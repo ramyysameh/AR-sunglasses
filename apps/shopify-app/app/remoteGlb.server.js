@@ -94,6 +94,14 @@ export async function fetchRemoteGlb(url, { timeoutMs = FETCH_TIMEOUT_MS, maxByt
 
   // Fast path only. Never the enforcement mechanism: the header can be absent
   // or simply lie, and trusting it is how size caps get bypassed.
+  //
+  // It is also measuring a DIFFERENT QUANTITY than the loop below. Verified
+  // against the real CDN: gripzpelmo.glb is served `content-encoding: br` with
+  // `content-length: 2768571`, and decodes to 6064932 bytes. fetch decompresses
+  // transparently, so `declared` is the COMPRESSED size while the loop counts
+  // DECODED bytes. That gap is precisely why the loop has to exist -- a hostile
+  // server could declare a tiny length whose body decompresses to gigabytes,
+  // and only a decoded-byte count catches it.
   const declared = Number(response.headers.get('content-length'))
   if (Number.isFinite(declared) && declared > maxBytes) {
     // Swallow a failing cancel: we are already throwing TOO_LARGE, and letting
