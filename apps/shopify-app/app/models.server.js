@@ -1,5 +1,7 @@
 import { calibrateUpload } from './calibration.server.js'
 import { saveModelGlb } from './storage.server.js'
+import { fetchRemoteGlb } from './remoteGlb.server.js'
+import { tagged } from './errors.server.js'
 
 // Task 5 core pipeline (HTTP-free, so it's testable without the admin UI):
 // calibrate the uploaded GLB via A1, store the normalized bytes, and persist a
@@ -64,14 +66,32 @@ export async function listMappings(prisma, shop) {
 // redaction can find them. The cost is that two shops pasting the same URL each
 // get their own calibration, which is correct and effectively never happens —
 // Shopify CDN URLs embed the store id.
+// Bounds S3 and database growth from the public registration endpoint. Dedupe
+// by (shop, sourceUrl) already prevents re-calibrating the same file, so the
+// realistic abuse requires uploading many distinct GLBs to Shopify's CDN.
+export const MAX_MODELS_PER_SHOP = 50
+
 export async function registerModelByUrl(prisma, url, shop) {
-  // An unattributed row can never be erased by shop/redact, so refuse to create
-  // one. NOTE: this route is public and unauthenticated, so `shop` is caller-
-  // supplied and this check is a data-integrity guard, NOT a security boundary
-  // — it does not prove the caller owns the shop. Authenticating this endpoint
-  // is Phase 3 (register-model hardening).
+  // SECURITY-LOAD-BEARING, and it runs first for a reason.
+  //
+  // Beyond keeping rows attributable (so shop/redact can erase them), this
+  // guard is what makes the installed-shop check below sound. Prisma DROPS
+  // undefined filter values, so session.findFirst({ where: { shop: undefined } })
+  // returns the first session of ANY shop — a request with no shop would find
+  // "a" session and pass the gate. Never relax this or move it below the
+  // session lookup.
   if (!shop || typeof shop !== 'string' || !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(shop)) {
-    throw new TypeError(`registerModelByUrl: invalid shop: ${String(shop)}`)
+    throw tagged('SHOP_INVALID', `invalid shop: ${String(shop)}`)
+  }
+
+  // This endpoint is public and unauthenticated, so `shop` is caller-supplied.
+  // This check proves the named shop is an installed customer. It does NOT
+  // prove the caller IS that shop — shop A's storefront can still register a
+  // GLB under shop B's name. The allowlist and quota bound the residual abuse.
+  // Real authentication means App Proxy; see the spec's Out of scope.
+  const installed = await prisma.session.findFirst({ where: { shop }, select: { id: true } })
+  if (!installed) {
+    throw tagged('SHOP_NOT_INSTALLED', `shop has no installed session: ${shop}`)
   }
 
   const existing = await prisma.modelAsset.findFirst({ where: { shop, sourceUrl: url } })
@@ -79,11 +99,14 @@ export async function registerModelByUrl(prisma, url, shop) {
     return { modelUrl: `/models/${existing.id}.glb`, fitMetadata: existing.fitMetadata }
   }
 
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error(`fetch failed: ${response.status}`)
+  // After dedupe: a merchant at the limit must still resolve models they have
+  // already registered.
+  const owned = await prisma.modelAsset.count({ where: { shop } })
+  if (owned >= MAX_MODELS_PER_SHOP) {
+    throw tagged('QUOTA_EXCEEDED', `shop at model limit (${MAX_MODELS_PER_SHOP})`)
   }
-  const glbBytes = new Uint8Array(await response.arrayBuffer())
+
+  const glbBytes = await fetchRemoteGlb(url)
 
   const result = await calibrateUpload(glbBytes)
   const storageRef = `${globalThis.crypto.randomUUID()}.glb`

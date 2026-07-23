@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import { NodeIO } from '@gltf-transform/core'
 import { KHRONOS_EXTENSIONS } from '@gltf-transform/extensions'
 import { buildDoc } from '@artryon/calibration/test/helpers/buildDoc.js'
@@ -43,12 +44,44 @@ function stubFetchReturning(bytes) {
   return spy
 }
 
+// Every fixture shop this file creates, so afterAll can remove exactly those.
+//
+// This matters more than usual: the tests run against the LIVE SHARED database.
+// Cleaning up at the end of a test body does not run when that test fails, and
+// an earlier version of this file leaked rows under a `not-installed-*` shop
+// when a test failed mid-way. Deleting by prefix would be the easy fix and the
+// wrong one -- a prefix filter can match rows we did not create. Tracking exact
+// names cannot.
+const fixtureShops = []
+function trackShop(name) {
+  fixtureShops.push(name)
+  return name
+}
+
+async function installShop(name) {
+  trackShop(name)
+  await prisma.session.deleteMany({ where: { shop: name } })
+  await prisma.session.create({
+    data: { id: `sess-${name}`, shop: name, state: 'x', accessToken: 't' },
+  })
+  return name
+}
+
+// Registration now refuses a shop with no installed session, so the fixture
+// shop needs one.
+beforeAll(async () => {
+  await installShop(SHOP)
+})
+
 afterAll(async () => {
   vi.unstubAllGlobals()
   storage.objects.clear()
-  // Scoped to this file's fixture shop only: this runs against a live shared
-  // database, so a filter that could match rows we did not create is unsafe.
-  await prisma.modelAsset.deleteMany({ where: { shop: SHOP } })
+  // Exact names only, never a pattern -- see the note on fixtureShops.
+  for (const shop of fixtureShops) {
+    await prisma.productMapping.deleteMany({ where: { shop } })
+    await prisma.modelAsset.deleteMany({ where: { shop } })
+    await prisma.session.deleteMany({ where: { shop } })
+  }
 })
 
 describe('registerModelByUrl', () => {
@@ -94,9 +127,12 @@ describe('registerModelByUrl shop attribution', () => {
 
   it('refuses to register without a valid shop, so no unattributable row is created', async () => {
     // An unattributed row can never be erased by shop/redact. Rejecting is the
-    // only safe outcome.
+    // only safe outcome. The throw is now a tagged SHOP_INVALID rather than a
+    // bare TypeError, so the route can map it to 400 without matching on prose.
     for (const bad of [undefined, null, '', 'not-a-shop', 123]) {
-      await expect(registerModelByUrl(prisma, URL_A, bad)).rejects.toThrow(TypeError)
+      await expect(registerModelByUrl(prisma, URL_A, bad)).rejects.toMatchObject({
+        code: 'SHOP_INVALID',
+      })
     }
     expect(await prisma.modelAsset.count({ where: { sourceUrl: URL_A } })).toBe(0)
   })
@@ -112,5 +148,89 @@ describe('registerModelByUrl shop attribution', () => {
 
     // The whole point of this task.
     expect(await prisma.modelAsset.count({ where: { shop: SHOP } })).toBe(0)
+  })
+})
+
+describe('registerModelByUrl security gates', () => {
+  it('rejects a falsy shop BEFORE querying for a session', async () => {
+    // SECURITY-CRITICAL. Prisma drops undefined filters, so
+    // session.findFirst({ where: { shop: undefined } }) returns the FIRST
+    // SESSION OF ANY SHOP -- the installed-shop check would pass for a request
+    // with no shop at all. The shape guard is what prevents that, which makes
+    // it part of the security control, not input tidying.
+    //
+    // Asserting the query never ran is the point: a bare rejects.toThrow()
+    // would pass even if the throw came from somewhere after the query.
+    const findFirst = vi.fn()
+    const spyPrisma = {
+      session: { findFirst },
+      modelAsset: { findFirst: vi.fn(), count: vi.fn(), create: vi.fn() },
+    }
+
+    for (const bad of [undefined, null, '', 'not-a-shop', 123]) {
+      await expect(registerModelByUrl(spyPrisma, URL_A, bad)).rejects.toMatchObject({
+        code: 'SHOP_INVALID',
+      })
+    }
+    expect(findFirst).not.toHaveBeenCalled()
+  })
+
+  it('rejects a shop with no installed session', async () => {
+    // Tracked even though nothing should be created for it -- if the check
+    // regresses, the row this test would then create must still be cleaned up.
+    const stranger = trackShop(`not-installed-${randomUUID().slice(0, 8)}.myshopify.com`)
+    await expect(registerModelByUrl(prisma, URL_A, stranger)).rejects.toMatchObject({
+      code: 'SHOP_NOT_INSTALLED',
+    })
+    expect(await prisma.modelAsset.count({ where: { shop: stranger } })).toBe(0)
+  })
+
+  it('allows registration at the quota boundary and rejects past it', async () => {
+    // Both sides of the boundary. Testing only the rejecting side would pass
+    // against an off-by-one that locks merchants out one model early.
+    const { MAX_MODELS_PER_SHOP } = await import('../app/models.server.js')
+    const quotaShop = await installShop(`quota-${randomUUID().slice(0, 8)}.myshopify.com`)
+    const FIRST = 'https://cdn.shopify.com/quota-first.glb'
+    const SECOND = 'https://cdn.shopify.com/quota-second.glb'
+
+    // One short of the limit.
+    await prisma.modelAsset.createMany({
+      data: Array.from({ length: MAX_MODELS_PER_SHOP - 1 }, (_, i) => ({
+        shop: quotaShop,
+        storageRef: `quota-${i}.glb`,
+        fitMetadata: { version: 'eyewear-v1' },
+      })),
+    })
+
+    stubFetchReturning(await taggedGlbBytes())
+
+    // At MAX-1: succeeds, taking the shop to exactly MAX.
+    const ok = await registerModelByUrl(prisma, FIRST, quotaShop)
+    expect(ok.modelUrl).toMatch(/^\/models\/.+\.glb$/)
+    expect(await prisma.modelAsset.count({ where: { shop: quotaShop } })).toBe(MAX_MODELS_PER_SHOP)
+
+    // At MAX: rejects.
+    await expect(registerModelByUrl(prisma, SECOND, quotaShop)).rejects.toMatchObject({
+      code: 'QUOTA_EXCEEDED',
+    })
+
+    // Dedupe must still resolve for a shop at its limit, or a merchant who hits
+    // the cap loses access to models they already registered.
+    const resolved = await registerModelByUrl(prisma, FIRST, quotaShop)
+    expect(resolved.modelUrl).toBe(ok.modelUrl)
+    // No inline cleanup: afterAll removes every tracked shop, so a failure
+    // above cannot leak rows into the shared database.
+  })
+
+  it('refuses a url that is not on the allowlisted CDN', async () => {
+    // Its own installed shop, deliberately. SHOP cannot be reused here: the
+    // purge test above calls purgeShopData(SHOP), which deletes SHOP's Session
+    // row -- so this would fail with SHOP_NOT_INSTALLED before ever reaching
+    // the url check, and would pass for entirely the wrong reason if the url
+    // check were removed.
+    const urlShop = await installShop(`urlcheck-${randomUUID().slice(0, 8)}.myshopify.com`)
+    await expect(
+      registerModelByUrl(prisma, 'https://evil.example.com/a.glb', urlShop),
+    ).rejects.toMatchObject({ code: 'URL_NOT_ALLOWED' })
   })
 })
