@@ -5,6 +5,14 @@ import { tagged } from './errors.server.js'
 // chain can arrive at an internal address if nothing but this host is fetchable.
 const ALLOWED_HOST = 'cdn.shopify.com'
 
+// 25 MB clears the largest real asset in this repo (12.2 MB, an unoptimised
+// export) with headroom. The cap bounds the DOWNLOAD; calibrateUpload then
+// parses and re-exports, so peak memory is a multiple of this -- the number is
+// chosen to stay clear of Vercel's 1 GB function limit, not merely to be
+// generous.
+const MAX_GLB_BYTES = 25 * 1024 * 1024
+const FETCH_TIMEOUT_MS = 15_000
+
 /**
  * Validates a caller-supplied model URL and RETURNS THE PARSED URL.
  *
@@ -44,4 +52,79 @@ export function assertAllowedGlbUrl(url) {
   }
 
   return parsed
+}
+
+/**
+ * Fetches a GLB from an allowlisted host under strict size and time bounds.
+ *
+ * `redirect: 'error'` is load-bearing. The previous implementation called bare
+ * fetch(), which defaults to following redirects and does NOT re-apply the
+ * caller's protocol check to the redirect target -- so an attacker-controlled
+ * https url redirecting to an internal address was fetched by the server. With
+ * a single-host allowlist, any redirect leaves the allowlist by definition, so
+ * refusing outright is both safest and simplest. Verified that Shopify's CDN
+ * returns a direct 200, so this costs nothing.
+ *
+ * `opts` exists only so tests can run fast; production always uses the defaults
+ * and callers pass nothing.
+ *
+ * @returns {Promise<Uint8Array>}
+ */
+export async function fetchRemoteGlb(url, { timeoutMs = FETCH_TIMEOUT_MS, maxBytes = MAX_GLB_BYTES } = {}) {
+  const parsed = assertAllowedGlbUrl(url)
+
+  let response
+  try {
+    response = await fetch(parsed, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (error) {
+    // Everything fetch rejects with must be caught and tagged, or it bubbles
+    // uncoded and becomes a 500 instead of the intended 422. This covers the
+    // refused redirect (TypeError), the timeout (AbortError) and network
+    // failure (TypeError) alike -- all three are 422, so discriminating them
+    // would add version-fragile branching for no behavioural difference.
+    throw tagged('FETCH_FAILED', `fetch failed: ${error?.name ?? 'unknown'}`)
+  }
+
+  if (!response.ok) {
+    throw tagged('FETCH_FAILED', `upstream returned ${response.status}`)
+  }
+
+  // Fast path only. Never the enforcement mechanism: the header can be absent
+  // or simply lie, and trusting it is how size caps get bypassed.
+  const declared = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel()
+    throw tagged('TOO_LARGE', `declared size ${declared} exceeds ${maxBytes}`)
+  }
+
+  const reader = response.body.getReader()
+  const chunks = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel()
+        throw tagged('TOO_LARGE', `body exceeded ${maxBytes}`)
+      }
+      chunks.push(value)
+    }
+  } catch (error) {
+    if (error?.code === 'TOO_LARGE') throw error
+    // A timeout during streaming lands here, not in the fetch catch above.
+    throw tagged('FETCH_FAILED', `stream failed: ${error?.name ?? 'unknown'}`)
+  }
+
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return out
 }
