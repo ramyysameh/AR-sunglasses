@@ -8,7 +8,9 @@ vi.mock('../app/db.server.js', () => ({
   },
 }))
 vi.mock('../app/storage.server.js', () => ({
-  readModelGlb: async () => Buffer.from([1, 2, 3]),
+  // Uint8Array rather than Buffer: the ESLint config declares no node env, so
+  // Buffer trips no-undef. Response accepts either.
+  readModelGlb: async () => new Uint8Array([1, 2, 3]),
 }))
 
 const { loader } = await import('../app/routes/models.$assetId[.]glb.jsx')
