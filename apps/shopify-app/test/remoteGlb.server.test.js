@@ -19,11 +19,16 @@ describe('assertAllowedGlbUrl', () => {
     // reaching through a redirect. Generic "different host" coverage does not
     // make the threat legible to a future reader.
     ['the cloud metadata endpoint', 'https://169.254.169.254/latest/meta-data/'],
-    // Both of these pass a naive endsWith('cdn.shopify.com') check.
-    ['a lookalike prefix host', 'https://evil-cdn.shopify.com/a.glb'],
-    ['a lookalike suffix host', 'https://cdn.shopify.com.attacker.net/a.glb'],
-    // Parses with hostname evil.com but reads as allowlisted to a human.
-    ['embedded credentials', 'https://cdn.shopify.com@evil.com/a.glb'],
+    // These defeat DIFFERENT naive checks -- verified, not assumed:
+    //   'evil-cdn.shopify.com'.endsWith('cdn.shopify.com')       === true
+    //   'cdn.shopify.com.attacker.net'.startsWith('cdn.shopify.com') === true
+    // Only exact equality rejects both.
+    ['a lookalike host that defeats endsWith', 'https://evil-cdn.shopify.com/a.glb'],
+    ['a lookalike host that defeats startsWith', 'https://cdn.shopify.com.attacker.net/a.glb'],
+    // Reads as allowlisted to a human, but parses with hostname evil.com, so it
+    // is the HOSTNAME check that rejects this one -- not the credentials check.
+    // See the dedicated credentials test below for that branch.
+    ['a host-confusing credential form', 'https://cdn.shopify.com@evil.com/a.glb'],
     ['a non-default port', 'https://cdn.shopify.com:8443/a.glb'],
     ['a garbage string', 'not a url at all'],
     ['an empty string', ''],
@@ -36,7 +41,16 @@ describe('assertAllowedGlbUrl', () => {
     }
   })
 
-  it('is case-insensitive on the host', () => {
-    expect(assertAllowedGlbUrl('https://CDN.Shopify.COM/a.glb')).toBeInstanceOf(URL)
+  it('rejects credentials on the allowed host, isolating the credentials check', () => {
+    // The ONLY case that exercises the noCredentials branch. Verified this
+    // parses with hostname cdn.shopify.com and username 'user', so the host,
+    // protocol and port checks all pass -- delete noCredentials from the
+    // implementation and this is the test that fails.
+    expect(() => assertAllowedGlbUrl('https://user:pass@cdn.shopify.com/a.glb')).toThrow()
+    try {
+      assertAllowedGlbUrl('https://user:pass@cdn.shopify.com/a.glb')
+    } catch (e) {
+      expect(e.code).toBe('URL_NOT_ALLOWED')
+    }
   })
 })
