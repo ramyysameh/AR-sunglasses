@@ -2,7 +2,6 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { readdir, rm } from 'node:fs/promises'
 import { defineConfig } from 'vite'
-import basicSsl from '@vitejs/plugin-basic-ssl'
 import { glassesConfig, getGlassesModelUrl } from './src/config/arConfig.js'
 
 const rootDir = dirname(fileURLToPath(import.meta.url))
@@ -42,25 +41,41 @@ function pruneAuthoringModels() {
   }
 }
 
-export default defineConfig({
-  plugins: [basicSsl(), pruneAuthoringModels()],
-  server: {
-    // Expose on the LAN over HTTPS so a phone on the same WiFi can reach the
-    // camera (getUserMedia requires a secure context). Open https://<pc-ip>:5173.
-    host: true,
-  },
-  build: {
-    rollupOptions: {
-      input: {
-        main: 'index.html',
-        calibrate: 'harness/calibrate.html',
-      },
-      output: {
-        manualChunks: {
-          three: ['three'],
-          mediapipe: ['@mediapipe/tasks-vision'],
+export default defineConfig(async ({ command }) => {
+  const plugins = [pruneAuthoringModels()]
+
+  // basic-ssl serves the dev server over HTTPS so a phone can reach the camera
+  // (getUserMedia needs a secure context). It is a dev-ONLY dependency and
+  // Vercel's production install prunes it. Importing it at module top level made
+  // `vite build` fail on deploy with ERR_MODULE_NOT_FOUND -- which is why the
+  // try-on engine 404'd in production. Load it dynamically and only when
+  // serving, so the build path never imports it and a pruned prod install is
+  // harmless.
+  if (command === 'serve') {
+    const { default: basicSsl } = await import('@vitejs/plugin-basic-ssl')
+    plugins.unshift(basicSsl())
+  }
+
+  return {
+    plugins,
+    server: {
+      // Expose on the LAN over HTTPS so a phone on the same WiFi can reach the
+      // camera. Open https://<pc-ip>:5173.
+      host: true,
+    },
+    build: {
+      rollupOptions: {
+        input: {
+          main: 'index.html',
+          calibrate: 'harness/calibrate.html',
+        },
+        output: {
+          manualChunks: {
+            three: ['three'],
+            mediapipe: ['@mediapipe/tasks-vision'],
+          },
         },
       },
     },
-  },
+  }
 })
