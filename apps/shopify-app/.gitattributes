@@ -1,0 +1,6 @@
+# The committed try-on engine ships binary assets. Never apply line-ending or
+# text filters to them -- a single CRLF conversion corrupts a GLB or the Draco
+# WASM decoder and silently breaks the engine in production.
+public/tryon/models/*.glb binary
+public/tryon/draco/**/*.wasm binary
+public/tryon/**/*.glb binary

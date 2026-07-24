@@ -18,8 +18,7 @@
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
-    "test": "vitest run",
-    "prebuild": "npm run build:engine --prefix ../.."
+    "test": "vitest run"
   },
   "type": "module",
   "engines": {
