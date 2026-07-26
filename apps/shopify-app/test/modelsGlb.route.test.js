@@ -24,6 +24,14 @@ describe('GET /models/:assetId.glb', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
     expect(res.headers.get('Content-Type')).toBe('model/gltf-binary')
-    expect(res.headers.get('Cache-Control')).toBe('public, max-age=3600')
+    // immutable is safe here and ONLY here among model routes: assetId is a
+    // ModelAsset.id, @default(uuid()) and unguessable, and a re-upload gets a
+    // new id -- so this url's bytes can never change. s-maxage as well as
+    // max-age because Vercel's edge keys function-response caching off
+    // s-maxage; with max-age alone every cold browser would still run the
+    // loader, costing a findUnique plus a storage fetch.
+    expect(res.headers.get('Cache-Control')).toBe(
+      'public, max-age=31536000, s-maxage=31536000, immutable',
+    )
   })
 })

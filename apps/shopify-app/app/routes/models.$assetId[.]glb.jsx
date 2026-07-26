@@ -19,7 +19,13 @@ export const loader = async ({ params }) => {
   return new Response(bytes, {
     headers: {
       'Content-Type': 'model/gltf-binary',
-      'Cache-Control': 'public, max-age=3600',
+      // One year, immutable, and cached at the edge as well as in the browser.
+      // Safe because the url is content-addressed: assetId is ModelAsset.id,
+      // @default(uuid()), and a re-upload produces a new id rather than new
+      // bytes at the same url. s-maxage is what makes Vercel's edge cache the
+      // function response -- without it we would still hit the database and
+      // object storage for every cold browser.
+      'Cache-Control': 'public, max-age=31536000, s-maxage=31536000, immutable',
     },
   })
 }
