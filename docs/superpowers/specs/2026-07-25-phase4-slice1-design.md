@@ -158,38 +158,62 @@ session storage reports when the *connection* fails, not a real missing table.
 
 ### 6.1 Division of work
 
+These interleave rather than splitting cleanly into operator and code work — see
+the strict ordering in §6.2.
+
 **Operator steps (touch secrets — Claude does not enter DB URLs or credentials):**
 
-- Confirm `DATABASE_URL` points at Neon's **pooled** endpoint. On the direct
-  endpoint, `connection_limit=1` would over-throttle. Known from the prior
-  session: the host is `ep-solitary-breeze-as0s37zn-pooler...`, which is pooled —
-  confirm the final value.
-- Add `connection_limit=1&pgbouncer=true` to `DATABASE_URL` in Vercel.
+- ~~Confirm `DATABASE_URL` points at Neon's **pooled** endpoint.~~ **Confirmed
+  2026-07-26:** it is the pooled `-pooler` host. This mattered because on the
+  direct endpoint `connection_limit=1` would over-throttle.
+- Add a `DIRECT_URL` environment variable pointing at Neon's **direct**
+  (non-pooler) endpoint — the same string with `-pooler` removed from the host.
+  Set it in Vercel across Production, Preview and Development, and in local
+  `apps/shopify-app/.env`. *(Phase 1.)*
+- Append `connection_limit=1&pgbouncer=true` to `DATABASE_URL` in Vercel.
   `pgbouncer=true` makes Prisma disable prepared statements, required in
-  transaction-pooling mode.
-- Add a new `DIRECT_URL` environment variable in Vercel pointing at Neon's
-  **direct** (non-pooler) endpoint.
+  transaction-pooling mode. *(Phase 3 — after the schema change, not before.)*
 
 **Code step:**
 
 - Add `directUrl = env("DIRECT_URL")` to the `datasource db` block in
   `apps/shopify-app/prisma/schema.prisma`. It is currently absent — the datasource
-  is only `url = env("DATABASE_URL")`.
+  is only `url = env("DATABASE_URL")`. *(Phase 2.)*
 
-### 6.2 Sequencing hazard — can break a deploy
+### 6.2 Sequencing — three phases, and the plan must enforce the order
 
 The Vercel Build Command includes `prisma migrate deploy`, so migrations run on
-every git push. `directUrl` is therefore **required**, not optional: without it,
-`connection_limit=1` throttles migrations to a single pooled connection.
+every git push. This creates **two** independent ways to break a deploy, pulling
+in opposite directions:
 
-**Order matters and the plan must enforce it.** If the `directUrl` schema change
-merges *before* `DIRECT_URL` exists in Vercel, Prisma fails with
-`Environment variable not found: DIRECT_URL` and **the deploy fails outright**.
+- If the `directUrl` schema change merges *before* `DIRECT_URL` exists in Vercel,
+  Prisma fails with `Environment variable not found: DIRECT_URL` and the build
+  fails outright.
+- If `connection_limit=1&pgbouncer=true` lands on `DATABASE_URL` *before*
+  `directUrl` is in effect, migrations still run through PgBouncer — where they
+  can fail because migrations need **session-level advisory locks that
+  transaction-mode pooling cannot hold**, independently of the connection limit.
 
-> Operator sets `DIRECT_URL` in Vercel **first**. The schema change merges
-> **second**.
+So the three changes cannot be grouped into "operator work" and "code work". They
+form a strict three-phase sequence:
 
-This is the only step in the slice with a self-inflicted-outage failure mode.
+| Phase | Actor | Change | Why it is safe here |
+|---|---|---|---|
+| 1 | operator | Add `DIRECT_URL` to Vercel (all three environments) **and** to local `apps/shopify-app/.env` | Nothing reads it yet — zero risk |
+| 2 | code | Add `directUrl = env("DIRECT_URL")` to `schema.prisma`; merge and deploy | The variable now exists; migrations route to the direct endpoint |
+| 3 | operator | Append `connection_limit=1&pgbouncer=true` to `DATABASE_URL` | Migrations are already insulated by phase 2 |
+
+Two details that are easy to lose:
+
+- **Local `.env` needs `DIRECT_URL` too.** After phase 2, `schema.prisma`
+  references it, so local `prisma generate` / `migrate` / `npm run setup` fail
+  without it. `.env` is gitignored (`apps/shopify-app/.gitignore:40`); the
+  variable is documented in `.env.example`.
+- **Append `DATABASE_URL` parameters with `&`, not `?`.** Neon connection strings
+  already end in `?sslmode=require`.
+
+Phase 1 must cover Preview as well as Production, since preview deploys run the
+same build command and would otherwise start failing the moment phase 2 lands.
 
 ## 7. Verification
 
