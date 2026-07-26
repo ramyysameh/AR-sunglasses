@@ -197,11 +197,19 @@ in opposite directions:
 So the three changes cannot be grouped into "operator work" and "code work". They
 form a strict three-phase sequence:
 
-| Phase | Actor | Change | Why it is safe here |
-|---|---|---|---|
-| 1 | operator | Add `DIRECT_URL` to Vercel (all three environments) **and** to local `apps/shopify-app/.env` | Nothing reads it yet — zero risk |
-| 2 | code | Add `directUrl = env("DIRECT_URL")` to `schema.prisma`; merge and deploy | The variable now exists; migrations route to the direct endpoint |
-| 3 | operator | Append `connection_limit=1&pgbouncer=true` to `DATABASE_URL` | Migrations are already insulated by phase 2 |
+| Phase | Actor | Change | Why it is safe here | Status |
+|---|---|---|---|---|
+| 1 | operator | Add `DIRECT_URL` to Vercel (all three environments) **and** to local `apps/shopify-app/.env` | Nothing reads it yet — zero risk | ✅ **done 2026-07-26** |
+| 2 | code | Add `directUrl = env("DIRECT_URL")` to `schema.prisma`; merge and deploy | The variable now exists; migrations route to the direct endpoint | pending |
+| 3 | operator | Append `connection_limit=1&pgbouncer=true` to `DATABASE_URL` | Migrations are already insulated by phase 2 | pending |
+
+Phase 1 verification (2026-07-26): local `DATABASE_URL` and `DIRECT_URL` were
+confirmed byte-identical apart from `-pooler` — same endpoint
+(`ep-solitary-breeze-as0s37zn`), region, database, credentials and query string.
+Vercel has `DIRECT_URL` across Production, Preview and Development.
+
+Note for phase 3: the connection string already carries
+`?sslmode=require&channel_binding=require`, so the new parameters append with `&`.
 
 Two details that are easy to lose:
 
@@ -271,11 +279,18 @@ cut of C, and gap 2's ruling that `immutable` is unsafe on stable-named paths.
 
 ## 9. Constraints carried from prior sessions
 
-- Dev and production **share one Neon database**. Test fixtures must be
+- Dev and production **share one Neon database** — reconfirmed 2026-07-26: local
+  `DATABASE_URL` resolves to endpoint `ep-solitary-breeze-as0s37zn`, the same one
+  production uses. Note this holds *despite* the Neon project having a separate
+  `dev` branch, which is currently unused. Test fixtures must be
   `randomUUID()`-tagged and cleaned by **exact name**, never by prefix — a pattern
   filter can match rows we did not create. A failed test skips its own cleanup, so
   track fixtures and clean in `afterAll`. **The test suite does not run against
   the production database.**
+- **Follow-up candidate (out of scope here):** point local `DATABASE_URL` at the
+  existing Neon `dev` branch. That would retire the constraint above entirely and
+  relax the load-testing caution in §7.3, which exists only because the two
+  environments currently share one database.
 - **A green local build does not prove a green Vercel build.** Local has all
   packages; Vercel prunes devDependencies and resolves temp configs differently.
 - **Keep `vite.config` free of application runtime imports.**
