@@ -1,5 +1,6 @@
 import db from '../db.server'
 import { getTryonConfig } from '../tryonConfig.server'
+import { getShopSubscription, isServable } from '../billing.server'
 
 // Public endpoint: the hosted engine (inside the theme iframe) fetches this to
 // learn its model URL + fit-metadata for a given shop+product.
@@ -19,6 +20,12 @@ export const loader = async ({ request }) => {
   const productId = url.searchParams.get('productId')
   if (!shop || !productId) {
     return new Response('shop and productId required', { status: 400 })
+  }
+  // Billing gate: a paid feature. Read only the local row (webhook-updated) so
+  // this edge-cached path never calls Shopify. Grace is evaluated at read time.
+  const sub = await getShopSubscription(db, shop)
+  if (!isServable(sub, new Date())) {
+    return new Response('subscription required', { status: 402 })
   }
   const cfg = await getTryonConfig(db, shop, productId)
   if (!cfg) return new Response('not found', { status: 404 })

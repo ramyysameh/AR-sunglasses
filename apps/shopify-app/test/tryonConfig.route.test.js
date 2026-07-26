@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('../app/db.server.js', () => ({
-  default: { productMapping: { findUnique: async () => null } },
+  default: {
+    productMapping: { findUnique: async () => null },
+    // The billing gate runs before the config lookup; an ACTIVE row lets the
+    // 404 path be reached so these CORS assertions still exercise it.
+    shopSubscription: { findUnique: async () => ({ status: 'ACTIVE', graceEndsAt: null }) },
+  },
 }))
 
 const { loader } = await import('../app/routes/api.tryon-config.jsx')
