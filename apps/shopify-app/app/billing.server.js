@@ -63,3 +63,25 @@ export async function applySubscriptionUpdate(prisma, shop, sub, now) {
     create: { shop, planName: sub.name, status, graceEndsAt },
   })
 }
+
+const ACTIVE_SUBSCRIPTIONS_QUERY = `#graphql
+  query ActiveSubscriptions {
+    currentAppInstallation {
+      activeSubscriptions { name status }
+    }
+  }`
+
+/**
+ * The name of the shop's ACTIVE subscription, read live from Shopify in admin
+ * context. Returns null if there is no active subscription. Admin-only — never
+ * call from the storefront path (it makes a live API call).
+ * @param {{graphql: (q: string) => Promise<Response>}} admin
+ * @returns {Promise<string|null>}
+ */
+export async function getActivePlanName(admin) {
+  const res = await admin.graphql(ACTIVE_SUBSCRIPTIONS_QUERY)
+  const body = await res.json()
+  const subs = body?.data?.currentAppInstallation?.activeSubscriptions ?? []
+  const active = subs.find((s) => s.status === 'ACTIVE')
+  return active?.name ?? null
+}

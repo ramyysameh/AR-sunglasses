@@ -5,6 +5,7 @@ import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
 import { saveCalibratedModel, mapProductToModel, listMappings } from '../models.server'
+import { getActivePlanName, planLimit } from '../billing.server'
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request)
@@ -16,7 +17,7 @@ export const loader = async ({ request }) => {
 }
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request)
+  const { session, admin } = await authenticate.admin(request)
   const form = await request.formData()
   const intent = form.get('intent')
 
@@ -25,6 +26,21 @@ export const action = async ({ request }) => {
     const modelAssetId = form.get('modelAssetId')?.toString()
     if (!productId || !modelAssetId) {
       return { error: 'Enter a product ID and pick a model.' }
+    }
+    // Grandfather existing: only a genuinely NEW product counts against the cap.
+    // mapProductToModel upserts on (shop, productId), so a re-map is not new.
+    const existing = await prisma.productMapping.findUnique({
+      where: { shop_productId: { shop: session.shop, productId } },
+    })
+    if (!existing) {
+      const limit = planLimit(await getActivePlanName(admin))
+      const count = await prisma.productMapping.count({ where: { shop: session.shop } })
+      if (count >= limit) {
+        return {
+          error:
+            "You've reached your plan's product limit. Upgrade your plan to add try-on to more products.",
+        }
+      }
     }
     await mapProductToModel(prisma, session.shop, productId, modelAssetId)
     return { mapped: true }
