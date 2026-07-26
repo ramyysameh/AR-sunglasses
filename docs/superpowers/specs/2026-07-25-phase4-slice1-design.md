@@ -201,7 +201,21 @@ form a strict three-phase sequence:
 |---|---|---|---|---|
 | 1 | operator | Add `DIRECT_URL` to Vercel (all three environments) **and** to local `apps/shopify-app/.env` | Nothing reads it yet — zero risk | ✅ **done 2026-07-26** |
 | 2 | code | Add `directUrl = env("DIRECT_URL")` to `schema.prisma`; merge and deploy | The variable now exists; migrations route to the direct endpoint | pending |
-| 3 | operator | Append `connection_limit=1&pgbouncer=true` to `DATABASE_URL` | Migrations are already insulated by phase 2 | pending |
+| 3 | operator | Append `connection_limit=1&pgbouncer=true` to `DATABASE_URL` | Migrations are already insulated by phase 2 | ✅ **done 2026-07-26** |
+
+Phase 3 verification (2026-07-26): after the operator appended
+`&connection_limit=1&pgbouncer=true` to `DATABASE_URL` and redeployed, the
+production build was green — `prisma migrate deploy` reported `No pending
+migrations to apply` via the **direct** endpoint (the runtime `connection_limit`
+on the pooled URL does not touch migrations, which use `directUrl`), with no
+advisory-lock contention. Runtime confirmed healthy: `/`, `/auth/login`,
+`/privacy` and `/tryon/index.html` all 200, and `api.tryon-config` executed a
+real DB read under `pgbouncer=true` (returned a controlled 404 for an unknown
+shop rather than a 500) — proving disabling prepared statements did not break
+queries. Neon connection metrics to be glanced at by the operator as positive
+proof of the cap; low traffic, so evidence is "flat/low and cannot climb to the
+old 5-per-instance ceiling", plus the ongoing absence of `Timed out fetching a
+new connection`.
 
 Phase 1 verification (2026-07-26): local `DATABASE_URL` and `DIRECT_URL` were
 confirmed byte-identical apart from `-pooler` — same endpoint
