@@ -43,6 +43,9 @@ async function seed(shop, refs) {
   await prisma.session.create({
     data: { id: `sess-${shop}`, shop, state: 'x', accessToken: 't' },
   })
+  await prisma.shopSubscription.create({
+    data: { shop, planName: 'Starter', status: 'ACTIVE' },
+  })
   return assets
 }
 
@@ -51,6 +54,7 @@ async function counts(shop) {
     assets: await prisma.modelAsset.count({ where: { shop } }),
     mappings: await prisma.productMapping.count({ where: { shop } }),
     sessions: await prisma.session.count({ where: { shop } }),
+    subscriptions: await prisma.shopSubscription.count({ where: { shop } }),
   }
 }
 
@@ -61,6 +65,7 @@ beforeEach(async () => {
     await prisma.productMapping.deleteMany({ where: { shop: s } })
     await prisma.modelAsset.deleteMany({ where: { shop: s } })
     await prisma.session.deleteMany({ where: { shop: s } })
+    await prisma.shopSubscription.deleteMany({ where: { shop: s } })
   }
 })
 
@@ -69,6 +74,7 @@ afterAll(async () => {
     await prisma.productMapping.deleteMany({ where: { shop: s } })
     await prisma.modelAsset.deleteMany({ where: { shop: s } })
     await prisma.session.deleteMany({ where: { shop: s } })
+    await prisma.shopSubscription.deleteMany({ where: { shop: s } })
   }
 })
 
@@ -78,7 +84,7 @@ describe('purgeShopData', () => {
 
     const result = await purgeShopData(prisma, shopA)
 
-    expect(await counts(shopA)).toEqual({ assets: 0, mappings: 0, sessions: 0 })
+    expect(await counts(shopA)).toEqual({ assets: 0, mappings: 0, sessions: 0, subscriptions: 0 })
     expect(result.assets).toBe(2)
     expect(result.mappings).toBe(1)
     expect(result.sessions).toBe(1)
@@ -90,7 +96,7 @@ describe('purgeShopData', () => {
 
     await purgeShopData(prisma, shopA)
 
-    expect(await counts(shopB)).toEqual({ assets: 1, mappings: 1, sessions: 1 })
+    expect(await counts(shopB)).toEqual({ assets: 1, mappings: 1, sessions: 1, subscriptions: 1 })
     const deletedKeys = hoisted.sent.map((c) => c.input.Key)
     expect(deletedKeys).toEqual([`${tag}/a1.glb`])
   })
@@ -118,7 +124,7 @@ describe('purgeShopData', () => {
     await expect(purgeShopData(prisma, shopA)).rejects.toThrow('denied')
 
     // Rows intact, so Shopify's retry recomputes the same object list.
-    expect(await counts(shopA)).toEqual({ assets: 1, mappings: 1, sessions: 1 })
+    expect(await counts(shopA)).toEqual({ assets: 1, mappings: 1, sessions: 1, subscriptions: 1 })
   })
 
   // D7. Prisma DROPS undefined filters: deleteMany({where:{shop: undefined}})
@@ -133,7 +139,7 @@ describe('purgeShopData', () => {
 
       await expect(purgeShopData(prisma, bad)).rejects.toThrow(TypeError)
 
-      expect(await counts(shopB)).toEqual({ assets: 1, mappings: 1, sessions: 1 })
+      expect(await counts(shopB)).toEqual({ assets: 1, mappings: 1, sessions: 1, subscriptions: 1 })
       expect(hoisted.sent).toHaveLength(0)
     },
   )

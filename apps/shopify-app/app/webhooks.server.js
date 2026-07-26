@@ -42,11 +42,15 @@ export async function purgeShopData(prisma, shop) {
   const mappings = await prisma.productMapping.deleteMany({ where: { shop } })
   const deletedAssets = await prisma.modelAsset.deleteMany({ where: { shop } })
   const sessions = await prisma.session.deleteMany({ where: { shop } })
+  // ShopSubscription is shop-keyed merchant data and has no foreign keys, so its
+  // delete order is unconstrained; after sessions keeps the FK-forced order intact.
+  const subscriptions = await prisma.shopSubscription.deleteMany({ where: { shop } })
 
   return {
     storageRefs: assets.length,
     mappings: mappings.count,
     assets: deletedAssets.count,
     sessions: sessions.count,
+    subscriptions: subscriptions.count,
   }
 }
