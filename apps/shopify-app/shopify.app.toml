@@ -25,6 +25,11 @@ uri = "/webhooks/app/uninstalled"
 topics = [ "app/scopes_update" ]
 uri = "/webhooks/app/scopes_update"
 
+# Handled by: app/routes/webhooks.app.subscriptions_update.jsx
+[[webhooks.subscriptions]]
+topics = [ "app_subscriptions/update" ]
+uri = "/webhooks/app/subscriptions_update"
+
 # Mandatory GDPR topics. Note these use `compliance_topics`, NOT `topics` --
 # the CLI silently ignores compliance topics declared under `topics`.
 # Handled by: app/routes/webhooks.customers.data_request.jsx
