@@ -72,3 +72,11 @@ model ProductMapping {
 
   @@unique([shop, productId])
 }
+
+model ShopSubscription {
+  shop        String    @id
+  planName    String?
+  status      String
+  graceEndsAt DateTime?
+  updatedAt   DateTime  @updatedAt
+}

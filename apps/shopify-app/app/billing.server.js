@@ -30,3 +30,36 @@ export function isServable(sub, now) {
   if (sub.status === 'ACTIVE') return true
   return Boolean(sub.graceEndsAt) && now < sub.graceEndsAt
 }
+
+/**
+ * The local subscription row for a shop, or null. Source of truth for the
+ * edge-cached storefront path so it never calls Shopify.
+ */
+export async function getShopSubscription(prisma, shop) {
+  return prisma.shopSubscription.findUnique({ where: { shop } })
+}
+
+/**
+ * Apply an authoritative status update (from the app_subscriptions/update
+ * webhook). ACTIVE clears grace; the first non-ACTIVE stamps graceEndsAt =
+ * now + GRACE_PERIOD_DAYS and later non-ACTIVE updates preserve it.
+ * @param {import('@prisma/client').PrismaClient} prisma
+ * @param {string} shop
+ * @param {{name: string|null, status: string}} sub
+ * @param {Date} now
+ */
+export async function applySubscriptionUpdate(prisma, shop, sub, now) {
+  const status = sub.status
+  let graceEndsAt = null
+  if (status !== 'ACTIVE') {
+    const existing = await prisma.shopSubscription.findUnique({ where: { shop } })
+    graceEndsAt =
+      existing?.graceEndsAt ??
+      new Date(now.getTime() + GRACE_PERIOD_DAYS * 24 * 3600 * 1000)
+  }
+  return prisma.shopSubscription.upsert({
+    where: { shop },
+    update: { planName: sub.name, status, graceEndsAt },
+    create: { shop, planName: sub.name, status, graceEndsAt },
+  })
+}
