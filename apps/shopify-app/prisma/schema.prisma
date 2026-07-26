@@ -14,7 +14,14 @@ generator client {
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // Pooled (PgBouncer) endpoint, used at runtime by the app.
+  url       = env("DATABASE_URL")
+  // Direct endpoint, used ONLY by prisma migrate/generate. Migrations take
+  // session-level advisory locks that PgBouncer's transaction pooling cannot
+  // hold, and the runtime connection_limit=1 would throttle them to a single
+  // connection. The Vercel build command runs `prisma migrate deploy`, so this
+  // is load-bearing for every deploy, not just for local migrations.
+  directUrl = env("DIRECT_URL")
 }
 
 model Session {
