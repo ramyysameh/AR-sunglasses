@@ -262,6 +262,33 @@ Therefore:
   the caching half is live — edge-caching `/models/:id.glb` removes a
   `findUnique` per model load and lowers the floor first.
 
+### 7.4 Measured result (2026-07-26)
+
+Verified with `node scripts/verify-cache-headers.mjs https://ar-sunglasses-shopify-app.vercel.app`
+against the production deployment of `main@820f590`.
+
+| Path | Before | After | Edge HIT on refetch |
+|---|---|---|---|
+| `/tryon/assets/main-*.js` | `max-age=0, must-revalidate` | `max-age=31536000, immutable` | ✅ |
+| `/tryon/models/sunglasses-draco.glb` | `max-age=0, must-revalidate` | `max-age=86400, stale-while-revalidate=604800` | ✅ |
+| `/tryon/draco/gltf/draco_decoder.wasm` | `max-age=0, must-revalidate` | `max-age=86400, stale-while-revalidate=604800` | ✅ |
+| `/tryon/index.html` | `max-age=0, must-revalidate` | unchanged (intended) | n/a |
+| `/models/:id.glb` | `max-age=3600` | `max-age=31536000, s-maxage=31536000, immutable` | unit-test only¹ |
+
+¹ The `ModelAsset` table is empty in production (`SELECT id FROM "ModelAsset"`
+returned no rows), so there is no live merchant model to fetch — a fabricated id
+404s, and the 404 path carries no cache header. The header is covered by
+`apps/shopify-app/test/modelsGlb.route.test.js` and applies the moment a merchant
+uploads a model. Re-run the script with a real id (2nd arg) once one exists.
+
+Bundle check: `apps/shopify-app/public/tryon/assets/main-*.js` `?v=` occurrences
+went 1 → 0 after the Task 2 rebuild; production now serves `main-CuWCWgrc.js`.
+
+The `vercel.json`-silently-no-ops risk (§7.2) did **not** materialize — all four
+`/tryon/*` tiers carry their intended headers and the three cacheable ones return
+`x-vercel-cache: HIT` on refetch. First verified on a preview deploy, then on
+production.
+
 ## 8. Corrections to the handoff
 
 Checked against source; the handoff was wrong or incomplete on these:
