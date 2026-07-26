@@ -281,7 +281,13 @@ export function getGlassesModelUrl(key = defaultGlassesKey) {
       ? config.optimizedModelPath
       : config.modelPath
   }
-  return `${url}?v=${MODEL_CACHE_BUST}`
+  // Production returns a BARE url. A per-page-load query string hands the CDN a
+  // fresh cache key on every visit, so no Cache-Control header can ever produce
+  // a hit -- including the `immutable` one on the merchant /models/:id.glb
+  // route, which is the highest-value header in this slice. Vite statically
+  // replaces import.meta.env.DEV, so this suffix compiles out of the production
+  // bundle entirely.
+  return import.meta.env.DEV ? `${url}?v=${MODEL_CACHE_BUST}` : url
 }
 
 export const defaultGlassesModelUrl = getGlassesModelUrl(defaultGlassesKey)
