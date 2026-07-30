@@ -5,23 +5,34 @@ const tag = randomUUID().slice(0, 8)
 const shop = `limit-${tag}.myshopify.com`
 
 const hoisted = vi.hoisted(() => ({ plan: 'Starter' }))
+// Fake the Admin GraphQL response itself (rather than mocking
+// getActivePlanName) so that requireActivePlanForLoader -- which calls
+// getActivePlanName via an in-module reference, not through the mocked
+// export -- sees the same plan as the action's own call does.
 vi.mock('../app/shopify.server.js', () => ({
   authenticate: {
     admin: async () => ({
       session: { shop },
-      admin: { graphql: async () => new Response() },
+      admin: {
+        graphql: async () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                currentAppInstallation: {
+                  activeSubscriptions: hoisted.plan
+                    ? [{ name: hoisted.plan, status: 'ACTIVE' }]
+                    : [],
+                },
+              },
+            }),
+          ),
+      },
     }),
   },
 }))
-// getActivePlanName is exercised for real elsewhere; here stub it to the tier
-// under test so the test controls the limit without a live API call.
-vi.mock('../app/billing.server.js', async (importOriginal) => {
-  const actual = await importOriginal()
-  return { ...actual, getActivePlanName: async () => hoisted.plan }
-})
 
 const prisma = (await import('../app/db.server.js')).default
-const { action } = await import('../app/routes/app.models.jsx')
+const { action, loader } = await import('../app/routes/app.models.jsx')
 
 async function seedAsset() {
   const a = await prisma.modelAsset.create({
@@ -81,5 +92,38 @@ describe('map action tier limit', () => {
     const assetId = await seedAsset()
     const res = await action({ request: mapForm(`gid://shopify/Product/${tag}-pro`, assetId) })
     expect(res.mapped).toBe(true)
+  })
+
+  // Regression: the map action used to only check the plan inside the
+  // NEW-product branch, so a shop with no subscription at all could still
+  // remap an already-mapped product for free. The guard must fire first,
+  // for every intent, before the existing/new-mapping split.
+  it('blocks even a RE-map when there is no active subscription', async () => {
+    hoisted.plan = null
+    const assetId = await seedAsset()
+    await prisma.productMapping.create({
+      data: { shop, productId: `gid://shopify/Product/${tag}-existing`, modelAssetId: assetId },
+    })
+    const res = await action({
+      request: mapForm(`gid://shopify/Product/${tag}-existing`, assetId),
+    })
+    expect(res.error).toMatch(/no active subscription/i)
+  })
+})
+
+describe('models loader subscription gate', () => {
+  it('redirects to /app when there is no active subscription', async () => {
+    hoisted.plan = null
+    await expect(loader({ request: new Request('https://x/app/models') })).rejects.toMatchObject({
+      status: 302,
+      headers: expect.objectContaining({ get: expect.any(Function) }),
+    })
+  })
+
+  it('loads normally with an active subscription', async () => {
+    hoisted.plan = 'Starter'
+    const result = await loader({ request: new Request('https://x/app/models') })
+    expect(result).toHaveProperty('assets')
+    expect(result).toHaveProperty('mappings')
   })
 })

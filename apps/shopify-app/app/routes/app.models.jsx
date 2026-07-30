@@ -5,10 +5,11 @@ import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
 import { saveCalibratedModel, mapProductToModel, listMappings } from '../models.server'
-import { getActivePlanName, planLimit } from '../billing.server'
+import { getActivePlanName, planLimit, requireActivePlanForLoader } from '../billing.server'
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request)
+  const { session, admin } = await authenticate.admin(request)
+  await requireActivePlanForLoader(admin)
   const [assets, mappings] = await Promise.all([
     prisma.modelAsset.findMany({ where: { shop: session.shop }, orderBy: { createdAt: 'desc' } }),
     listMappings(prisma, session.shop),
@@ -18,6 +19,13 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
+  // Checked once up front (not just for new mappings): without this, a shop
+  // with no subscription could still remap an already-mapped product, or
+  // upload models, since those paths have no other billing check.
+  const activePlan = await getActivePlanName(admin)
+  if (!activePlan) {
+    return { error: 'No active subscription. Choose a plan to continue.' }
+  }
   const form = await request.formData()
   const intent = form.get('intent')
 
@@ -33,7 +41,7 @@ export const action = async ({ request }) => {
       where: { shop_productId: { shop: session.shop, productId } },
     })
     if (!existing) {
-      const limit = planLimit(await getActivePlanName(admin))
+      const limit = planLimit(activePlan)
       const count = await prisma.productMapping.count({ where: { shop: session.shop } })
       if (count >= limit) {
         return {
