@@ -1,9 +1,12 @@
 // Lens reflection tuning. Defaults are baked from on-device tuning; the URL
 // params exist to re-tune on a real phone, exactly like ?gscale and ?voffset.
 const DEFAULTS = {
-  // Above 1 on purpose: the loader forces lens opacity to ~0.62 and alpha
-  // blending scales the whole fragment, so intensity 1 arrives pre-dimmed.
-  intensity: 1.8,
+  // Lowered from 1.8 (tuned for the old 0.62-opacity, medium-grey lens) after
+  // the lens went darker + more transparent (opacity 0.35, near-black tint):
+  // at that contrast, a bright sun glint sweeping across the dark tint as the
+  // head turns read as an inconsistent grey/black flicker rather than a
+  // subtle highlight. Confirmed live on a real registered model.
+  intensity: 0.5,
   // Roughness floor. Smoke_Lens is authored at 0 (perfect mirror), which makes
   // the sun a hard aliased dot; a little roughness blooms it into a glint.
   roughness: 0.06,
