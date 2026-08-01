@@ -626,7 +626,8 @@ export class RenderLoop {
       this.faceOccluder?.updateFromFaceMesh?.(
         transform.occlusionMesh.faceWorldPoints,
         transform.anchorWorldPoints,
-        occluderAlpha
+        occluderAlpha,
+        transform.occluderCorrection
       )
     } else if (transform.anchorWorldPoints) {
       this.faceOccluder?.updateFromAnchors(transform.anchorWorldPoints)
@@ -911,6 +912,15 @@ export class RenderLoop {
         ? predictedPos.z
         : THREE.MathUtils.lerp(this.smoothedDepth, predictedPos.z, depthAlpha)
       predictedPos.z = this.smoothedDepth
+      // The occluder mesh is built from RAW per-frame landmarks (it has to be,
+      // to deform to the actual face shape), while the frame above just went
+      // through OneEuro smoothing + predictive lead + this same depth damping.
+      // Two independently-filtered systems drift relative to each other frame
+      // to frame, which shows up as jitter exactly where they visually meet
+      // (the nose bridge). Passing this exact delta into the occluder locks
+      // its OVERALL position to the frame's, by construction, instead of
+      // hoping two separately-tuned smoothing curves happen to agree.
+      const occluderCorrection = predictedPos.clone().sub(tunedPosition)
       const fitScale = this._smoothSolvedScale(fitSolution.glassesTransform.scale)
       this._updateFitDebugOverlay({
         yaw: THREE.MathUtils.radToDeg(this.headYaw ?? 0),
@@ -925,6 +935,7 @@ export class RenderLoop {
         scale: fitScale,
         anchorWorldPoints,
         occlusionMesh: fitSolution.occlusionMesh,
+        occluderCorrection,
         fitSolution,
       }
 

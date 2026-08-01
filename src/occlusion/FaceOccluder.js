@@ -132,7 +132,7 @@ export class FaceOccluder {
     this.show()
   }
 
-  updateFromFaceMesh(faceWorldPoints, anchorWorldPoints = {}, smoothingAlpha = 1) {
+  updateFromFaceMesh(faceWorldPoints, anchorWorldPoints = {}, smoothingAlpha = 1, correction = null) {
     if (!this.occluderMesh || !Array.isArray(faceWorldPoints)) {
       return
     }
@@ -146,6 +146,17 @@ export class FaceOccluder {
     // (motion) tracks tightly, and a large jump snaps (face re-acquisition) so the
     // mask never eases in from a stale pose.
     const a = Number.isFinite(smoothingAlpha) ? Math.min(Math.max(smoothingAlpha, 0), 1) : 1
+    // `correction` is the frame's OWN filtered/predicted position minus its raw
+    // tracked position -- i.e. exactly what the frame's smoothing pipeline just
+    // did. The per-vertex smoothing above only damps SHAPE noise (independent of
+    // the frame); it doesn't make the mask's overall position track the frame's
+    // particular smoothing curve. Applying the identical delta here, AFTER shape
+    // smoothing and unsmoothed itself (it's already exactly frame-synced, so
+    // smoothing it again would just reintroduce lag), locks the mask's position
+    // to the frame's by construction rather than by matching two tuned curves.
+    const cx = correction?.x ?? 0
+    const cy = correction?.y ?? 0
+    const cz = correction?.z ?? 0
     const SNAP_DIST_SQ = 0.05 * 0.05 // >5 cm jump = re-acquisition, not jitter
     if (!this._smoothedPts || this._smoothedPts.length !== OCCLUDER_POINTS.length * 3) {
       this._smoothedPts = null
@@ -174,7 +185,7 @@ export class FaceOccluder {
         s[i + 1] += dy * a
         s[i + 2] += dz * a
       }
-      position.setXYZ(vertexIndex, s[i], s[i + 1], s[i + 2])
+      position.setXYZ(vertexIndex, s[i] + cx, s[i + 1] + cy, s[i + 2] + cz)
     })
 
     position.needsUpdate = true
