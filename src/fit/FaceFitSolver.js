@@ -51,6 +51,41 @@ function anchorToWorldXY(anchor, camera, metricDepth) {
   return new THREE.Vector3(ndcX * halfWidth, ndcY * halfHeight, metricDepth)
 }
 
+// Real (native) camera aspect -- the video's own intrinsic resolution, fixed
+// per device/session and unaffected by how big or what shape the CSS display
+// container is. Falls back to the render camera's aspect only if video
+// dimensions aren't available yet (startup).
+function nativeAspectOf(camera) {
+  return camera?._videoW > 0 && camera?._videoH > 0
+    ? camera._videoW / camera._videoH
+    : camera?.aspect ?? 1
+}
+
+// Unprojects a RAW MediaPipe landmark (normalized to the native video frame)
+// into metric world coordinates for MEASURING real-world size -- deliberately
+// NOT going through coverNDC. coverNDC answers "where does this land on the
+// display AFTER the object-fit:cover crop", which is exactly the wrong space
+// for a physical measurement: the crop is a CSS/viewing choice with zero
+// bearing on how far apart two points on a real face actually are. Using the
+// display's aspect ratio here (as anchorToWorldXY does, correctly, for
+// on-screen positioning) previously made the computed face width -- and
+// therefore the glasses' scale -- change depending on the shape of whatever
+// box the try-on happened to be rendered in (phone vs. desktop dialog vs.
+// full tab), independent of the actual person's face or distance from the
+// camera. Mirroring here matches coverNDC's selfie-view convention.
+function anchorToMetricXY(anchor, camera, metricDepth) {
+  if (!anchor || !camera?.isPerspectiveCamera) return null
+
+  const distance = Math.abs(metricDepth)
+  const halfFov = THREE.MathUtils.degToRad(camera.fov) * 0.5
+  const halfHeight = Math.tan(halfFov) * distance
+  const halfWidth = halfHeight * nativeAspectOf(camera)
+  const ndcX = -(anchor.x * 2 - 1)
+  const ndcY = -(anchor.y * 2 - 1)
+
+  return new THREE.Vector3(ndcX * halfWidth, ndcY * halfHeight, metricDepth)
+}
+
 function decomposeMatrix(matrix) {
   const position = new THREE.Vector3()
   const quaternion = new THREE.Quaternion()
@@ -73,8 +108,13 @@ function averageWorld(points) {
 function estimateMetricDepth(leftIris, rightIris, camera, realIPD_m = 0.063) {
   if (!leftIris || !rightIris || !camera?.isPerspectiveCamera) return null
 
-  const pw = camera._pixelWidth
-  const ph = camera._pixelHeight
+  // Native video pixels, NOT the display/canvas size (camera._pixelWidth is an
+  // alias for the display box, which changes with the CSS container). Using
+  // the display size here made the estimated distance-to-face -- and every
+  // downstream metric derived from it -- drift depending on the shape of
+  // whatever box the try-on was rendered in, unrelated to the actual person.
+  const pw = camera._videoW
+  const ph = camera._videoH
   if (!pw || !ph || pw <= 0 || ph <= 0) return null
 
   // Normalized IPD (0-1 space, as MediaPipe outputs)
@@ -158,11 +198,21 @@ export class FaceFitSolver {
     const anchorWorldPoints = Object.fromEntries(
       Object.entries(pose.anchorPoints).map(([key, anchor]) => [
         key,
-        anchorToWorldXY(anchor, camera, 
-          (key === 'bridgeCenter' || key === 'bridgeTop' || key === 'noseTip') 
-            ? noseBridgeDepth 
+        anchorToWorldXY(anchor, camera,
+          (key === 'bridgeCenter' || key === 'bridgeTop' || key === 'noseTip')
+            ? noseBridgeDepth
             : baseDepth
         ),
+      ])
+    )
+    // Metric (native-camera, display-independent) counterparts of the points
+    // that drive SIZE below (templeSpan/irisSpan/worldFaceWidth) -- see
+    // anchorToMetricXY. Position above correctly keeps using anchorWorldPoints,
+    // which needs the display's own aspect to land on the right screen pixel.
+    const metricPoints = Object.fromEntries(
+      ['leftTemple', 'rightTemple', 'leftIris', 'rightIris', 'leftCheek', 'rightCheek'].map((key) => [
+        key,
+        anchorToMetricXY(pose.anchorPoints[key], camera, baseDepth),
       ])
     )
     // Give the occluder real depth (cheeks/nose forward, jaw/ears back) instead of
@@ -216,8 +266,8 @@ export class FaceFitSolver {
     const faceSpan = scanProfile.profile?.faceWidth ?? pose.faceMetrics?.weightedFaceSpan ?? 0
     const currentSpan = pose.faceMetrics?.weightedFaceSpan ?? faceSpan
     
-    const templeSpan = span(leftTemple, rightTemple)
-    const irisSpan = span(leftIris, rightIris)
+    const templeSpan = span(metricPoints.leftTemple, metricPoints.rightTemple)
+    const irisSpan = span(metricPoints.leftIris, metricPoints.rightIris)
 
     // Target: glasses width = 1.0x temple span (temples sit at hinge points).
     // No yaw foreshortening correction here — the size is frozen during turns
@@ -240,14 +290,7 @@ export class FaceFitSolver {
     const scaleDrift = faceSpan > 0 && currentSpan > 0
       ? THREE.MathUtils.clamp(currentSpan / faceSpan, 0.985, 1.015)
       : 1
-    const worldFaceWidth = weightedWorldFaceWidth({
-      leftTemple,
-      rightTemple,
-      leftCheek,
-      rightCheek,
-      leftIris,
-      rightIris,
-    })
+    const worldFaceWidth = weightedWorldFaceWidth(metricPoints)
     const frameFitRatio = Number.isFinite(skuFitMetadata?.faceFitWidthRatio)
       ? skuFitMetadata.faceFitWidthRatio
       : 0.88

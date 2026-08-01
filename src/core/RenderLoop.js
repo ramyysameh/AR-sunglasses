@@ -585,16 +585,11 @@ export class RenderLoop {
       return
     }
 
-    // Global glasses-size fine-tune — see src/core/glassesScale.js. Resolved
-    // once: portrait defaults to 1.15, landscape to 1.0, ?gscale=<n> overrides.
-    // "Portrait" means the rendered canvas container (camera._clientW/_clientH,
-    // synced every frame in _syncSize) is taller than wide -- NOT the browser
-    // window. The storefront dialog's CSS keeps a portrait aspect on every
-    // screen size (see tryon_button.liquid), so checking window dimensions
-    // under-scaled the glasses on desktop.
+    // Global glasses-size fine-tune — see src/core/glassesScale.js. Fit scale
+    // is computed device/container-independently at the source (FaceFitSolver),
+    // so this is just a manual ?gscale=<n> override, 1.0 otherwise.
     if (this._glassesScaleMultiplier == null) {
-      const isPortrait = this.camera._clientH > this.camera._clientW
-      this._glassesScaleMultiplier = resolveGlassesScaleMultiplier(window.location.search, isPortrait)
+      this._glassesScaleMultiplier = resolveGlassesScaleMultiplier(window.location.search)
     }
     // Vertical placement fine-tune, in world metres (negative = lower on the
     // nose). ?voffset=<n> overrides for live tuning; otherwise the per-model
