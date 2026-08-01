@@ -595,6 +595,15 @@ export class RenderLoop {
     if (this._glassesScaleMultiplier == null) {
       const isPortrait = this.camera._clientH > this.camera._clientW
       this._glassesScaleMultiplier = resolveGlassesScaleMultiplier(window.location.search, isPortrait)
+      // TEMP DEBUG — remove once the desktop-sizing issue is diagnosed.
+      console.log('[gscale-debug]', {
+        search: window.location.search,
+        clientW: this.camera._clientW,
+        clientH: this.camera._clientH,
+        isPortrait,
+        resolvedMultiplier: this._glassesScaleMultiplier,
+        rawTransformScale: transform.scale,
+      })
     }
     // Vertical placement fine-tune, in world metres (negative = lower on the
     // nose). ?voffset=<n> overrides for live tuning; otherwise the per-model
