@@ -108,20 +108,20 @@ function averageWorld(points) {
 function estimateMetricDepth(leftIris, rightIris, camera, realIPD_m = 0.063) {
   if (!leftIris || !rightIris || !camera?.isPerspectiveCamera) return null
 
-  // Uses the DISPLAY box (camera._pixelWidth/_pixelHeight), not native video
-  // pixels, DELIBERATELY -- despite the same display-dependence this file
-  // otherwise fixes (see anchorToMetricXY). This formula reduces to a
-  // function of aspect ratio only (the pw/ph magnitude cancels out), and
-  // switching to the native camera's much-wider aspect measurably amplifies
-  // ordinary per-frame MediaPipe landmark noise into visible depth jitter at
-  // the nose bridge -- confirmed live. The display aspect happens to damp
-  // that noise better in practice, so it stays, even though it means this one
-  // estimate (unlike face WIDTH, fixed via anchorToMetricXY) still varies
-  // slightly with container shape. Depth is held/smoothed downstream anyway
-  // (see _heldDepth in solve()), so a small container-dependent offset here
-  // is far less visible than the noise amplification was.
-  const pw = camera._pixelWidth
-  const ph = camera._pixelHeight
+  // Native video pixels (NOT the display box) -- must match the aspect
+  // convention anchorToMetricXY uses for face WIDTH. This formula reduces to
+  // a function of aspect ratio only (the pw/ph magnitude cancels out), so
+  // using a DIFFERENT aspect here than in the width calculation doesn't just
+  // change noise characteristics, it changes the absolute depth magnitude fed
+  // into anchorToMetricXY's halfHeight -- undersizing the glasses even though
+  // width alone was "fixed" (confirmed live: mixing conventions shrank
+  // everything back down). The native aspect is more sensitive to ordinary
+  // per-frame MediaPipe landmark noise than the old display aspect was, which
+  // showed up as nose-bridge jitter -- fixed at the source by smoothing the
+  // frontal case below (this file previously had NO damping there), not by
+  // reintroducing a mismatched aspect.
+  const pw = camera._videoW
+  const ph = camera._videoH
   if (!pw || !ph || pw <= 0 || ph <= 0) return null
 
   // Normalized IPD (0-1 space, as MediaPipe outputs)
@@ -192,8 +192,16 @@ export class FaceFitSolver {
     // the source keeps x, y and z consistent (no recede, no forward pop).
     const headEuler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ')
     const frontalDepth = Math.abs(headEuler.y) < THREE.MathUtils.degToRad(5)
-    if (this._heldDepth == null || frontalDepth) {
+    if (this._heldDepth == null) {
       this._heldDepth = rawDepth
+    } else if (frontalDepth) {
+      // Light EMA instead of snapping straight to rawDepth -- the native-video
+      // aspect estimateMetricDepth now uses (matching anchorToMetricXY, see
+      // above) is more sensitive to ordinary per-frame MediaPipe landmark
+      // noise than the old display-aspect version was, which showed up as
+      // visible nose-bridge jitter. Still responsive to real distance changes
+      // (moving closer/farther) within a few frames, just not frame-instant.
+      this._heldDepth += (rawDepth - this._heldDepth) * 0.35
     } else {
       this._heldDepth += (rawDepth - this._heldDepth) * 0.02
     }
