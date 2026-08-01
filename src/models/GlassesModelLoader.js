@@ -126,7 +126,9 @@ export class GlassesModelLoader {
           if (name.includes('lens') || name.includes('glass')) {
             if ('transmission' in material) material.transmission = 0
             material.transparent = true
-            material.opacity = Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : 0.35
+            // 0.35 -> 0.18: user wanted the lens "black but very transparent" --
+            // pairs with the pure-black Base Color set in Blender for this tint.
+            material.opacity = Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : 0.18
             material.depthWrite = false
             applyLensReflection(material, this.lensEnvMap, this.lensReflection)
           }
@@ -162,7 +164,7 @@ export class GlassesModelLoader {
           }
 
           if ('opacity' in material) {
-            material.opacity = materialProfile.lensOpacity ?? 0.35
+            material.opacity = materialProfile.lensOpacity ?? 0.18
           }
 
           applyLensReflection(material, this.lensEnvMap, this.lensReflection)
