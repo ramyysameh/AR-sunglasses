@@ -114,12 +114,19 @@ export class GlassesModelLoader {
         // Frame stays EXACTLY as authored. The lens is the one exception: glTF
         // glass "transmission" stalls the real-time renderer, so swap it for
         // lightweight alpha (keeps the authored tint colour, just renderable).
+        //
+        // THIS is the branch that actually runs for every server-registered
+        // model (registerRuntimeGlassesConfig sets preserveMaterials: true) --
+        // the "default" branch below is currently unreachable for that path,
+        // it only applies to a modelConfig that never sets preserveMaterials.
+        // An earlier tuning pass changed the default branch's opacity fallback
+        // thinking it was live; it wasn't. Fixed here instead, where it counts.
         if (modelConfig.preserveMaterials) {
           const name = `${material.name ?? ''} ${child.name ?? ''}`.toLowerCase()
           if (name.includes('lens') || name.includes('glass')) {
             if ('transmission' in material) material.transmission = 0
             material.transparent = true
-            material.opacity = Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : 0.5
+            material.opacity = Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : 0.35
             material.depthWrite = false
             applyLensReflection(material, this.lensEnvMap, this.lensReflection)
           }
@@ -135,15 +142,13 @@ export class GlassesModelLoader {
           material.metalness = materialProfile.frameMetalness ?? 0.12
         }
 
+        // Only reached for a modelConfig that does NOT set preserveMaterials --
+        // currently none of the built-in SKUs or server-registered models take
+        // this path (registerRuntimeGlassesConfig always sets it true), so this
+        // is effectively unused right now. Kept in sync with the preserveMaterials
+        // branch above so it doesn't silently drift if something starts using it.
         const materialName = `${material.name ?? ''} ${child.name ?? ''}`.toLowerCase()
         if (materialName.includes('lens') || materialName.includes('glass')) {
-          // A glTF "transmission" material (MeshPhysicalMaterial.transmission > 0,
-          // e.g. Blender's Transmission Weight) renders via real-time refraction,
-          // NOT the transparent/opacity path -- it needs a transmission render
-          // target this renderer doesn't set up, and without zeroing it first,
-          // setting opacity below has no visible effect (looks opaque). The
-          // preserveMaterials branch above already does this; this default path
-          // was missing it.
           if ('transmission' in material) {
             material.transmission = 0
           }
@@ -157,8 +162,6 @@ export class GlassesModelLoader {
           }
 
           if ('opacity' in material) {
-            // Lowered from 0.62 -- user feedback on a real registered model
-            // (Gripz Pelmo): wanted noticeably more see-through than that.
             material.opacity = materialProfile.lensOpacity ?? 0.35
           }
 
