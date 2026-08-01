@@ -108,13 +108,20 @@ function averageWorld(points) {
 function estimateMetricDepth(leftIris, rightIris, camera, realIPD_m = 0.063) {
   if (!leftIris || !rightIris || !camera?.isPerspectiveCamera) return null
 
-  // Native video pixels, NOT the display/canvas size (camera._pixelWidth is an
-  // alias for the display box, which changes with the CSS container). Using
-  // the display size here made the estimated distance-to-face -- and every
-  // downstream metric derived from it -- drift depending on the shape of
-  // whatever box the try-on was rendered in, unrelated to the actual person.
-  const pw = camera._videoW
-  const ph = camera._videoH
+  // Uses the DISPLAY box (camera._pixelWidth/_pixelHeight), not native video
+  // pixels, DELIBERATELY -- despite the same display-dependence this file
+  // otherwise fixes (see anchorToMetricXY). This formula reduces to a
+  // function of aspect ratio only (the pw/ph magnitude cancels out), and
+  // switching to the native camera's much-wider aspect measurably amplifies
+  // ordinary per-frame MediaPipe landmark noise into visible depth jitter at
+  // the nose bridge -- confirmed live. The display aspect happens to damp
+  // that noise better in practice, so it stays, even though it means this one
+  // estimate (unlike face WIDTH, fixed via anchorToMetricXY) still varies
+  // slightly with container shape. Depth is held/smoothed downstream anyway
+  // (see _heldDepth in solve()), so a small container-dependent offset here
+  // is far less visible than the noise amplification was.
+  const pw = camera._pixelWidth
+  const ph = camera._pixelHeight
   if (!pw || !ph || pw <= 0 || ph <= 0) return null
 
   // Normalized IPD (0-1 space, as MediaPipe outputs)
