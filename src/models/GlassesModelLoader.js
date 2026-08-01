@@ -137,6 +137,17 @@ export class GlassesModelLoader {
 
         const materialName = `${material.name ?? ''} ${child.name ?? ''}`.toLowerCase()
         if (materialName.includes('lens') || materialName.includes('glass')) {
+          // A glTF "transmission" material (MeshPhysicalMaterial.transmission > 0,
+          // e.g. Blender's Transmission Weight) renders via real-time refraction,
+          // NOT the transparent/opacity path -- it needs a transmission render
+          // target this renderer doesn't set up, and without zeroing it first,
+          // setting opacity below has no visible effect (looks opaque). The
+          // preserveMaterials branch above already does this; this default path
+          // was missing it.
+          if ('transmission' in material) {
+            material.transmission = 0
+          }
+
           if ('roughness' in material) {
             material.roughness = materialProfile.lensRoughness ?? 0.08
           }
