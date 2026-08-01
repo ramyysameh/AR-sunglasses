@@ -1,33 +1,41 @@
-export default function AdditionalPage() {
+export default function HelpPage() {
   return (
-    <s-page heading="Additional page">
-      <s-section heading="Multiple pages">
+    <s-page heading="Help">
+      <s-section heading="Setting up try-on for a product">
+        <s-ordered-list>
+          <s-list-item>
+            Upload a calibrated GLB model on the{" "}
+            <s-link href="/app/models">Models</s-link> page.
+          </s-list-item>
+          <s-list-item>Map the model to the product it belongs to.</s-list-item>
+          <s-list-item>
+            In the theme editor, open the product page template and add the
+            &quot;AR Try-On&quot; block. The try-on engine URL is pre-filled by
+            default -- leave it as-is unless you&apos;re self-hosting.
+          </s-list-item>
+        </s-ordered-list>
+      </s-section>
+
+      <s-section heading="Model requirements">
         <s-paragraph>
-          The app template comes with an additional page which demonstrates how
-          to create multiple pages within app navigation using{" "}
-          <s-link
-            href="https://shopify.dev/docs/apps/tools/app-bridge"
-            target="_blank"
-          >
-            App Bridge
-          </s-link>
-          .
-        </s-paragraph>
-        <s-paragraph>
-          To create your own page and have it show up in the app navigation, add
-          a page inside <code>app/routes</code>, and a link to it in the{" "}
-          <code>&lt;ui-nav-menu&gt;</code> component found in{" "}
-          <code>app/routes/app.jsx</code>.
+          Models must be uploaded as .glb files. The app validates and
+          calibrates each model automatically -- frame width, hinge points,
+          and lens placement are measured from the geometry. A model with low
+          calibration confidence can still be used, but fit accuracy may need
+          manual review.
         </s-paragraph>
       </s-section>
+
       <s-section slot="aside" heading="Resources">
         <s-unordered-list>
           <s-list-item>
-            <s-link
-              href="https://shopify.dev/docs/apps/design-guidelines/navigation#app-nav"
-              target="_blank"
-            >
-              App nav best practices
+            <s-link href="/privacy" target="_blank">
+              Privacy policy
+            </s-link>
+          </s-list-item>
+          <s-list-item>
+            <s-link href="mailto:ramy.sameh2@gmail.com">
+              Contact support
             </s-link>
           </s-list-item>
         </s-unordered-list>
