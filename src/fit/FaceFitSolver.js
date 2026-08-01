@@ -186,12 +186,16 @@ export class FaceFitSolver {
     const rawDepth = ipdDepth
       ?? (validDepth(matrixPosition.z) ? matrixPosition.z : this.fallbackDepth)
 
-    // The IPD-based distance estimate inflates with yaw (foreshortened irises read
-    // as "farther"), which makes the whole frame drift in depth on a turn. Hold the
-    // distance steady while turned; only re-estimate it near-frontal. Doing this at
-    // the source keeps x, y and z consistent (no recede, no forward pop).
+    // The IPD-based distance estimate inflates with yaw OR pitch (foreshortened/
+    // occluded irises read as "farther" turning sideways, and looking down partly
+    // hides the iris under the eyelid the same way), which makes the whole frame
+    // drift in depth. Hold the distance steady while off-frontal on EITHER axis;
+    // only re-estimate near-frontal. Doing this at the source keeps x, y and z
+    // consistent (no recede, no forward pop). Originally yaw-only -- pitch was
+    // missed, so looking down still jittered (confirmed live).
     const headEuler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ')
-    const frontalDepth = Math.abs(headEuler.y) < THREE.MathUtils.degToRad(5)
+    const frontalDepth = Math.abs(headEuler.y) < THREE.MathUtils.degToRad(5) &&
+      Math.abs(headEuler.x) < THREE.MathUtils.degToRad(5)
     if (this._heldDepth == null) {
       this._heldDepth = rawDepth
     } else if (frontalDepth) {
