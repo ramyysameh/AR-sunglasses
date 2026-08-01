@@ -1,13 +1,16 @@
 // Lens reflection tuning. Defaults are baked from on-device tuning; the URL
 // params exist to re-tune on a real phone, exactly like ?gscale and ?voffset.
 const DEFAULTS = {
-  // 1.8 -> 0.5 -> 1.6. Went down when the lens first got dark (0.35 opacity,
-  // near-black) to stop an inconsistent grey/black flicker; opacity has since
-  // dropped further to 0.18 (user: "black but very transparent"), which left
-  // almost no material to carry any highlight at 0.5 -- confirmed live, the
-  // reflection was barely visible. Raised well past the original 1.8 to
-  // compensate for how little of the material is even there anymore.
-  intensity: 1.6,
+  // 1.8 -> 0.5 -> 1.6 -> 0.15. envMapIntensity is a FLAT multiplier applied
+  // uniformly, including straight-on/normal-incidence view -- raising it to
+  // fix a too-faint reflection washed the whole lens white even facing the
+  // camera dead-on (confirmed live), since there's so little material color
+  // (opacity 0.18) left to compete with a bright uniform sheen. The visible,
+  // angle-dependent highlight the user actually wants belongs on `clearcoat`
+  // below (Fresnel-weighted: naturally near-zero contribution straight-on,
+  // strong at grazing angles) -- this stays low so straight-on view reads as
+  // the tint color, not the sky.
+  intensity: 0.15,
   // Roughness floor. Smoke_Lens is authored at 0 (perfect mirror), which makes
   // the sun a hard aliased dot; a little roughness blooms it into a glint.
   roughness: 0.06,

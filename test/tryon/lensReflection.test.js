@@ -4,7 +4,7 @@ import { resolveLensReflectionConfig, applyLensReflection } from '../../src/core
 describe('resolveLensReflectionConfig', () => {
   it('defaults to the baked device-tuned values', () => {
     const config = resolveLensReflectionConfig('')
-    expect(config.intensity).toBeCloseTo(1.6)
+    expect(config.intensity).toBeCloseTo(0.15)
     expect(config.roughness).toBeCloseTo(0.06)
     expect(config.sunAzimuthDeg).toBeCloseTo(35)
     // Near the horizon on purpose: a lens facing the camera reflects the
@@ -28,7 +28,7 @@ describe('resolveLensReflectionConfig', () => {
 
   it('ignores non-numeric and out-of-range values', () => {
     const config = resolveLensReflectionConfig('?lensrefl=abc&lensrough=5&sunel=400')
-    expect(config.intensity).toBeCloseTo(1.6)
+    expect(config.intensity).toBeCloseTo(0.15)
     expect(config.roughness).toBeCloseTo(0.06)
     expect(config.sunElevationDeg).toBeCloseTo(5)
   })
