@@ -157,7 +157,9 @@ export class GlassesModelLoader {
           }
 
           if ('opacity' in material) {
-            material.opacity = materialProfile.lensOpacity ?? 0.62
+            // Lowered from 0.62 -- user feedback on a real registered model
+            // (Gripz Pelmo): wanted noticeably more see-through than that.
+            material.opacity = materialProfile.lensOpacity ?? 0.35
           }
 
           applyLensReflection(material, this.lensEnvMap, this.lensReflection)
