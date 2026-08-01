@@ -17,6 +17,14 @@ const DEFAULTS = {
   // the elevation-0 ring at any yaw, so a higher sun is simply never reflected. See
   // the sunElevationDeg note in skyTexture.js. ?sunel overrides.
   sunElevationDeg: 5,
+  // A thin glossy clearcoat, not the base material reflection: real glass gets
+  // MUCH more reflective at grazing angles than face-on (Fresnel), which envMap +
+  // envMapIntensity alone doesn't reproduce (that's a flat multiplier regardless
+  // of view angle). Three's clearcoat lobe is view-angle-weighted by construction,
+  // so it reads as a rim highlight around the lens edge instead of a uniform sheen.
+  clearcoat: 1,
+  // Smooth enough for a crisp rim glint, not a hard mirror edge.
+  clearcoatRoughness: 0.12,
 }
 
 function resolveParam(search, key, fallback, isValid) {
@@ -31,6 +39,8 @@ export function resolveLensReflectionConfig(search) {
     // Unbounded on purpose: azimuth wraps, so any finite value is meaningful.
     sunAzimuthDeg: resolveParam(search, 'sunaz', DEFAULTS.sunAzimuthDeg, () => true),
     sunElevationDeg: resolveParam(search, 'sunel', DEFAULTS.sunElevationDeg, (v) => v >= -90 && v <= 90),
+    clearcoat: resolveParam(search, 'lensclearcoat', DEFAULTS.clearcoat, (v) => v >= 0 && v <= 1),
+    clearcoatRoughness: resolveParam(search, 'lensclearcoatrough', DEFAULTS.clearcoatRoughness, (v) => v >= 0 && v <= 1),
   }
 }
 
@@ -52,5 +62,15 @@ export function applyLensReflection(material, envMap, config) {
 
   if ('roughness' in material && material.roughness < config.roughness) {
     material.roughness = config.roughness
+  }
+
+  // Clearcoat is a separate BRDF lobe in Three's physical material, weighted by
+  // its own Fresnel term -- unlike envMapIntensity (a flat multiplier applied
+  // equally everywhere), it's naturally strong at grazing angles and weak
+  // face-on, which is what actually reads as "real glass" rather than a flat
+  // sheen painted over the whole lens.
+  if ('clearcoat' in material) {
+    material.clearcoat = config.clearcoat
+    material.clearcoatRoughness = config.clearcoatRoughness
   }
 }
