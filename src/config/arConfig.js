@@ -248,11 +248,10 @@ export function registerRuntimeGlassesConfig(key, engineModelConfig) {
     // white glare on the frame is the scene lighting reflecting off the authored
     // gloss, addressed in the lighting, not by altering the model's material.
     preserveMaterials: true,
-    // Was -0.01 (nudged block models down slightly, on the assumption
-    // auto-calibrated frames sit a touch high). User feedback on the live
-    // Gripz Pelmo model wanted the glasses higher, not lower -- removed the
-    // downward nudge. ?voffset=<n> overrides for further live tuning.
-    verticalOffset: 0,
+    // Was -0.01, then 0 (removed entirely after feedback wanted it higher) --
+    // that overshot, so split the difference. ?voffset=<n> overrides for
+    // further live tuning.
+    verticalOffset: -0.004,
   }
 
   for (const field of VECTOR3_FIELDS) {
