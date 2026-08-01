@@ -589,21 +589,12 @@ export class RenderLoop {
     // once: portrait defaults to 1.15, landscape to 1.0, ?gscale=<n> overrides.
     // "Portrait" means the rendered canvas container (camera._clientW/_clientH,
     // synced every frame in _syncSize) is taller than wide -- NOT the browser
-    // window. The storefront dialog is CSS-capped at 520x780 (portrait) even in
-    // a landscape desktop window, so checking window dimensions under-scaled
-    // the glasses on desktop.
+    // window. The storefront dialog's CSS keeps a portrait aspect on every
+    // screen size (see tryon_button.liquid), so checking window dimensions
+    // under-scaled the glasses on desktop.
     if (this._glassesScaleMultiplier == null) {
       const isPortrait = this.camera._clientH > this.camera._clientW
       this._glassesScaleMultiplier = resolveGlassesScaleMultiplier(window.location.search, isPortrait)
-      // TEMP DEBUG — remove once the desktop-sizing issue is diagnosed.
-      console.log('[gscale-debug]', {
-        search: window.location.search,
-        clientW: this.camera._clientW,
-        clientH: this.camera._clientH,
-        isPortrait,
-        resolvedMultiplier: this._glassesScaleMultiplier,
-        rawTransformScale: transform.scale,
-      })
     }
     // Vertical placement fine-tune, in world metres (negative = lower on the
     // nose). ?voffset=<n> overrides for live tuning; otherwise the per-model
