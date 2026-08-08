@@ -1,11 +1,12 @@
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import { requireActivePlanForLoader } from "../billing.server";
 
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
-  await requireActivePlanForLoader(admin);
-
+  // Auth only. The app.jsx layout owns the no-subscription experience (it shows
+  // the "choose a plan" screen and hides this route's content). This index
+  // route does no gated work, so it must NOT throw its own redirect: a redirect
+  // from /app to /app loops forever and renders a dead, control-less page.
+  await authenticate.admin(request);
   return null;
 };
 

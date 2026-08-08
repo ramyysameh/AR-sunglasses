@@ -5,11 +5,18 @@ import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
 import { saveCalibratedModel, mapProductToModel, listMappings } from '../models.server'
-import { getActivePlanName, planLimit, requireActivePlanForLoader } from '../billing.server'
+import { getActivePlanName, planLimit } from '../billing.server'
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
-  await requireActivePlanForLoader(admin)
+  // The app.jsx layout owns the no-subscription screen and hides this route's
+  // content, so an unsubscribed shop must not reach the DB here -- and this
+  // loader must NOT throw its own redirect (a /app/models -> /app -> /app loop
+  // that renders a dead, control-less page). Return empty, do no gated work.
+  const activePlan = await getActivePlanName(admin)
+  if (!activePlan) {
+    return { assets: [], mappings: [] }
+  }
   const [assets, mappings] = await Promise.all([
     prisma.modelAsset.findMany({ where: { shop: session.shop }, orderBy: { createdAt: 'desc' } }),
     listMappings(prisma, session.shop),
