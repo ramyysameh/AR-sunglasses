@@ -1,8 +1,13 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "f2a93eb007cec5748830afd8ccd04203"
+# Canonical app: be1db9 / "AR Try-on", served from ar-sunglasses-tryon.vercel.app
+# (the git-main-connected Vercel project). The old f2a93e / ar-sunglasses-shopify-app
+# registration was a duplicate whose URL is only a rename-leftover alias on the same
+# project — installing it booted App Bridge with the wrong identity and blanked the
+# embedded page. Default config points here so `shopify app dev/deploy` can't re-cross.
+client_id = "be1db9d64c7c617dcd67f6add58f4824"
 name = "AR Try-on"
-application_url = "https://ar-sunglasses-shopify-app.vercel.app"
+application_url = "https://ar-sunglasses-tryon.vercel.app"
 embedded = true
 
 [build]
@@ -54,4 +59,4 @@ scopes = "write_products,write_metaobjects,write_metaobject_definitions"
 [auth]
 # Path is /auth/callback, not the legacy /api/auth: shopify.server.js sets
 # authPathPrefix "/auth", so OAuth returns through app/routes/auth.$.jsx.
-redirect_urls = [ "https://ar-sunglasses-shopify-app.vercel.app/auth/callback" ]
+redirect_urls = [ "https://ar-sunglasses-tryon.vercel.app/auth/callback" ]

@@ -8,7 +8,7 @@
 //      an age above zero). This is the part that actually proves caching --
 //      a correct header on a never-cached response would pass check 1 alone.
 
-const baseUrl = (process.argv[2] ?? 'https://ar-sunglasses-shopify-app.vercel.app').replace(/\/$/, '')
+const baseUrl = (process.argv[2] ?? 'https://ar-sunglasses-tryon.vercel.app').replace(/\/$/, '')
 const merchantAssetId = process.argv[3] ?? null
 
 const IMMUTABLE = 'public, max-age=31536000, immutable'
