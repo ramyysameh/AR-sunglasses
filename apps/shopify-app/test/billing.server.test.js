@@ -4,7 +4,6 @@ import {
   GRACE_PERIOD_DAYS,
   planLimit,
   isServable,
-  requireActivePlanForLoader,
   requireActivePlanForAction,
 } from '../app/billing.server.js'
 
@@ -59,20 +58,6 @@ describe('isServable', () => {
 
   it('does NOT serve a lapsed subscription with no grace timestamp', () => {
     expect(isServable({ status: 'FROZEN', graceEndsAt: null }, now)).toBe(false)
-  })
-})
-
-describe('requireActivePlanForLoader', () => {
-  it('throws an in-app redirect Response when there is no active plan', async () => {
-    const admin = fakeAdmin([])
-    await expect(requireActivePlanForLoader(admin)).rejects.toMatchObject({
-      status: 302,
-    })
-  })
-
-  it('resolves without throwing when a plan is active', async () => {
-    const admin = fakeAdmin([{ name: 'Starter', status: 'ACTIVE' }])
-    await expect(requireActivePlanForLoader(admin)).resolves.toBeUndefined()
   })
 })
 

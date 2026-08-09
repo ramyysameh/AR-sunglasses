@@ -1,12 +1,20 @@
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
-import { requireActivePlanForLoader } from "../billing.server";
+import { getActivePlanName } from "../billing.server";
 import prisma from "../db.server";
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request);
-  await requireActivePlanForLoader(admin);
+  // The app.jsx layout owns the no-subscription screen and hides this route's
+  // content, so this loader must NOT throw its own redirect: a /app -> /app
+  // redirect loops forever and renders a dead, control-less page (App Store
+  // rejection Ref 127328). On no plan, do no gated DB work and return zeros;
+  // the checklist just shows "To do".
+  const activePlan = await getActivePlanName(admin);
+  if (!activePlan) {
+    return { modelCount: 0, mappingCount: 0 };
+  }
   const [modelCount, mappingCount] = await Promise.all([
     prisma.modelAsset.count({ where: { shop: session.shop } }),
     prisma.productMapping.count({ where: { shop: session.shop } }),

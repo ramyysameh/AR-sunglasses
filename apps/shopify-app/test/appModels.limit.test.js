@@ -112,12 +112,14 @@ describe('map action tier limit', () => {
 })
 
 describe('models loader subscription gate', () => {
-  it('redirects to /app when there is no active subscription', async () => {
+  it('does NOT redirect and returns empty data when there is no active subscription', async () => {
     hoisted.plan = null
-    await expect(loader({ request: new Request('https://x/app/models') })).rejects.toMatchObject({
-      status: 302,
-      headers: expect.objectContaining({ get: expect.any(Function) }),
-    })
+    // Throwing redirect('/app') here looped forever (/app/models -> /app ->
+    // /app...), rendering a dead, control-less page (App Store rejection Ref
+    // 127328). The app.jsx layout owns the no-subscription screen, so this
+    // loader must resolve without a redirect and do no gated DB work.
+    const result = await loader({ request: new Request('https://x/app/models') })
+    expect(result).toEqual({ assets: [], mappings: [] })
   })
 
   it('loads normally with an active subscription', async () => {
