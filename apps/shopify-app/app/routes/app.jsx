@@ -34,24 +34,14 @@ export default function App() {
   }, [pricingUrl]);
 
   if (pricingUrl) {
-    // A plain <a target="_top"> (not an s-link) guarantees an interactable
-    // control that survives even if the auto-redirect above is popup-blocked:
-    // App Bridge only intercepts navigation from Polaris s-* components, and a
-    // user click on target="_top" performs the top-level break-out the admin
-    // pricing page needs (it can't be embedded in this app's iframe).
     return (
       <AppProvider embedded apiKey={apiKey}>
-        <s-page heading="Choose a plan">
-          <s-section heading="A subscription is required">
-            <s-paragraph>
-              AR Try-on needs an active plan before you can add try-on to your
-              products. Choose a plan to get started.
-            </s-paragraph>
-            <s-paragraph>
-              <a href={pricingUrl} target="_top" rel="noreferrer">
-                Choose a plan
-              </a>
-            </s-paragraph>
+        <s-page heading="AR Try-on">
+          <s-section>
+            <s-stack direction="block" gap="base" alignItems="center">
+              <s-spinner accessibilityLabel="Loading"></s-spinner>
+              <s-text>Taking you to choose a plan…</s-text>
+            </s-stack>
           </s-section>
         </s-page>
       </AppProvider>

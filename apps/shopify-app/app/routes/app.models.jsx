@@ -1,27 +1,30 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { useFetcher, useLoaderData } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
 import { saveCalibratedModel, mapProductToModel, listMappings } from '../models.server'
-import { getActivePlanName, planLimit } from '../billing.server'
+import { getActivePlanName, planLimit, requireActivePlanForLoader } from '../billing.server'
+import { fetchProductsByIds } from '../products.server'
+import ModelViewer from '../components/ModelViewer'
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
-  // The app.jsx layout owns the no-subscription screen and hides this route's
-  // content, so an unsubscribed shop must not reach the DB here -- and this
-  // loader must NOT throw its own redirect (a /app/models -> /app -> /app loop
-  // that renders a dead, control-less page). Return empty, do no gated work.
-  const activePlan = await getActivePlanName(admin)
-  if (!activePlan) {
-    return { assets: [], mappings: [] }
-  }
+  await requireActivePlanForLoader(admin)
   const [assets, mappings] = await Promise.all([
     prisma.modelAsset.findMany({ where: { shop: session.shop }, orderBy: { createdAt: 'desc' } }),
     listMappings(prisma, session.shop),
   ])
-  return { assets, mappings }
+  let products = new Map()
+  try {
+    products = await fetchProductsByIds(admin, mappings.map((m) => m.productId))
+  } catch (e) {
+    // Enrichment only — a Shopify GraphQL failure must not take down the page.
+    console.error('product enrichment failed', e)
+  }
+  const mappingsWithProduct = mappings.map((m) => ({ ...m, product: products.get(m.productId) ?? null }))
+  return { assets, mappings: mappingsWithProduct }
 }
 
 export const action = async ({ request }) => {
@@ -61,6 +64,15 @@ export const action = async ({ request }) => {
     return { mapped: true }
   }
 
+  if (intent === 'unmap') {
+    const productId = form.get('productId')?.toString().trim()
+    if (!productId) {
+      return { error: 'Missing product to remove.' }
+    }
+    await prisma.productMapping.deleteMany({ where: { shop: session.shop, productId } })
+    return { unmapped: true }
+  }
+
   const file = form.get('model')
   if (!file || typeof file === 'string') {
     return { error: 'Choose a .glb file to upload.' }
@@ -84,10 +96,11 @@ export default function Models() {
   const { assets, mappings } = useLoaderData()
   const uploadFetcher = useFetcher()
   const mapFetcher = useFetcher()
+  const unmapFetcher = useFetcher()
   const shopify = useAppBridge()
-  const fileRef = useRef(null)
-  const productRef = useRef(null)
-  const modelRef = useRef(null)
+  const [pendingFile, setPendingFile] = useState(null)
+  const [picked, setPicked] = useState(null) // { id, title, imageUrl }
+  const [modelAssetId, setModelAssetId] = useState('')
 
   const uploading = uploadFetcher.state !== 'idle'
   const mapping = mapFetcher.state !== 'idle'
@@ -102,29 +115,44 @@ export default function Models() {
   }, [up, uploadError, shopify])
 
   useEffect(() => {
-    if (mapped) shopify.toast.show('Product mapped')
+    if (mapped) {
+      shopify.toast.show('Product mapped')
+      setPicked(null)
+      setModelAssetId('')
+    }
     if (mapError) shopify.toast.show(mapError, { isError: true })
   }, [mapped, mapError, shopify])
 
+  const removeMapping = (productId) => unmapFetcher.submit({ intent: 'unmap', productId }, { method: 'POST' })
+  useEffect(() => {
+    if (unmapFetcher.data?.unmapped) shopify.toast.show('Mapping removed')
+    if (unmapFetcher.data?.error) shopify.toast.show(unmapFetcher.data.error, { isError: true })
+  }, [unmapFetcher.data, shopify])
+
   const upload = () => {
-    const file = fileRef.current?.files?.[0]
-    if (!file) {
+    if (!pendingFile) {
       shopify.toast.show('Choose a .glb file first', { isError: true })
       return
     }
     const fd = new FormData()
-    fd.append('model', file)
+    fd.append('model', pendingFile)
     uploadFetcher.submit(fd, { method: 'POST', encType: 'multipart/form-data' })
   }
 
+  const pickProduct = async () => {
+    const selection = await shopify.resourcePicker({ type: 'product', action: 'select' })
+    if (selection && selection[0]) {
+      const p = selection[0]
+      setPicked({ id: p.id, title: p.title, imageUrl: p.images?.[0]?.originalSrc ?? null })
+    }
+  }
+
   const submitMapping = () => {
-    const productId = productRef.current?.value?.trim()
-    const modelAssetId = modelRef.current?.value
-    if (!productId || !modelAssetId) {
-      shopify.toast.show('Enter a product ID and pick a model', { isError: true })
+    if (!picked?.id || !modelAssetId) {
+      shopify.toast.show('Pick a product and a model first', { isError: true })
       return
     }
-    mapFetcher.submit({ intent: 'map', productId, modelAssetId }, { method: 'POST' })
+    mapFetcher.submit({ intent: 'map', productId: picked.id, modelAssetId }, { method: 'POST' })
   }
 
   return (
@@ -135,28 +163,31 @@ export default function Models() {
           server-side by the A1 pipeline, and the normalized model is stored for
           try-on.
         </s-paragraph>
-        <input ref={fileRef} type="file" accept=".glb,model/gltf-binary" />
+        <s-drop-zone
+          label="Model file (.glb)"
+          name="model"
+          accept=".glb,model/gltf-binary"
+          onChange={(e) => setPendingFile(e.currentTarget.files?.[0] ?? null)}
+        ></s-drop-zone>
         <s-stack direction="inline" gap="base">
-          <s-button onClick={upload} {...(uploading ? { loading: true } : {})}>
-            Upload &amp; calibrate
+          <s-button variant="primary" onClick={upload} {...(uploading ? { loading: true } : {})}>
+            Upload and calibrate
           </s-button>
         </s-stack>
 
         {up && (
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+          <s-banner heading="Model calibrated" tone="success">
             <s-stack direction="block" gap="small-500">
-              <s-paragraph>Validation: {up.status}</s-paragraph>
-              <s-paragraph>Fit: {sourceLabel(up)}</s-paragraph>
-              <s-paragraph>Needs manual anchor: {up.needsManual ? 'yes' : 'no'}</s-paragraph>
-              <s-text tone="subdued">Asset {up.assetId}</s-text>
+              <s-stack direction="inline" gap="base" alignItems="center">
+                <s-text>Validation</s-text>
+                <s-badge tone="success">{up.status}</s-badge>
+              </s-stack>
+              <s-text>Fit: {sourceLabel(up)}</s-text>
+              {up.needsManual && <s-badge tone="warning">Needs manual anchor</s-badge>}
             </s-stack>
-          </s-box>
+          </s-banner>
         )}
-        {uploadError && (
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="critical">
-            <s-paragraph>{uploadError}</s-paragraph>
-          </s-box>
-        )}
+        {uploadError && <s-banner heading="Upload failed" tone="critical">{uploadError}</s-banner>}
       </s-section>
 
       <s-section heading="Map a product to a model">
@@ -164,70 +195,106 @@ export default function Models() {
           <s-paragraph>Upload a model first, then map it to a product.</s-paragraph>
         ) : (
           <s-stack direction="block" gap="base">
-            <s-paragraph>
-              Enter a product ID (e.g. <s-text>gid://shopify/Product/123</s-text>) and choose a model.
-            </s-paragraph>
-            <input
-              ref={productRef}
-              type="text"
-              placeholder="gid://shopify/Product/…"
-              style={{ minWidth: '320px', padding: '4px' }}
-            />
-            <select ref={modelRef} style={{ padding: '4px' }}>
+            <s-paragraph>Select a product, then choose a model to map it to.</s-paragraph>
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <s-button onClick={pickProduct} icon="product">
+                {picked ? 'Change product' : 'Select product'}
+              </s-button>
+              {picked && (
+                <s-stack direction="inline" gap="small-500" alignItems="center">
+                  {picked.imageUrl && (
+                    <s-thumbnail src={picked.imageUrl} alt={picked.title} size="small"></s-thumbnail>
+                  )}
+                  <s-text type="strong">{picked.title}</s-text>
+                </s-stack>
+              )}
+            </s-stack>
+            <s-select
+              label="Model"
+              name="modelAssetId"
+              value={modelAssetId}
+              onChange={(e) => setModelAssetId(e.target.value)}
+            >
+              <s-option value="">Choose a model…</s-option>
               {assets.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.id} ({a.status})
-                </option>
+                <s-option key={a.id} value={a.id}>
+                  {a.status} · {a.id.slice(0, 8)}
+                </s-option>
               ))}
-            </select>
+            </s-select>
             <s-stack direction="inline" gap="base">
-              <s-button onClick={submitMapping} {...(mapping ? { loading: true } : {})}>
+              <s-button variant="primary" onClick={submitMapping} {...(mapping ? { loading: true } : {})}>
                 Map product
               </s-button>
             </s-stack>
-            {mapError && (
-              <s-box padding="base" borderWidth="base" borderRadius="base" background="critical">
-                <s-paragraph>{mapError}</s-paragraph>
-              </s-box>
-            )}
+            {mapError && <s-banner heading="Could not map" tone="critical">{mapError}</s-banner>}
           </s-stack>
         )}
       </s-section>
 
       <s-section heading="Product mappings">
         {mappings.length === 0 ? (
-          <s-paragraph>No products mapped yet.</s-paragraph>
-        ) : (
-          <s-stack direction="block" gap="base">
-            {mappings.map((m) => (
-              <s-box key={m.id} padding="base" borderWidth="base" borderRadius="base">
-                <s-stack direction="block" gap="small-500">
-                  <s-text>{m.productId}</s-text>
-                  <s-text tone="subdued">→ model {m.modelAssetId} ({m.modelAsset.status})</s-text>
-                </s-stack>
-              </s-box>
-            ))}
+          <s-stack direction="block" gap="base" alignItems="center">
+            <s-text tone="subdued">No products mapped yet.</s-text>
+            <s-paragraph>Upload a model, then map it to the product it belongs to.</s-paragraph>
           </s-stack>
+        ) : (
+          <s-table variant="auto">
+            <s-table-header-row>
+              <s-table-header listSlot="primary">Product</s-table-header>
+              <s-table-header>Model status</s-table-header>
+              <s-table-header>Actions</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {mappings.map((m) => (
+                <s-table-row key={m.id}>
+                  <s-table-cell>
+                    <s-stack direction="inline" gap="small-500" alignItems="center">
+                      {m.product?.imageUrl && (
+                        <s-thumbnail src={m.product.imageUrl} alt={m.product.imageAlt ?? m.product.title} size="small"></s-thumbnail>
+                      )}
+                      <s-text type="strong">{m.product?.title ?? 'Product unavailable'}</s-text>
+                    </s-stack>
+                  </s-table-cell>
+                  <s-table-cell>
+                    <s-badge tone={m.modelAsset.status === 'ready' ? 'success' : 'warning'}>
+                      {m.modelAsset.status === 'ready' ? 'Calibrated' : 'Needs review'}
+                    </s-badge>
+                  </s-table-cell>
+                  <s-table-cell>
+                    <s-button variant="tertiary" tone="critical" icon="delete" onClick={() => removeMapping(m.productId)}>
+                      Remove
+                    </s-button>
+                  </s-table-cell>
+                </s-table-row>
+              ))}
+            </s-table-body>
+          </s-table>
         )}
       </s-section>
 
       <s-section heading="Uploaded models">
         {assets.length === 0 ? (
-          <s-paragraph>No models yet.</s-paragraph>
+          <s-stack direction="block" gap="base" alignItems="center">
+            <s-text tone="subdued">No models yet.</s-text>
+            <s-paragraph>Upload your first calibrated GLB above to get started.</s-paragraph>
+          </s-stack>
         ) : (
-          <s-stack direction="block" gap="base">
+          <s-grid gridTemplateColumns="1fr 1fr" gap="base">
             {assets.map((a) => (
               <s-box key={a.id} padding="base" borderWidth="base" borderRadius="base">
                 <s-stack direction="block" gap="small-500">
-                  <s-text>{a.id}</s-text>
-                  <s-text tone="subdued">
-                    status {a.status}
-                    {a.confidence != null ? `, confidence ${Math.round(a.confidence * 100)}%` : ''}
-                  </s-text>
+                  <ModelViewer src={`/models/${a.id}.glb`} alt={`Model ${a.id.slice(0, 8)}`} />
+                  <s-stack direction="inline" gap="small-500" alignItems="center">
+                    <s-badge tone={a.status === 'ready' ? 'success' : 'warning'}>
+                      {a.status === 'ready' ? 'Calibrated' : 'Needs review'}
+                    </s-badge>
+                    {a.confidence != null && <s-text tone="subdued">confidence {Math.round(a.confidence * 100)}%</s-text>}
+                  </s-stack>
                 </s-stack>
               </s-box>
             ))}
-          </s-stack>
+          </s-grid>
         )}
       </s-section>
     </s-page>

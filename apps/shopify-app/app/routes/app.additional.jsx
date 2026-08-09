@@ -2,6 +2,7 @@ export default function HelpPage() {
   return (
     <s-page heading="Help">
       <s-section heading="Setting up try-on for a product">
+        <s-paragraph>Follow these steps to enable try-on for a product.</s-paragraph>
         <s-ordered-list>
           <s-list-item>
             Upload a calibrated GLB model on the{" "}

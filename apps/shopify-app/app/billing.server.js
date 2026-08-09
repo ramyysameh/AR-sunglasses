@@ -1,3 +1,5 @@
+import { redirect } from 'react-router'
+
 // Managed Pricing: plan NAMES + product limits are the only billing facts in
 // code. Prices and the 7-day trial live in the Partner Dashboard. The names
 // here MUST match the dashboard plan names exactly, or planLimit() fails closed.
@@ -84,6 +86,24 @@ export async function getActivePlanName(admin) {
   const subs = body?.data?.currentAppInstallation?.activeSubscriptions ?? []
   const active = subs.find((s) => s.status === 'ACTIVE')
   return active?.name ?? null
+}
+
+/**
+ * Guard for admin LOADERS on routes other than the app.jsx layout. The
+ * layout's own gate does NOT protect child routes: React Router runs every
+ * matched route's loader independently, and the layout only redirects
+ * client-side (window.open) after the page has rendered, since the pricing
+ * page lives outside this app's iframe. This throws an in-app redirect
+ * instead, which stays inside the iframe and re-enters the layout's own
+ * external-redirect logic -- keeping the pricing-URL construction in one
+ * place rather than duplicated per route.
+ * @param {{graphql: (q: string) => Promise<Response>}} admin
+ */
+export async function requireActivePlanForLoader(admin) {
+  const activePlan = await getActivePlanName(admin)
+  if (!activePlan) {
+    throw redirect('/app')
+  }
 }
 
 /**

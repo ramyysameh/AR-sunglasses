@@ -6,9 +6,9 @@ const shop = `limit-${tag}.myshopify.com`
 
 const hoisted = vi.hoisted(() => ({ plan: 'Starter' }))
 // Fake the Admin GraphQL response itself (rather than mocking
-// getActivePlanName) so that the loader and action -- which both call
+// getActivePlanName) so that requireActivePlanForLoader -- which calls
 // getActivePlanName via an in-module reference, not through the mocked
-// export -- see the same plan the fake admin reports.
+// export -- sees the same plan as the action's own call does.
 vi.mock('../app/shopify.server.js', () => ({
   authenticate: {
     admin: async () => ({
@@ -112,14 +112,12 @@ describe('map action tier limit', () => {
 })
 
 describe('models loader subscription gate', () => {
-  it('does NOT redirect and returns empty data when there is no active subscription', async () => {
+  it('redirects to /app when there is no active subscription', async () => {
     hoisted.plan = null
-    // Throwing redirect('/app') here looped forever (/app/models -> /app ->
-    // /app...), rendering a dead, control-less page. The app.jsx layout owns
-    // the no-subscription screen, so this loader must resolve without a
-    // redirect and must do no gated DB work.
-    const result = await loader({ request: new Request('https://x/app/models') })
-    expect(result).toEqual({ assets: [], mappings: [] })
+    await expect(loader({ request: new Request('https://x/app/models') })).rejects.toMatchObject({
+      status: 302,
+      headers: expect.objectContaining({ get: expect.any(Function) }),
+    })
   })
 
   it('loads normally with an active subscription', async () => {
