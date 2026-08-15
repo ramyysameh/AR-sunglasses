@@ -48,6 +48,7 @@ model ModelAsset {
   id          String   @id @default(uuid())
   shop        String
   sourceUrl   String?
+  filename    String?
   storageRef  String
   fitMetadata Json
   confidence  Float?

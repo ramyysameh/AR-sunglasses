@@ -86,12 +86,26 @@ export const action = async ({ request }) => {
     return { error: 'Choose a .glb file to upload.' }
   }
   const bytes = new Uint8Array(await file.arrayBuffer())
+  const filename = typeof file.name === 'string' ? file.name : null
   try {
-    const uploaded = await saveCalibratedModel(prisma, session.shop, bytes)
+    const uploaded = await saveCalibratedModel(prisma, session.shop, bytes, filename)
     return { uploaded }
   } catch (e) {
     return { error: e.message }
   }
+}
+
+// A human label for a model: its uploaded file name, with the upload date to
+// disambiguate re-uploads of the same file. Falls back to a short id for older
+// rows (and block-registered models) that predate the stored filename.
+function modelName(a) {
+  return a.filename || `Model ${a.id.slice(0, 8)}`
+}
+function modelLabel(a) {
+  const when = a.createdAt
+    ? new Date(a.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    : null
+  return when ? `${modelName(a)} · ${when}` : modelName(a)
 }
 
 function sourceLabel(up) {
@@ -231,7 +245,7 @@ export default function Models() {
               <s-option value="">Choose a model…</s-option>
               {assets.map((a) => (
                 <s-option key={a.id} value={a.id}>
-                  {a.status} · {a.id.slice(0, 8)}
+                  {modelLabel(a)}
                 </s-option>
               ))}
             </s-select>
@@ -297,7 +311,8 @@ export default function Models() {
             {assets.map((a) => (
               <s-box key={a.id} padding="base" borderWidth="base" borderRadius="base">
                 <s-stack direction="block" gap="small-500">
-                  <ModelViewer src={`/models/${a.id}.glb`} alt={`Model ${a.id.slice(0, 8)}`} />
+                  <ModelViewer src={`/models/${a.id}.glb`} alt={modelName(a)} />
+                  <s-text type="strong">{modelName(a)}</s-text>
                   <s-stack direction="inline" gap="small-500" alignItems="center">
                     <s-badge tone={a.status === 'ready' ? 'success' : 'warning'}>
                       {a.status === 'ready' ? 'Calibrated' : 'Needs review'}

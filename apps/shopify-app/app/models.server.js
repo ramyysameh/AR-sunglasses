@@ -7,7 +7,7 @@ import { tagged } from './errors.server.js'
 // calibrate the uploaded GLB via A1, store the normalized bytes, and persist a
 // ModelAsset for the shop. Returns a summary for the admin route to display.
 // Throws (via calibrateUpload) when the model fails validation.
-export async function saveCalibratedModel(prisma, shop, glbBytes) {
+export async function saveCalibratedModel(prisma, shop, glbBytes, filename = null) {
   const result = await calibrateUpload(glbBytes)
   const storageRef = `${globalThis.crypto.randomUUID()}.glb`
   await saveModelGlb(storageRef, result.normalizedGlb)
@@ -15,6 +15,7 @@ export async function saveCalibratedModel(prisma, shop, glbBytes) {
   const asset = await prisma.modelAsset.create({
     data: {
       shop,
+      filename: filename || null,
       storageRef,
       fitMetadata: result.fitMetadata,
       confidence,
@@ -121,10 +122,17 @@ export async function registerModelByUrl(prisma, url, shop) {
   const storageRef = `${globalThis.crypto.randomUUID()}.glb`
   await saveModelGlb(storageRef, result.normalizedGlb)
 
+  let filename = null
+  try {
+    filename = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') || null
+  } catch {
+    filename = null
+  }
   const asset = await prisma.modelAsset.create({
     data: {
       shop,
       sourceUrl: url,
+      filename,
       storageRef,
       fitMetadata: result.fitMetadata,
       confidence: result.confidence?.overall ?? null,
