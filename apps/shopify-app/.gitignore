@@ -29,6 +29,9 @@ node_modules
 /public/tryon/harness/
 /public/tryon/models/*
 !/public/tryon/models/*-draco.glb
+# gripzpelmo demo loads the RAW model (useNormalizedModel:false), so the raw
+# GLB must ship too — otherwise /tryon/models/gripzpelmo.glb 404s in production.
+!/public/tryon/models/gripzpelmo.glb
 /prisma/dev.sqlite
 /prisma/dev.sqlite-journal
 database.sqlite
