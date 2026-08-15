@@ -177,6 +177,11 @@ export default function Models() {
           accept=".glb,model/gltf-binary"
           onChange={(e) => setPendingFile(e.currentTarget.files?.[0] ?? null)}
         ></s-drop-zone>
+        {pendingFile && (
+          <s-banner tone="info">
+            Selected: {pendingFile.name} ({(pendingFile.size / 1048576).toFixed(1)} MB)
+          </s-banner>
+        )}
         <s-stack direction="inline" gap="base">
           <s-button variant="primary" onClick={upload} {...(uploading ? { loading: true } : {})}>
             Upload and calibrate
