@@ -4,6 +4,8 @@ import {
   GRACE_PERIOD_DAYS,
   planLimit,
   isServable,
+  hasFreeAccess,
+  getActivePlanName,
   requireActivePlanForAction,
 } from '../app/billing.server.js'
 
@@ -58,6 +60,34 @@ describe('isServable', () => {
 
   it('does NOT serve a lapsed subscription with no grace timestamp', () => {
     expect(isServable({ status: 'FROZEN', graceEndsAt: null }, now)).toBe(false)
+  })
+})
+
+describe('hasFreeAccess (owner comp)', () => {
+  const OWNER = 'xmcjg8-uh.myshopify.com' // default FREE_ACCESS_SHOPS entry
+
+  it('comps the owner shop and rejects everyone else', () => {
+    expect(hasFreeAccess(OWNER)).toBe(true)
+    expect(hasFreeAccess(OWNER.toUpperCase())).toBe(true) // case-insensitive
+    expect(hasFreeAccess('someone-else.myshopify.com')).toBe(false)
+    expect(hasFreeAccess(null)).toBe(false)
+    expect(hasFreeAccess(undefined)).toBe(false)
+  })
+
+  it('reads the owner shop as the top plan WITHOUT calling Shopify', async () => {
+    let called = false
+    const admin = {
+      graphql: async () => {
+        called = true
+        return new Response(JSON.stringify({ data: { currentAppInstallation: { activeSubscriptions: [] } } }))
+      },
+    }
+    expect(await getActivePlanName(admin, OWNER)).toBe('Pro')
+    expect(called).toBe(false)
+  })
+
+  it('still requires a real subscription for a non-comped shop', async () => {
+    expect(await getActivePlanName(fakeAdmin([]), 'someone-else.myshopify.com')).toBeNull()
   })
 })
 

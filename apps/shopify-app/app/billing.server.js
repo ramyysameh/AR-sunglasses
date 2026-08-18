@@ -6,6 +6,29 @@ export const PLAN_LIMITS = { Starter: 10, Growth: 40, Pro: Infinity }
 // Days the storefront try-on keeps serving after a subscription lapses.
 export const GRACE_PERIOD_DAYS = 7
 
+// Owner-comped shops: the app owner's own stores get full, free access with no
+// Shopify subscription. Managed Pricing has no per-store comp and no free tier,
+// so this is enforced in code. Matched against the myshopify domain (session.shop
+// in admin, the `shop` query param on the storefront). Set FREE_ACCESS_SHOPS to a
+// comma-separated list of myshopify domains to override; the default covers the
+// Gripz store. A comped shop is treated as the top (Pro / unlimited) plan.
+const FREE_ACCESS_SHOPS = new Set(
+  // eslint-disable-next-line no-undef
+  (process.env.FREE_ACCESS_SHOPS || 'xmcjg8-uh.myshopify.com')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
+)
+
+/**
+ * Whether a shop is owner-comped (free, unlimited access, no subscription).
+ * @param {string|null|undefined} shop myshopify domain
+ * @returns {boolean}
+ */
+export function hasFreeAccess(shop) {
+  return Boolean(shop) && FREE_ACCESS_SHOPS.has(shop.toLowerCase())
+}
+
 /**
  * Product cap for a plan name. Unknown/missing name -> 0 (fail closed): a
  * dashboard/code name mismatch must block, never unlock.
@@ -76,9 +99,12 @@ const ACTIVE_SUBSCRIPTIONS_QUERY = `#graphql
  * context. Returns null if there is no active subscription. Admin-only — never
  * call from the storefront path (it makes a live API call).
  * @param {{graphql: (q: string) => Promise<Response>}} admin
+ * @param {string|null} [shop] myshopify domain, for the owner-comp short-circuit
  * @returns {Promise<string|null>}
  */
-export async function getActivePlanName(admin) {
+export async function getActivePlanName(admin, shop = null) {
+  // Owner-comped stores skip the live Shopify check and read as the top plan.
+  if (hasFreeAccess(shop)) return 'Pro'
   const res = await admin.graphql(ACTIVE_SUBSCRIPTIONS_QUERY)
   const body = await res.json()
   const subs = body?.data?.currentAppInstallation?.activeSubscriptions ?? []
@@ -91,10 +117,11 @@ export async function getActivePlanName(admin) {
  * redirect a loader can, so this returns the same {error} shape the route
  * already renders instead of throwing.
  * @param {{graphql: (q: string) => Promise<Response>}} admin
+ * @param {string|null} [shop] myshopify domain, for the owner-comp short-circuit
  * @returns {Promise<{error: string}|null>} error object, or null if active
  */
-export async function requireActivePlanForAction(admin) {
-  const activePlan = await getActivePlanName(admin)
+export async function requireActivePlanForAction(admin, shop = null) {
+  const activePlan = await getActivePlanName(admin, shop)
   if (!activePlan) {
     return { error: 'No active subscription. Choose a plan to continue.' }
   }

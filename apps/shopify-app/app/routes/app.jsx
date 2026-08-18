@@ -8,7 +8,7 @@ import { getActivePlanName } from "../billing.server";
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
 
-  const activePlan = await getActivePlanName(admin);
+  const activePlan = await getActivePlanName(admin, session.shop);
   // No active subscription (fresh install, or lapsed -- grace covers only the
   // storefront, not the merchant's own admin). Send them to Managed Pricing.
   let pricingUrl = null;

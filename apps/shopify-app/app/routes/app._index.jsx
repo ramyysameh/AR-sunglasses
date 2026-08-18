@@ -11,7 +11,7 @@ export const loader = async ({ request }) => {
   // redirect loops forever and renders a dead, control-less page (App Store
   // rejection Ref 127328). On no plan, do no gated DB work and return zeros;
   // the checklist just shows "To do".
-  const activePlan = await getActivePlanName(admin);
+  const activePlan = await getActivePlanName(admin, session.shop);
   if (!activePlan) {
     return { modelCount: 0, mappingCount: 0 };
   }

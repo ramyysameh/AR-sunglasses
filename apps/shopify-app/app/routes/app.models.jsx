@@ -16,7 +16,7 @@ export const loader = async ({ request }) => {
   // loader must NOT throw its own redirect (a /app/models -> /app -> /app loop
   // that renders a dead, control-less page: App Store rejection Ref 127328).
   // Return empty, do no gated work.
-  const activePlan = await getActivePlanName(admin)
+  const activePlan = await getActivePlanName(admin, session.shop)
   if (!activePlan) {
     return { assets: [], mappings: [] }
   }
@@ -40,7 +40,7 @@ export const action = async ({ request }) => {
   // Checked once up front (not just for new mappings): without this, a shop
   // with no subscription could still remap an already-mapped product, or
   // upload models, since those paths have no other billing check.
-  const activePlan = await getActivePlanName(admin)
+  const activePlan = await getActivePlanName(admin, session.shop)
   if (!activePlan) {
     return { error: 'No active subscription. Choose a plan to continue.' }
   }
