@@ -4,7 +4,8 @@ import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
-import { saveCalibratedModel, mapProductToModel, listMappings } from '../models.server'
+import { finalizeUpload, mapProductToModel, listMappings } from '../models.server'
+import { presignModelUpload } from '../storage.server'
 import { getActivePlanName, planLimit } from '../billing.server'
 import { fetchProductsByIds } from '../products.server'
 import ModelViewer from '../components/ModelViewer'
@@ -81,18 +82,22 @@ export const action = async ({ request }) => {
     return { unmapped: true }
   }
 
-  const file = form.get('model')
-  if (!file || typeof file === 'string') {
-    return { error: 'Choose a .glb file to upload.' }
+  if (intent === 'upload-presign') {
+    return await presignModelUpload()
   }
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  const filename = typeof file.name === 'string' ? file.name : null
-  try {
-    const uploaded = await saveCalibratedModel(prisma, session.shop, bytes, filename)
-    return { uploaded }
-  } catch (e) {
-    return { error: e.message }
+
+  if (intent === 'upload-finalize') {
+    const storageRef = form.get('storageRef')?.toString()
+    const filename = form.get('filename')?.toString() || null
+    try {
+      const uploaded = await finalizeUpload(prisma, session.shop, storageRef, filename)
+      return { uploaded }
+    } catch (e) {
+      return { error: e.message }
+    }
   }
+
+  return { error: 'Unknown action.' }
 }
 
 // A human label for a model: its uploaded file name, with the upload date to
