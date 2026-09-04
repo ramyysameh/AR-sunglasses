@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useFetcher, useLoaderData } from 'react-router'
+import { useFetcher, useLoaderData, useRevalidator } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
@@ -121,25 +121,22 @@ function sourceLabel(up) {
 
 export default function Models() {
   const { assets, mappings } = useLoaderData()
-  const uploadFetcher = useFetcher()
   const mapFetcher = useFetcher()
   const unmapFetcher = useFetcher()
   const shopify = useAppBridge()
+  const revalidator = useRevalidator()
   const [pendingFile, setPendingFile] = useState(null)
   const [picked, setPicked] = useState(null) // { id, title, imageUrl }
   const [modelAssetId, setModelAssetId] = useState('')
+  const [progress, setProgress] = useState(null) // null | 0..100 | 'calibrating'
+  const [uploadResult, setUploadResult] = useState(null)
+  const [uploadErr, setUploadErr] = useState(null)
+  const uploading = progress !== null
+  const MAX_UPLOAD_BYTES = 25 * 1048576
 
-  const uploading = uploadFetcher.state !== 'idle'
   const mapping = mapFetcher.state !== 'idle'
-  const up = uploadFetcher.data?.uploaded
-  const uploadError = uploadFetcher.data?.error
   const mapError = mapFetcher.data?.error
   const mapped = mapFetcher.data?.mapped
-
-  useEffect(() => {
-    if (up) shopify.toast.show('Model calibrated')
-    if (uploadError) shopify.toast.show(uploadError, { isError: true })
-  }, [up, uploadError, shopify])
 
   useEffect(() => {
     if (mapped) {
@@ -156,14 +153,58 @@ export default function Models() {
     if (unmapFetcher.data?.error) shopify.toast.show(unmapFetcher.data.error, { isError: true })
   }, [unmapFetcher.data, shopify])
 
-  const upload = () => {
+  const upload = async () => {
     if (!pendingFile) {
-      shopify.toast.show('Choose a .glb file first', { isError: true })
-      return
+      shopify.toast.show('Choose a .glb file first', { isError: true }); return
     }
-    const fd = new FormData()
-    fd.append('model', pendingFile)
-    uploadFetcher.submit(fd, { method: 'POST', encType: 'multipart/form-data' })
+    if (!pendingFile.name.toLowerCase().endsWith('.glb')) {
+      shopify.toast.show('Choose a .glb file', { isError: true }); return
+    }
+    if (pendingFile.size > MAX_UPLOAD_BYTES) {
+      shopify.toast.show('Model exceeds the 25 MB limit', { isError: true }); return
+    }
+    setUploadErr(null); setUploadResult(null); setProgress(0)
+    try {
+      // 1) presign
+      const pf = new FormData(); pf.append('intent', 'upload-presign')
+      const presign = await fetch('/app/models', { method: 'POST', body: pf }).then((r) => r.json())
+      if (presign.error) throw new Error(presign.error)
+      const { uploadUrl, storageRef } = presign
+
+      // 2) direct PUT with progress (XHR — fetch can't report upload progress)
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('PUT', uploadUrl)
+        xhr.setRequestHeader('Content-Type', 'model/gltf-binary')
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100))
+        }
+        xhr.onload = () =>
+          xhr.status >= 200 && xhr.status < 300
+            ? resolve()
+            : reject(new Error(`Upload failed (${xhr.status})`))
+        xhr.onerror = () => reject(new Error('Upload failed (network/CORS)'))
+        xhr.send(pendingFile)
+      })
+
+      // 3) finalize (calibrate server-side)
+      setProgress('calibrating')
+      const ff = new FormData()
+      ff.append('intent', 'upload-finalize')
+      ff.append('storageRef', storageRef)
+      ff.append('filename', pendingFile.name)
+      const fin = await fetch('/app/models', { method: 'POST', body: ff }).then((r) => r.json())
+      if (fin.error) throw new Error(fin.error)
+
+      setUploadResult(fin.uploaded)
+      shopify.toast.show('Model calibrated')
+      revalidator.revalidate() // refresh the model list (no fetcher to auto-revalidate now)
+    } catch (e) {
+      setUploadErr(e.message)
+      shopify.toast.show(e.message, { isError: true })
+    } finally {
+      setProgress(null)
+    }
   }
 
   const pickProduct = async () => {
@@ -207,19 +248,32 @@ export default function Models() {
           </s-button>
         </s-stack>
 
-        {up && (
+        {progress !== null && (
+          <s-stack direction="block" gap="small-500">
+            {typeof progress === 'number' ? (
+              <>
+                <progress value={progress} max="100" style={{ width: '100%' }} />
+                <s-text>Uploading… {progress}%</s-text>
+              </>
+            ) : (
+              <s-text>Calibrating…</s-text>
+            )}
+          </s-stack>
+        )}
+
+        {uploadResult && (
           <s-banner heading="Model calibrated" tone="success">
             <s-stack direction="block" gap="small-500">
               <s-stack direction="inline" gap="base" alignItems="center">
                 <s-text>Validation</s-text>
-                <s-badge tone="success">{up.status}</s-badge>
+                <s-badge tone="success">{uploadResult.status}</s-badge>
               </s-stack>
-              <s-text>Fit: {sourceLabel(up)}</s-text>
-              {up.needsManual && <s-badge tone="warning">Needs manual anchor</s-badge>}
+              <s-text>Fit: {sourceLabel(uploadResult)}</s-text>
+              {uploadResult.needsManual && <s-badge tone="warning">Needs manual anchor</s-badge>}
             </s-stack>
           </s-banner>
         )}
-        {uploadError && <s-banner heading="Upload failed" tone="critical">{uploadError}</s-banner>}
+        {uploadErr && <s-banner heading="Upload failed" tone="critical">{uploadErr}</s-banner>}
       </s-section>
 
       <s-section heading="Map a product to a model">
