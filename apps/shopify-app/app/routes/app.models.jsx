@@ -83,7 +83,11 @@ export const action = async ({ request }) => {
   }
 
   if (intent === 'upload-presign') {
-    return await presignModelUpload()
+    try {
+      return await presignModelUpload()
+    } catch (e) {
+      return { error: e.message }
+    }
   }
 
   if (intent === 'upload-finalize') {
