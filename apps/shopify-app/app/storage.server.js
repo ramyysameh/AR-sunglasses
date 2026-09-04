@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 /**
  * Object storage for calibrated GLBs.
@@ -40,6 +41,27 @@ function getClient() {
     })
   }
   return client
+}
+
+/**
+ * Presigned PUT URL for a direct browser->storage model upload, bypassing the
+ * serverless request-body size cap. The returned key lives under `uploads/` — a
+ * transport buffer that `finalizeUpload` consumes (reads + deletes) after the
+ * client PUT. Default 5-minute expiry: long enough for a 25 MB upload on a slow
+ * connection, short enough that a leaked URL is not a lasting capability.
+ */
+export async function presignModelUpload({ expiresIn = 300 } = {}) {
+  const storageRef = `uploads/${globalThis.crypto.randomUUID()}.glb`
+  const uploadUrl = await getSignedUrl(
+    getClient(),
+    new PutObjectCommand({
+      Bucket: process.env.S3_BUCKET,
+      Key: storageRef,
+      ContentType: 'model/gltf-binary',
+    }),
+    { expiresIn },
+  )
+  return { uploadUrl, storageRef }
 }
 
 export async function saveModelGlb(storageRef, bytes) {
