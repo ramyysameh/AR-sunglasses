@@ -1,6 +1,6 @@
 import { calibrateUpload } from './calibration.server.js'
-import { saveModelGlb } from './storage.server.js'
-import { fetchRemoteGlb, assertAllowedGlbUrl } from './remoteGlb.server.js'
+import { saveModelGlb, readModelGlb, deleteModelGlb } from './storage.server.js'
+import { fetchRemoteGlb, assertAllowedGlbUrl, MAX_GLB_BYTES } from './remoteGlb.server.js'
 import { tagged } from './errors.server.js'
 
 // Task 5 core pipeline (HTTP-free, so it's testable without the admin UI):
@@ -29,6 +29,35 @@ export async function saveCalibratedModel(prisma, shop, glbBytes, filename = nul
     confidence,
     needsManual: result.needsManual,
   }
+}
+
+const TEMP_UPLOAD_KEY = /^uploads\/[0-9a-f-]+\.glb$/
+
+/**
+ * Finalize a direct (presigned) upload: the client has already PUT the raw GLB to
+ * the temp `uploads/<uuid>.glb` key. Read it, size-check it, delete the temp
+ * buffer, and run the same calibrate->store->persist pipeline as a normal upload.
+ *
+ * The temp key is client-supplied, so its shape is validated (never trust a raw
+ * key — an attacker could otherwise point us at any object). Size is enforced
+ * here authoritatively; the browser check is only UX.
+ */
+export async function finalizeUpload(prisma, shop, storageRef, filename = null) {
+  if (typeof storageRef !== 'string' || !TEMP_UPLOAD_KEY.test(storageRef)) {
+    throw tagged('BAD_UPLOAD_KEY', `invalid upload key: ${String(storageRef)}`)
+  }
+  const bytes = await readModelGlb(storageRef)
+  if (!bytes) {
+    throw tagged('UPLOAD_MISSING', 'upload expired, please try again')
+  }
+  if (bytes.length > MAX_GLB_BYTES) {
+    await deleteModelGlb(storageRef)
+    throw tagged('TOO_LARGE', `upload ${bytes.length} exceeds ${MAX_GLB_BYTES}`)
+  }
+  // Bytes are in memory now; the temp buffer is no longer needed. Deleting before
+  // calibration means a calibration failure leaves no orphan behind either.
+  await deleteModelGlb(storageRef)
+  return saveCalibratedModel(prisma, shop, bytes, filename)
 }
 
 // Task 9: map a product to a calibrated model. Upsert on (shop, productId) so

@@ -27,6 +27,7 @@
   "dependencies": {
     "@artryon/calibration": "*",
     "@aws-sdk/client-s3": "^3.1090.0",
+    "@aws-sdk/s3-request-presigner": "^3.1090.0",
     "@gltf-transform/core": "^4.4.0",
     "@gltf-transform/extensions": "^4.4.0",
     "@google/model-viewer": "^4.3.1",

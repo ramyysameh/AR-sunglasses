@@ -10,7 +10,7 @@ const ALLOWED_HOST = 'cdn.shopify.com'
 // parses and re-exports, so peak memory is a multiple of this -- the number is
 // chosen to stay clear of Vercel's 1 GB function limit, not merely to be
 // generous.
-const MAX_GLB_BYTES = 25 * 1024 * 1024
+export const MAX_GLB_BYTES = 25 * 1024 * 1024
 const FETCH_TIMEOUT_MS = 15_000
 
 /**
