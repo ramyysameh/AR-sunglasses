@@ -4,8 +4,7 @@ import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
-import { finalizeUpload, mapProductToModel, listMappings } from '../models.server'
-import { presignModelUpload } from '../storage.server'
+import { mapProductToModel, listMappings } from '../models.server'
 import { getActivePlanName, planLimit } from '../billing.server'
 import { fetchProductsByIds } from '../products.server'
 import ModelViewer from '../components/ModelViewer'
@@ -82,24 +81,9 @@ export const action = async ({ request }) => {
     return { unmapped: true }
   }
 
-  if (intent === 'upload-presign') {
-    try {
-      return await presignModelUpload()
-    } catch (e) {
-      return { error: e.message }
-    }
-  }
-
-  if (intent === 'upload-finalize') {
-    const storageRef = form.get('storageRef')?.toString()
-    const filename = form.get('filename')?.toString() || null
-    try {
-      const uploaded = await finalizeUpload(prisma, session.shop, storageRef, filename)
-      return { uploaded }
-    } catch (e) {
-      return { error: e.message }
-    }
-  }
+  // Model upload (presign/finalize) lives in the api.model-upload resource
+  // route, not here: a raw fetch() POST to this UI route returns the rendered
+  // HTML document instead of JSON. See app/routes/api.model-upload.jsx.
 
   return { error: 'Unknown action.' }
 }
@@ -157,6 +141,22 @@ export default function Models() {
     if (unmapFetcher.data?.error) shopify.toast.show(unmapFetcher.data.error, { isError: true })
   }, [unmapFetcher.data, shopify])
 
+  // POST to the resource route and parse JSON defensively: a non-JSON body
+  // (an error page, an auth bounce) becomes a clear message instead of the
+  // opaque "Unexpected token '<'" a bare response.json() throws on HTML.
+  const postJson = async (body) => {
+    const res = await fetch('/api/model-upload', { method: 'POST', body })
+    const text = await res.text()
+    let data
+    try {
+      data = JSON.parse(text)
+    } catch {
+      throw new Error(`Server error (HTTP ${res.status})`)
+    }
+    if (data.error) throw new Error(data.error)
+    return data
+  }
+
   const upload = async () => {
     if (!pendingFile) {
       shopify.toast.show('Choose a .glb file first', { isError: true }); return
@@ -171,9 +171,7 @@ export default function Models() {
     try {
       // 1) presign
       const pf = new FormData(); pf.append('intent', 'upload-presign')
-      const presign = await fetch('/app/models', { method: 'POST', body: pf }).then((r) => r.json())
-      if (presign.error) throw new Error(presign.error)
-      const { uploadUrl, storageRef } = presign
+      const { uploadUrl, storageRef } = await postJson(pf)
 
       // 2) direct PUT with progress (XHR — fetch can't report upload progress)
       await new Promise((resolve, reject) => {
@@ -197,8 +195,7 @@ export default function Models() {
       ff.append('intent', 'upload-finalize')
       ff.append('storageRef', storageRef)
       ff.append('filename', pendingFile.name)
-      const fin = await fetch('/app/models', { method: 'POST', body: ff }).then((r) => r.json())
-      if (fin.error) throw new Error(fin.error)
+      const fin = await postJson(ff)
 
       setUploadResult(fin.uploaded)
       shopify.toast.show('Model calibrated')
