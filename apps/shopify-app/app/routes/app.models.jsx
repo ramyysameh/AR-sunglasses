@@ -5,6 +5,7 @@ import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
 import { mapProductToModel, listMappings } from '../models.server'
+import { publishMapping, publishMappings, unpublishMapping } from '../tryonMetafield.server'
 import { getActivePlanName, planLimit } from '../billing.server'
 import { fetchProductsByIds } from '../products.server'
 import ModelViewer from '../components/ModelViewer'
@@ -24,6 +25,17 @@ export const loader = async ({ request }) => {
     prisma.modelAsset.findMany({ where: { shop: session.shop }, orderBy: { createdAt: 'desc' } }),
     listMappings(prisma, session.shop),
   ])
+  // Backfill / self-heal. Mappings made before the storefront gate existed have
+  // no metafield, so their block would go dark on this deploy; the same is true
+  // of one a merchant deleted by hand from the admin. Re-publishing is
+  // idempotent and batched (one mutation per 25 mappings) on a page the
+  // merchant already has to open. Best-effort for the same reason as the
+  // product enrichment below: a Shopify API failure must not take down the page.
+  try {
+    await publishMappings(admin, mappings.map((m) => m.productId))
+  } catch (e) {
+    console.error('try-on metafield sync failed', e)
+  }
   let products = new Map()
   try {
     products = await fetchProductsByIds(admin, mappings.map((m) => m.productId))
@@ -69,6 +81,16 @@ export const action = async ({ request }) => {
       }
     }
     await mapProductToModel(prisma, session.shop, productId, modelAssetId)
+    // The mapping is committed; now project it onto the storefront. The theme
+    // block renders only where this metafield exists, so a failure here means a
+    // mapping the merchant can see in the admin but not on the product page --
+    // report it instead of a false success. The loader retries on next visit.
+    try {
+      await publishMapping(admin, productId)
+    } catch (e) {
+      console.error('try-on metafield publish failed', e)
+      return { error: "Mapped, but the try-on couldn't be turned on for your storefront. Try again." }
+    }
     return { mapped: true }
   }
 
@@ -78,6 +100,15 @@ export const action = async ({ request }) => {
       return { error: 'Missing product to remove.' }
     }
     await prisma.productMapping.deleteMany({ where: { shop: session.shop, productId } })
+    // A metafield left behind keeps the block on the page, where it now opens
+    // to a 404 from /api/tryon-config -- worse than either end state, so the
+    // merchant has to hear about it.
+    try {
+      await unpublishMapping(admin, productId)
+    } catch (e) {
+      console.error('try-on metafield unpublish failed', e)
+      return { error: "Mapping removed, but the try-on may still show on your storefront. Try again." }
+    }
     return { unmapped: true }
   }
 
