@@ -20,13 +20,46 @@ const FREE_ACCESS_SHOPS = new Set(
     .filter(Boolean),
 )
 
+// Time-boxed comps -- an "extended free trial" for one store. Managed Pricing
+// has no per-store trial override, and appSubscriptionTrialExtend only works
+// while a trial is still running (it returns TRIAL_NOT_ACTIVE once the trial
+// lapses), so a trial that already ended can only be extended here. Format:
+//   FREE_ACCESS_UNTIL="shop.myshopify.com:2026-10-15,other.myshopify.com:2026-11-30"
+// The date is the LAST day of free access, inclusive, UTC. Malformed entries
+// are dropped: a typo must deny access, never grant it.
+export function parseFreeAccessUntil(spec) {
+  return new Map(
+    (spec || '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const at = entry.lastIndexOf(':')
+        if (at < 1) return null
+        const shop = entry.slice(0, at).trim().toLowerCase()
+        const until = new Date(`${entry.slice(at + 1).trim()}T23:59:59.999Z`)
+        return shop && !Number.isNaN(until.getTime()) ? [shop, until] : null
+      })
+      .filter(Boolean),
+  )
+}
+
+// eslint-disable-next-line no-undef
+const FREE_ACCESS_UNTIL = parseFreeAccessUntil(process.env.FREE_ACCESS_UNTIL)
+
 /**
- * Whether a shop is owner-comped (free, unlimited access, no subscription).
+ * Whether a shop is comped (free, unlimited access, no subscription): either
+ * permanently (FREE_ACCESS_SHOPS) or through a date (FREE_ACCESS_UNTIL).
  * @param {string|null|undefined} shop myshopify domain
+ * @param {Date} [now] evaluation time, for the time-boxed comps
  * @returns {boolean}
  */
-export function hasFreeAccess(shop) {
-  return Boolean(shop) && FREE_ACCESS_SHOPS.has(shop.toLowerCase())
+export function hasFreeAccess(shop, now = new Date()) {
+  if (!shop) return false
+  const key = shop.toLowerCase()
+  if (FREE_ACCESS_SHOPS.has(key)) return true
+  const until = FREE_ACCESS_UNTIL.get(key)
+  return Boolean(until) && now <= until
 }
 
 /**

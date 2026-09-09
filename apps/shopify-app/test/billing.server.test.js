@@ -5,6 +5,7 @@ import {
   planLimit,
   isServable,
   hasFreeAccess,
+  parseFreeAccessUntil,
   getActivePlanName,
   requireActivePlanForAction,
 } from '../app/billing.server.js'
@@ -88,6 +89,34 @@ describe('hasFreeAccess (owner comp)', () => {
 
   it('still requires a real subscription for a non-comped shop', async () => {
     expect(await getActivePlanName(fakeAdmin([]), 'someone-else.myshopify.com')).toBeNull()
+  })
+})
+
+describe('parseFreeAccessUntil (extended free trial)', () => {
+  it('parses shop:date pairs, lowercasing the domain', () => {
+    const m = parseFreeAccessUntil('Foo.myshopify.com:2026-10-15, bar.myshopify.com:2026-11-30')
+    expect([...m.keys()]).toEqual(['foo.myshopify.com', 'bar.myshopify.com'])
+    // the named date is the LAST day of access, inclusive
+    expect(m.get('foo.myshopify.com').toISOString()).toBe('2026-10-15T23:59:59.999Z')
+  })
+
+  it('drops malformed entries instead of granting access (fails closed)', () => {
+    const m = parseFreeAccessUntil('no-date.myshopify.com,bad.myshopify.com:not-a-date,:2026-10-15')
+    expect(m.size).toBe(0)
+    expect(parseFreeAccessUntil('').size).toBe(0)
+    expect(parseFreeAccessUntil(undefined).size).toBe(0)
+  })
+})
+
+describe('hasFreeAccess time window', () => {
+  const OWNER = 'xmcjg8-uh.myshopify.com'
+
+  it('comps the permanent list regardless of the clock', () => {
+    expect(hasFreeAccess(OWNER, new Date('2099-01-01T00:00:00Z'))).toBe(true)
+  })
+
+  it('leaves a shop with no comp entry gated at any time', () => {
+    expect(hasFreeAccess('someone-else.myshopify.com', new Date('2026-09-10T00:00:00Z'))).toBe(false)
   })
 })
 
