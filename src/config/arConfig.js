@@ -248,6 +248,10 @@ export function registerRuntimeGlassesConfig(key, engineModelConfig) {
     // white glare on the frame is the scene lighting reflecting off the authored
     // gloss, addressed in the lighting, not by altering the model's material.
     preserveMaterials: true,
+    // Uploaded models only -- the four built-in SKUs keep their own tuned values.
+    // 0.62 (inherited from the base SKU) read as a near-solid panel rather than a
+    // tinted lens you can see eyes through. ?lensopacity=<n> overrides live.
+    materialProfile: { ...base.materialProfile, lensOpacity: 0.4 },
     // Was -0.01, then 0 (removed entirely after feedback wanted it higher) --
     // that overshot, so split the difference. ?voffset=<n> overrides for
     // further live tuning.

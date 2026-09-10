@@ -80,6 +80,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     this.glassesLoader = await new GlassesModelLoader({
       lensEnvMap: this.renderLoop.lensEnvMap,
       lensReflection: this.renderLoop.lensReflection,
+      frameReflection: this.renderLoop.frameReflection,
     }).init()
     await this.loadSku(config.defaultSkuKey)
 

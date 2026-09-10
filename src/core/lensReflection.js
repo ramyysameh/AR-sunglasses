@@ -31,7 +31,9 @@ const DEFAULTS = {
   clearcoatRoughness: 0.12,
 }
 
-function resolveParam(search, key, fallback, isValid) {
+// Shared with frameReflection.js so both surfaces resolve their URL overrides
+// the same way.
+export function resolveParam(search, key, fallback, isValid) {
   const raw = parseFloat(new URLSearchParams(search).get(key))
   return Number.isFinite(raw) && isValid(raw) ? raw : fallback
 }
@@ -45,13 +47,20 @@ export function resolveLensReflectionConfig(search) {
     sunElevationDeg: resolveParam(search, 'sunel', DEFAULTS.sunElevationDeg, (v) => v >= -90 && v <= 90),
     clearcoat: resolveParam(search, 'lensclearcoat', DEFAULTS.clearcoat, (v) => v >= 0 && v <= 1),
     clearcoatRoughness: resolveParam(search, 'lensclearcoatrough', DEFAULTS.clearcoatRoughness, (v) => v >= 0 && v <= 1),
+    // null = defer to the SKU's materialProfile.lensOpacity. Exists so lens
+    // see-through can be tuned live on a phone like ?gscale/?voffset, without
+    // a redeploy to try a value.
+    opacity: resolveParam(search, 'lensopacity', null, (v) => v >= 0 && v <= 1),
   }
 }
 
 /**
- * Applies the reflection to ONE lens material. Never call this for a frame
- * material: the frame is deliberately excluded (see 2e12c0f — glossy frame
- * specular read as a distracting white glare).
+ * Applies the reflection to ONE lens material.
+ *
+ * The frame has its own, deliberately weaker treatment -- see frameReflection.js
+ * (2e12c0f had removed frame specular entirely because directional light threw a
+ * white streak across it; the frame now reflects the same env map at a much lower
+ * intensity, leaning on Fresnel-weighted clearcoat instead of a flat sheen).
  */
 export function applyLensReflection(material, envMap, config) {
   // config is guarded alongside envMap because GlassesModelLoader defaults

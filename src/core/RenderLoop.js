@@ -10,6 +10,7 @@ import { coverNDC } from '../fit/coverMap.js'
 import { resolveGlassesScaleMultiplier } from './glassesScale.js'
 import { createLensEnvironment } from './lensEnvironment.js'
 import { resolveLensReflectionConfig } from './lensReflection.js'
+import { resolveFrameReflectionConfig } from './frameReflection.js'
 
 const TRACK_LOSS_RESET_MS = 180
 // Lower lead than before (was 0.85): heavy lead on an already-smoothed signal
@@ -99,11 +100,14 @@ export class RenderLoop {
     this.renderer.toneMappingExposure = 1.0
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio ?? 1, 2))
 
-    // Lens reflections. Ambient light casts no specular, so a glossy lens has
+    // Reflections. Ambient light casts no specular, so a glossy surface has
     // nothing to bounce; this env map is the thing being reflected. Assigned
-    // per-material to lenses only (never scene.environment) so the frame keeps
-    // the flat look 2e12c0f deliberately gave it.
+    // per-material (never scene.environment) so lens and frame can be tuned to
+    // very different strengths: the lens reads as glass, the frame only picks up
+    // a restrained edge highlight. See frameReflection.js for why the frame is
+    // no longer excluded outright, and ?framerefl=0 to put it back.
     this.lensReflection = resolveLensReflectionConfig(window.location.search)
+    this.frameReflection = resolveFrameReflectionConfig(window.location.search)
     this.lensEnvironment = createLensEnvironment(this.renderer, {
       sunAzimuthDeg: this.lensReflection.sunAzimuthDeg,
       sunElevationDeg: this.lensReflection.sunElevationDeg,
@@ -119,11 +123,15 @@ export class RenderLoop {
     this.camera.position.set(0, 0, 0)
     this.camera.lookAt(0, 0, -1)
 
-    // Flat, ambient-only lighting: directional lights are off. AmbientLight casts
-    // no specular highlight, so a glossy frame shows zero glare — no hard white
-    // streak sliding across as the head turns. Trade-off: no directional shading,
-    // so the frame reads flatter (less 3D form). Directionals kept at 0 intensity
-    // so they can be dialled back in if some shading is wanted later.
+    // Ambient-only DIRECT lighting: the directionals stay at 0 intensity. They are
+    // what produced the hard white streak sliding across the frame as the head
+    // turned, and nothing here re-enables them.
+    //
+    // AmbientLight contributes zero specular, which is why an authored-glossy
+    // frame used to render exactly like a matte one. Specular now comes from the
+    // per-material env map (frameReflection.js) instead of a directional: an env
+    // reflection is broad and prefiltered, so it reads as sheen along the bevels
+    // rather than a single travelling hotspot.
     const ambient = new THREE.AmbientLight(0xffffff, 1.0)
     const key = new THREE.DirectionalLight(0xffffff, 0)
     key.position.set(0.45, 1.1, 1.8)

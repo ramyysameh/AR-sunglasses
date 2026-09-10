@@ -6,6 +6,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { getGlassesConfig } from '../config/arConfig.js'
 import { applyLensReflection } from '../core/lensReflection.js'
+import { applyFrameReflection } from '../core/frameReflection.js'
 
 /**
  * Fades the rear of the temple arms to transparent based on the model's local Z.
@@ -38,6 +39,7 @@ export class GlassesModelLoader {
     this.dracoDecoderPath = options.dracoDecoderPath ?? 'draco/gltf/'
     this.lensEnvMap = options.lensEnvMap ?? null
     this.lensReflection = options.lensReflection ?? null
+    this.frameReflection = options.frameReflection ?? null
     this.loader = null
     this.dracoLoader = null
     this.cache = new Map()
@@ -111,8 +113,12 @@ export class GlassesModelLoader {
           material.map.needsUpdate = true
         }
 
-        // Frame stays EXACTLY as authored. The lens is the one exception: glTF
-        // glass "transmission" stalls the real-time renderer, so swap it for
+        // Frame keeps its AUTHORED roughness/metalness/clearcoat -- those are
+        // still never overridden here. What it now also gets is an env map to
+        // reflect, because without one the authored gloss was invisible: the
+        // scene's only direct light is ambient, which casts no specular at all
+        // (see frameReflection.js). The lens is the other exception: glTF glass
+        // "transmission" stalls the real-time renderer, so swap it for
         // lightweight alpha (keeps the authored tint colour, just renderable).
         //
         // THIS is the branch that actually runs for every server-registered
@@ -128,9 +134,16 @@ export class GlassesModelLoader {
             material.transparent = true
             // 0.35 -> 0.18: user wanted the lens "black but very transparent" --
             // pairs with the pure-black Base Color set in Blender for this tint.
-            material.opacity = Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : 0.18
+            // ?lensopacity=<0..1> wins over the SKU profile so the lens can be
+            // dialled live on a phone; falls through to the profile when absent.
+            const tunedOpacity = this.lensReflection?.opacity
+            material.opacity = Number.isFinite(tunedOpacity)
+              ? tunedOpacity
+              : Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : 0.18
             material.depthWrite = false
             applyLensReflection(material, this.lensEnvMap, this.lensReflection)
+          } else {
+            applyFrameReflection(material, this.lensEnvMap, this.frameReflection)
           }
           material.needsUpdate = true
           continue
@@ -168,6 +181,11 @@ export class GlassesModelLoader {
           }
 
           applyLensReflection(material, this.lensEnvMap, this.lensReflection)
+        } else {
+          // Same reasoning as the preserveMaterials branch: whether the frame
+          // reflects the environment is a property of the renderer, not of which
+          // config branch a SKU happens to take, so both paths get it.
+          applyFrameReflection(material, this.lensEnvMap, this.frameReflection)
         }
 
         applyTempleFade(material, templeFade)
