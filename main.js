@@ -117,7 +117,14 @@ async function resolveBlockModelKey() {
  * @returns {Promise<string | null>}
  */
 async function resolveLocalFitKey() {
-  if (!fitFile) {
+  // DEV ONLY. `fit` names a URL whose contents become the model config,
+  // including the GLB the engine then loads -- with none of the origin
+  // validation the ?model= path gets from assertAllowedGlbUrl server-side. In
+  // production that is an open redirect into a merchant's try-on, so Vite must
+  // dead-code-eliminate this whole branch from the bundle. Verify after any
+  // change: `npm run build && grep -c resolveLocalFitKey dist/assets/*.js`
+  // must find nothing.
+  if (!import.meta.env.DEV || !fitFile) {
     return null
   }
 
