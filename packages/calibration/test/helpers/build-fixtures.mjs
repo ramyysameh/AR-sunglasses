@@ -5,12 +5,17 @@ const GOOD = [
   -0.069, 0, -0.13, 0.069, 0, -0.13, 0, -0.02, 0.02,
 ]
 
-// GOOD with the RIGHT temple tip moved inward (x 0.069 -> 0.02) so it is NOT a
-// mirror image. A genuine shape asymmetry that survives the normalizer's recenter
-// — unlike a uniform x-translation, which recenter would simply remove.
+// GOOD with the RIGHT FRONT corner moved inward (x 0.069 -> 0.02) so it is NOT
+// a mirror image. A genuine shape asymmetry that survives the normalizer's
+// recenter — unlike a uniform x-translation, which recenter would simply remove.
+//
+// The asymmetry must live in the FRONT BAND. measureSymmetryDeviation is scoped
+// to the band so that branding on a temple stops zeroing the confidence score
+// of a well-authored frame; an asymmetry parked behind the band (this fixture
+// previously moved a temple TIP at z=-0.13) is now deliberately invisible to it.
 const ASYMMETRIC = [
-  -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.024, 0.02,
-  -0.069, 0, -0.13, 0.02, 0, -0.13, 0, -0.02, 0.02,
+  -0.069, 0, 0.02, 0.02, 0, 0.02, 0, 0.024, 0.02,
+  -0.069, 0, -0.13, 0.069, 0, -0.13, 0, -0.02, 0.02,
 ]
 
 export function buildFixtures() {

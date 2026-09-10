@@ -1,3 +1,11 @@
+import { segmentFrontFrame } from './frontFrame.js'
+
+// NOTE: frontFrame.js imports computeBounds from this module, so these two form
+// an import cycle. It is safe because every cross-reference is inside a
+// function body (resolved at call time) and both are hoisted `export function`
+// declarations. Keep it that way -- a top-level call to either during module
+// evaluation would break the cycle at load time.
+
 export function computeBounds(positions) {
   const min = { x: Infinity, y: Infinity, z: Infinity }
   const max = { x: -Infinity, y: -Infinity, z: -Infinity }
@@ -20,7 +28,8 @@ export function computeBounds(positions) {
 // 0 = every occupied region has a mirror across X=0 (symmetric); grows toward 1
 // as geometry lacks a mirror counterpart. Tessellation-independent (vertex-count
 // differences collapse into the same voxel) and scale-invariant (voxel ~ width/32).
-export function measureSymmetryDeviation(positions) {
+export function measureSymmetryDeviation(positions, band = null) {
+  const front = band ?? segmentFrontFrame(positions)
   const { size } = computeBounds(positions)
   const width = size.x || 1
   const voxel = Math.max(width / 32, 1e-9)
@@ -29,12 +38,14 @@ export function measureSymmetryDeviation(positions) {
 
   const occupied = new Set()
   for (let i = 0; i < positions.length; i += 3) {
+    if (positions[i + 2] < front.frontZMin) continue
     occupied.add(key(positions[i], positions[i + 1], positions[i + 2]))
   }
 
   let mismatched = 0
   let count = 0
   for (let i = 0; i < positions.length; i += 3) {
+    if (positions[i + 2] < front.frontZMin) continue
     count += 1
     if (!occupied.has(key(-positions[i], positions[i + 1], positions[i + 2]))) {
       mismatched += 1
@@ -43,20 +54,22 @@ export function measureSymmetryDeviation(positions) {
   return count ? mismatched / count : 0
 }
 
-// The front slab = vertices within the front 25% of the Z range. Its X extent is
-// the frame width.
-export function measureFrontWidth(positions) {
-  const { min, max } = computeBounds(positions)
-  const zThreshold = max.z - (max.z - min.z) * 0.25
+// The frame front's X extent, measured within the segmented band. On a real
+// frame the old "front 25% of the Z range" rule spans ~39mm and swallows the
+// temple flare, over-measuring GRIPZ by 15mm -- and that value feeds
+// frameWidthMeters, the denominator of the runtime fit scale.
+export function measureFrontWidth(positions, band = null) {
+  const front = band ?? segmentFrontFrame(positions)
   let minX = Infinity
   let maxX = -Infinity
   for (let i = 0; i < positions.length; i += 3) {
-    if (positions[i + 2] >= zThreshold) {
+    if (positions[i + 2] >= front.frontZMin) {
       minX = Math.min(minX, positions[i])
       maxX = Math.max(maxX, positions[i])
     }
   }
-  return maxX - minX
+  const width = maxX - minX
+  return Number.isFinite(width) ? width : 0
 }
 
 // Hinges = the outermost front-slab vertex on each side. Certainty rises with how
