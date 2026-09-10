@@ -59,11 +59,15 @@ export function calibrate(doc, spec) {
     return { fitMetadata, confidence: null, source: 'tagged', needsManual: false }
   }
 
-  const { anchors, signals } = estimateAnchors(doc, spec)
+  const { anchors, signals, anchorSources } = estimateAnchors(doc, spec)
   const confidence = scoreConfidence(signals, spec)
   const fitMetadata = buildRecord(doc, anchors, signals.frameWidthMeters, {
     source: 'geometric',
     confidence,
+    // Which anchors were measured and which fell back to the canonical prior.
+    // Added alongside `source`, never replacing it: saveModelGlb's caller and
+    // the admin's sourceLabel both read provenance.source.
+    anchorSources,
   })
   return {
     fitMetadata,

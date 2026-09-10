@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { calibrate } from '../src/calibrator.js'
 import { MODELING_SPEC } from '../src/spec.js'
 import { buildDoc } from './helpers/buildDoc.js'
+import { buildFrameDoc } from './helpers/buildFrame.js'
 
 const goodFrame = [
   -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.024, 0.02,
@@ -54,5 +55,28 @@ describe('calibrate', () => {
     expect(scaleLimits.min).toBeLessThan(naturalFit)
     expect(scaleLimits.max).toBeGreaterThan(naturalFit * 2)
     expect(scaleLimits.max).toBeLessThan(0.85) // not the normalized-model band
+  })
+})
+
+describe('calibrate provenance', () => {
+  it('records per-anchor sources on the geometric path', () => {
+    const result = calibrate(buildFrameDoc(), MODELING_SPEC)
+    expect(result.fitMetadata.provenance.source).toBe('geometric')
+    expect(result.fitMetadata.provenance.anchorSources.bridge).toBe('detected')
+    expect(result.fitMetadata.provenance.anchorSources.leftHinge).toBe('detected')
+    expect(result.fitMetadata.provenance.anchorSources.rightHinge).toBe('detected')
+  })
+
+  it('leaves the tagged path untouched', () => {
+    const tagged = buildFrameDoc({}, {
+      AR_bridge: { x: 0, y: -0.012, z: -0.004 },
+      AR_hinge_L: { x: -0.066, y: -0.010, z: -0.012 },
+      AR_hinge_R: { x: 0.066, y: -0.010, z: -0.012 },
+    })
+    const result = calibrate(tagged, MODELING_SPEC)
+    expect(result.source).toBe('tagged')
+    expect(result.confidence).toBe(null)
+    expect(result.needsManual).toBe(false)
+    expect(result.fitMetadata.provenance.anchorSources).toBeUndefined()
   })
 })
