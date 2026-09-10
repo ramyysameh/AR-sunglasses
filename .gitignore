@@ -17,3 +17,6 @@ __pycache__/
 Thumbs.db
 # Subagent-driven dev scratch (briefs, reports, ledger, diffs)
 .superpowers/
+
+# Locally calibrated models for on-face testing (scripts/calibrate-local.mjs)
+public/calibrated/

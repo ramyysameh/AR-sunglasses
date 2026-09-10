@@ -19,6 +19,7 @@ const sku = params.get('sku') || undefined
 const shop = params.get('shop') || undefined
 const productId = params.get('productId') || undefined
 const modelUrl = params.get('model') || undefined
+const fitFile = params.get('fit') || undefined
 
 let tryOnEngine = null
 
@@ -104,6 +105,55 @@ async function resolveBlockModelKey() {
 }
 
 /**
+ * Loads a fit-metadata JSON produced by scripts/calibrate-local.mjs straight
+ * from the dev server's public/ directory, bypassing the Shopify app entirely.
+ *
+ * This exists so the calibration pipeline can be evaluated on a real face with
+ * no app deploy, no database and no upload: the JSON holds exactly what
+ * saveCalibratedModel would have persisted, so what renders here is what a
+ * merchant upload would render. Point ?fit= at the -auto or -hand variant of
+ * the same model to A/B the estimator against hand-placed anchors.
+ *
+ * @returns {Promise<string | null>}
+ */
+async function resolveLocalFitKey() {
+  if (!fitFile) {
+    return null
+  }
+
+  try {
+    const response = await fetch(fitFile)
+    if (!response.ok) {
+      throw new Error(`fit file request failed with status ${response.status}`)
+    }
+
+    const { fitMetadata, modelUrl: servedUrl } = await response.json()
+    const isValidPayload = Boolean(servedUrl) &&
+      fitMetadata &&
+      typeof fitMetadata === 'object' &&
+      Number.isFinite(fitMetadata.frameWidthMeters) &&
+      fitMetadata.bridgeAnchor &&
+      fitMetadata.leftHinge &&
+      fitMetadata.rightHinge
+
+    if (!isValidPayload) {
+      throw new Error('invalid fit file payload')
+    }
+
+    console.info(
+      `[fit] ${fitFile} source=${fitMetadata.provenance?.source} ` +
+      `frameWidth=${(fitMetadata.frameWidthMeters * 1000).toFixed(1)}mm`,
+      fitMetadata.provenance?.anchorSources ?? {},
+    )
+    const engineModelConfig = toEngineModelConfig(fitMetadata, servedUrl)
+    return registerRuntimeGlassesConfig(REMOTE_SKU_KEY, engineModelConfig)
+  } catch (error) {
+    console.warn('Falling back — could not load local fit file:', error)
+    return null
+  }
+}
+
+/**
  * @param {string} message
  * @param {{ isError?: boolean, onRetry?: (() => void) | null }} [options]
  */
@@ -176,7 +226,9 @@ function updateScan(scanState) {
 }
 
 async function startEngine() {
-  const remoteSkuKey = (await resolveBlockModelKey()) ?? (await resolveRemoteSkuKey())
+  const remoteSkuKey = (await resolveLocalFitKey())
+    ?? (await resolveBlockModelKey())
+    ?? (await resolveRemoteSkuKey())
   const runtimeConfig = getTryOnRuntimeConfig({
     provider,
     defaultSkuKey: remoteSkuKey ?? sku ?? defaultGlassesKey,
