@@ -1,6 +1,7 @@
 export * from './spec.js'
 export * from './fitMetadata.js'
 export * from './geometry.js'
+export * from './frontFrame.js'
 export * from './glbAccess.js'
 export * from './validator.js'
 export * from './normalizer.js'
