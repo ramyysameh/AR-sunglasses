@@ -19,7 +19,7 @@
 - **Reference models** (not in the repo, read-only, never modified):
   - `D:\Downloads\Larsson_Sunglasses_AR.glb`
   - `D:\Downloads\GRIPZ_Sunglasses_anchored_widened.glb`
-- **Acceptance bar:** every anchor within **3 mm** of the file's own `AR_*` tags on both reference models, except Larsson's bridge `y` (a known 5 mm outlier — it is measured against the bridge-centre rule instead).
+- **Acceptance bar:** every anchor within **3 mm** of the file's own `AR_*` tags on both reference models. No exemptions. (Larsson was re-exported 2026-09-10 03:27 with `AR_bridge` raised 6.85 mm, so it now follows the same bridge-centre rule as GRIPZ — 1.9 mm from its bridge-bar midpoint, against GRIPZ's 0.4 mm. If a future re-export moves a tag again, re-run Task 2 to re-establish the baseline before fitting anything.)
 - Run tests with `npx vitest run --root packages/calibration` from the worktree root.
 - Baseline at plan time: **37 tests, 11 files, all passing.**
 
@@ -264,7 +264,7 @@ process.exit(worst > TOLERANCE_MM ? 1 : 0)
 node scripts/anchor-audit.mjs "D:/Downloads/Larsson_Sunglasses_AR.glb" "D:/Downloads/GRIPZ_Sunglasses_anchored_widened.glb"
 ```
 
-Expected: exits **1**. Larsson bridge ≈17.0 mm, hinges ≈29 mm; GRIPZ bridge ≈11.9 mm, hinges ≈32 mm; Larsson confidence 0.000. This failing baseline is the point of the task — record the printed output in the commit message.
+Expected: exits **1**. Larsson bridge ≈10.2 mm, hinges ≈29 mm; GRIPZ bridge ≈11.9 mm, hinges ≈32 mm; Larsson confidence 0.000. This failing baseline is the point of the task — record the printed output in the commit message.
 
 - [ ] **Step 3: Commit**
 
@@ -1091,9 +1091,10 @@ estimator. Re-run after each change. Rules while fitting:
 - Do **not** special-case either model by name, by vertex count, or by any
   property that identifies it. Two samples over-fit easily; a constant that
   cannot be justified as a property of eyewear in general does not belong.
-- Larsson's bridge `y` is the known 5 mm outlier. Fit to GRIPZ's bridge height
-  and accept Larsson's bridge `y` delta being ~5 mm — do not split the
-  difference, that would make both wrong.
+- Both models now follow the bridge-centre rule, so fit the bridge to both.
+  Their bridge-bar midpoints sit 1.9 mm and 0.4 mm from the hand anchors, which
+  is the irreducible floor for a pure centre rule — do not chase it below that
+  with a fudge term.
 - If a delta cannot be closed by a ratio, the detector is wrong, not the
   constant. Stop and re-read the geometry rather than adding a fudge term.
 

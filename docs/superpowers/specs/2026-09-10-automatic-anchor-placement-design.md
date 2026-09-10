@@ -15,7 +15,7 @@ Measured against two hand-tagged reference models, in normalized space:
 
 | Model | Anchor | Hand-placed | Estimated | Error |
 |---|---|---|---|---|
-| Larsson | bridge | y=-16.6, z=-3.6 | y=0.0, z=0.0 | **17.0 mm** |
+| Larsson | bridge | y=-9.6, z=-3.6 | y=0.0, z=0.0 | **10.2 mm** |
 | Larsson | hinge L/R | x=±66.7, z=-9.9 | x=±73.2, z=-37.9 | **29.1 mm** |
 | GRIPZ | bridge | y=-11.4, z=-3.7 | y=0.0, z=0.0 | **11.9 mm** |
 | GRIPZ | hinge L/R | x=±65.6, z=-10.6 | x=±80.4, z=-38.5 | **31.9 mm** |
@@ -68,9 +68,13 @@ placement rather than a wild one when the geometry is unreadable.
   measurement, applied **per anchor** rather than all-or-nothing.
 - **New uploads only.** No backfill; `fitMetadata` on existing `ModelAsset` rows
   is left frozen, so live storefronts are unaffected.
-- **Bridge anchor targets the vertical centre of the bridge bar**, per the GRIPZ
-  hand placement. Larsson's sits 5 mm lower, on the underside; it is the outlier
-  and will not be matched.
+- **Bridge anchor targets the vertical centre of the bridge bar.** At design
+  time only GRIPZ followed this rule and Larsson's anchor sat 5 mm lower, on the
+  bridge underside. Larsson was re-exported on 2026-09-10 at 03:27 with its
+  `AR_bridge` raised 6.85 mm (raw y 32.0 → 39.05; hinges untouched), so **both
+  reference models now follow the centre rule** — within 1.9 mm and 0.4 mm of
+  their respective bridge-bar midpoints. There is no longer an outlier to
+  exempt.
 - **`AR_*` tags keep absolute precedence.** A merchant who can author tags still
   beats any estimate, and models already tagged in production are unaffected.
 
@@ -117,11 +121,12 @@ fixed fraction of anything; it is a dense band with a sharp rear edge.
 | hand hinge x ÷ half-width | 0.912 | 0.897 |
 | bridge bar y-extent at abs x < 3 mm | -7.0 … -15.9 | -6.9 … -16.7 |
 | bridge bar midpoint | -11.5 mm | -11.8 mm |
-| hand bridge y | -16.6 (outlier) | **-11.4** |
+| hand bridge y | **-9.6** | **-11.4** |
+| bridge-centre rule error | 1.9 mm | 0.4 mm |
 | hand bridge z behind front face | 3.6 mm | 3.7 mm |
 | hand hinge y | -9.1 mm | -10.6 mm |
 
-The bridge-centre rule predicts GRIPZ's hand anchor to **0.4 mm**.
+The bridge-centre rule predicts both hand anchors inside the 3 mm bar.
 
 ## Design
 
@@ -245,8 +250,8 @@ file's own `AR_*` tags. Not in CI (the models are too large to commit); it is th
 tool used to fit the constants and to verify the tolerance.
 
 **Acceptance bar:** every anchor within **3 mm** of hand placement on both
-reference models, except Larsson's bridge y, which is the acknowledged 5 mm
-outlier and is measured against the bridge-centre rule instead.
+reference models. No exemptions — since Larsson's 2026-09-10 re-export, both
+models follow the bridge-centre rule.
 
 ## Risks
 
