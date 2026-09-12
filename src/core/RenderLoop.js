@@ -2,7 +2,7 @@
  * Main AR render loop that fuses face tracking, pose filtering, occlusion, and Three.js rendering.
  */
 import * as THREE from 'three'
-import { applySplay, buildHeadProfile, buildHinges, solveSplay } from '../models/templeHinge.js'
+import { HINGE_SPREAD_RATIO, applyOffset, applySplay, buildHeadProfile, buildHinges, solveSplay } from '../models/templeHinge.js'
 import { scaleMultiplier, xOffset, yOffset, zOffset, rotOffsetX, rotOffsetY, rotOffsetZ, trackingSmoothness } from '../config/poseConfig.js'
 import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
@@ -39,6 +39,8 @@ const MAX_PLAUSIBLE_HEAD_HALF_M = 0.13
 // Vertex stride when sampling an arm. The solve needs the arm's silhouette, not
 // every vertex of it; one in twelve keeps a 27k-vertex arm cheap to measure.
 const ARM_SAMPLE_STRIDE = 12
+// MediaPipe's face mesh; the occluder's shell vertices follow these.
+const FACE_LANDMARK_COUNT = 468
 // Frontal samples the head-width estimate averages over before the arms are
 // opened, and how far that average must move to justify opening them again.
 const HEAD_WIDTH_SAMPLES = 90
@@ -901,6 +903,7 @@ export class RenderLoop {
     // back the previous solve and compound it a little more every time the
     // measured head twitched.
     applySplay(this._hinges, 0)
+    applyOffset(this._hinges, 0)
     this.glassesRoot.updateWorldMatrix(true, true)
 
     const tmp = (this._splayTmp ??= new THREE.Vector3())
@@ -935,8 +938,19 @@ export class RenderLoop {
     }
 
     applySplay(this._hinges, angle)
+    this.glassesRoot.updateWorldMatrix(true, true)
+
+    // Then the uniform part. Rotation moves the tip far more than the middle, so
+    // it cannot free the mid-run without throwing the tip past the ear; the rest
+    // is taken out with a shift, which moves the whole arm together. Scaled to
+    // the head so it does not assume this one -- see HINGE_SPREAD_RATIO for why
+    // this is measured against the render rather than solved.
+    const offset = headHalfWidth * HINGE_SPREAD_RATIO
+    applyOffset(this._hinges, offset / (this.glassesRoot.scale?.x || 1))
+
     this._splayForWidth = this._headWidthMean
     this._splayAngle = angle
+    this._splayOffset = offset
   }
 
   _isPositionInCameraView(position) {

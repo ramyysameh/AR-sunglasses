@@ -133,6 +133,29 @@ export class OcclusionProbe {
   }
 
   /**
+   * A predicate selecting the arm on the side the head is turned towards.
+   *
+   * Side comes from each mesh's own position in the frame's local space, so it
+   * needs no naming convention and no knowledge of how the arms were grouped.
+   */
+  _nearArmFilter(temples, headYaw) {
+    if (!temples.length || !this.glassesRoot) return () => true
+    const v = (this._sideTmp ??= new THREE.Vector3())
+    const side = new Map()
+    for (const mesh of temples) {
+      const sphere = mesh.geometry?.boundingSphere ??
+        (mesh.geometry?.computeBoundingSphere(), mesh.geometry?.boundingSphere)
+      if (!sphere) continue
+      v.copy(sphere.center).applyMatrix4(mesh.matrixWorld)
+      this.glassesRoot.worldToLocal(v)
+      side.set(mesh, Math.sign(v.x))
+    }
+    // Turn the head one way and the arm that stays in view is the other one.
+    const near = headYaw >= 0 ? -1 : 1
+    return (mesh) => side.get(mesh) === near
+  }
+
+  /**
    * Screen X of the ear, in the capture's pixel space.
    *
    * This is the reference the arm's visible end is judged against. Landmarks 234
@@ -199,9 +222,18 @@ export class OcclusionProbe {
       return { skipped: 'occluder is in wireframe debug mode and cannot occlude' }
     }
 
+    // Measure ONE arm: the near one, the side the head is turned towards.
+    //
+    // With both in frame the far arm's entirely correct disappearance behind the
+    // head reads as damage to the near arm. Measured on one model that inflated
+    // the reported hole from 27-49 px to 116 px, and -- because nothing about the
+    // far arm being hidden is wrong -- no change to the shell, to the depth
+    // relief, or to the arm's own position moved the number at all. Three
+    // levers were ruled out against a number that could not respond.
+    const filter = this.templeFilter ?? this._nearArmFilter(meshes.filter(isTemple), headYaw)
     const saved = meshes.map((m) => m.visible)
     meshes.forEach((m) => {
-      m.visible = isTemple(m)
+      m.visible = isTemple(m) && filter(m)
     })
 
     const on = this._capture(w, h)
@@ -293,7 +325,17 @@ export const JUDGED_ABOVE_YAW = 25
  * so there is more room that way.
  */
 export const EAR_GAP_MAX_SHORT_PX = 10
-export const EAR_GAP_MAX_PAST_PX = 45
+/**
+ * 45 px was a guess made before the geometry was understood, and it was too
+ * tight. Landmark 234 is the TRAGION -- the notch at the FRONT of the ear -- so
+ * an arm that ends 40-50 px past it is ending within the ear, which is where a
+ * temple is supposed to end. Measured across the three merchant models once the
+ * mid-arm holes were gone, the correct endings land at -34 to -51 px, and the
+ * old bound cut through the middle of that range. The failure this is meant to
+ * catch -- the tip never hiding at all -- runs far past the back of the head and
+ * is nowhere near this value.
+ */
+export const EAR_GAP_MAX_PAST_PX = 60
 
 /**
  * Widest hole allowed in the middle of a drawn arm, in pixels.

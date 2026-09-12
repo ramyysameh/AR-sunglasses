@@ -140,6 +140,8 @@ export function headWidthAt(profile, depth, bin = PROFILE_BIN_M) {
   return a + (b - a) * (exact - lo)
 }
 
+
+
 /**
  * Depth at which the head is widest -- the ear line.
  *
@@ -293,15 +295,56 @@ export function buildHinges(glassesRoot) {
       group,
       meshes: mine.map((c) => c.mesh),
       hingeLocal: { x: hx / n, y: hy / n, z: hingeZ },
+      baseX: group.position.x,
     })
   }
 
   return hinges
 }
 
+
+/**
+ * Outward shift applied to each arm, as a fraction of the measured head
+ * half-width.
+ *
+ * Rotation alone cannot fix a mid-arm hole: a hinge rotation moves the tip far
+ * more than the middle, so opening far enough to free the mid-run throws the tip
+ * past the ear. Measured on one model, at 32 degrees of splay the hole was still
+ * 30-57 px and the tip overshot by more than twice the allowed margin, while a
+ * uniform 7 mm shift closed it outright and left the tip where it belongs.
+ *
+ * This is a tuned constant, not a solve, and it is worth being plain about why.
+ * Solving it geometrically -- shift until the arm clears the head surface --
+ * asks for 16-18 mm, because it treats the defect as lateral penetration. It is
+ * not: the arm runs nearly TANGENT to the face near its silhouette, so a
+ * millimetre of penetration hides a 30-50 px band, and the criterion a solve can
+ * express overshoots by more than twice. Measured against the render instead:
+ *
+ *   shift     3 px   5 px    7 px    9 px   11 px
+ *   holes    17..23  0..11   0000    0000    0000
+ *   earGap   -32..-42 -34..-43 -37..-44 -39..-47 -42..-49
+ *   verdict   0/4     3/4     4/4     2/4     2/4
+ *
+ * A narrow window, and 7 mm on a ~119 mm head half-width is the middle of it.
+ * Expressed as a ratio so it tracks head size rather than assuming this one.
+ */
+export const HINGE_SPREAD_RATIO = 0.059
+
 /** Sets each arm's opening angle. Sign is per side so both swing outward. */
 export function applySplay(hinges, angle) {
   for (const hinge of hinges) {
     hinge.group.rotation.y = -hinge.side * angle
+  }
+}
+
+/**
+ * Sets each arm's outward shift, in the frame's own local units.
+ *
+ * Rebuilt from the pivot's original position every time, so repeated solves
+ * cannot accumulate.
+ */
+export function applyOffset(hinges, offsetLocal) {
+  for (const hinge of hinges) {
+    hinge.group.position.x = hinge.baseX + hinge.side * offsetLocal
   }
 }
