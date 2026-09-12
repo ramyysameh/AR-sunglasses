@@ -85,36 +85,22 @@ export function selectArms(candidates, bounds) {
 }
 
 /**
- * Grazing margin: how far outside the head the arm must sit to survive.
+ * How far outside the head's surface the arm is placed, as a fraction of the
+ * head's half-width AT THE TEMPLE'S HEIGHT.
  *
- *   margin = headHalf * TEMPLE_GRAZE_HEAD_RATIO
- *          - TEMPLE_GRAZE_THICKNESS * armThickness
+ * This is now only about where the temple should LOOK like it sits -- resting on
+ * the head rather than cutting through the cheek. It used to carry a much larger
+ * grazing allowance, plus a term in the arm's own thickness, because the arm had
+ * to stand clear of the occluder to survive at all: a thin arm loses more of
+ * itself to a near-tangent occluder, so WILLOW's 1.65 mm wire needed MORE
+ * opening than GRIPZ's 4.85 mm acetate. That was real and it was measured, but
+ * it is obsolete -- applyNearArmClip draws the near arm in front of the occluder,
+ * so nothing shaves it and none of that margin is needed.
  *
- * The second term is the one worth explaining. Near the head's silhouette the
- * arm runs almost tangent to the occluder, so the occluder shaves a band off it
- * -- and a THIN arm loses proportionally more of itself to that band than a
- * chunky one, so it has to sit further out to survive. The effect is large and
- * it runs opposite to intuition: WILLOW's 1.65 mm rimless wire needs MORE
- * opening than GRIPZ's 4.85 mm acetate, not less.
- *
- * That inversion is why three earlier attempts at a per-model term failed. The
- * rear segment's authored lean, the tip's inward displacement and the frame's
- * half-width are all documented as refuted; jointDepth is worse than useless
- * here, because the deeper joint that WILLOW has hands it LESS angle exactly
- * when it needs more.
- *
- * Fitted on GRIPZ and WILLOW, then used to PREDICT LARSSON before measuring it:
- *
- *   model     thickness   predicted   measured
- *   GRIPZ      4.85 mm      18 deg     18 -> 16/16
- *   WILLOW     1.65 mm      20 deg     20 -> 16/16
- *   LARSSON    5.92 mm    15.8 deg     16 -> 8/8   (14 deg gives 4/8)
- *
- * The head term is a ratio because grazing is an effect of apparent size; the
- * thickness term is a plain multiplier because both sides of it are lengths.
+ * What is left is the skin gap, and it is small.
  */
-export const TEMPLE_GRAZE_HEAD_RATIO = 0.196
-export const TEMPLE_GRAZE_THICKNESS = 1.6875
+export const TEMPLE_GRAZE_HEAD_RATIO = 0.16
+
 
 
 /**
@@ -484,13 +470,11 @@ function splitArm(mesh, group, cutZ) {
  * @param {number} headHalf measured head half-width, world units
  * @param {number} armLateral where the arm sits at the joint, world units
  * @param {number} jointDepth how far back the joint is, world units
- * @param {number} armThickness the arm's side-to-side thickness, world units
  * @returns {number} radians
  */
-export function solveSplay(headHalf, armLateral, jointDepth, armThickness = 0) {
+export function solveSplay(headHalf, armLateral, jointDepth) {
   if (!(jointDepth > 0) || !(headHalf > 0)) return 0
-  const margin = headHalf * TEMPLE_GRAZE_HEAD_RATIO - TEMPLE_GRAZE_THICKNESS * armThickness
-  const reach = headHalf + margin - armLateral
+  const reach = headHalf * (1 + TEMPLE_GRAZE_HEAD_RATIO) - armLateral
   const sine = Math.min(Math.max(reach / jointDepth, 0), 1)
   return Math.min(Math.asin(sine), MAX_SPLAY_RAD)
 }
@@ -525,3 +509,64 @@ export function applyOffset(hinges, offsetLocal) {
     hinge.group.position.x = hinge.baseX + hinge.side * offsetLocal
   }
 }
+
+/**
+ * Render order for the near arm, which must be BEFORE the occluder's -1.
+ *
+ * The occluder is colorWrite:false, so it can only write depth -- anything drawn
+ * before it keeps its pixels. That is the whole mechanism.
+ */
+export const TEMPLE_ON_TOP_ORDER = -2
+
+/**
+ * Draws the arm nearest the camera in front of the occluder, cut at the ear.
+ *
+ * A real temple is NEVER hidden by the face in front of the ear -- it lies
+ * outside the skin the whole way -- and is ALWAYS hidden behind it. The occluder
+ * cannot express that: it is one closed surface, so it hides the arm wherever
+ * the arm passes inside it, which on a frame whose temples are narrower than the
+ * head is most of the run. The measured consequence was a hard choice between an
+ * arm eaten from mid-cheek back and an arm standing 21 px proud of the ear, and
+ * no combination of splay, curl, joint position, shell bulge or frame scale
+ * escaped it.
+ *
+ * So the rule is applied directly instead: the near arm is drawn before the
+ * occluder and clipped at the ear plane. In front of the ear it is always
+ * visible, behind it nothing is drawn at all -- which is the same thing the
+ * occluder was there to achieve for that stretch.
+ *
+ * Only the NEAR arm. Applied to both, the far arm shows through the head: 651 of
+ * its 1529 pixels drew straight through the skull. Restricted to the near one,
+ * the far arm's occlusion is bit-for-bit what it was (614/1480 either way).
+ *
+ * @param {Array} hinges
+ * @param {number} nearSide -1, 1, or 0 for "too frontal to say"
+ * @param {THREE.Plane|null} earPlane world-space, normal pointing out of the face
+ */
+export function applyNearArmClip(hinges, nearSide, earPlane) {
+  for (const hinge of hinges) {
+    const near = nearSide !== 0 && hinge.side === nearSide && earPlane
+    for (const mesh of hinge.meshes) {
+      // Clone once: the merchant's material may be shared with the frame front,
+      // and clipping it there would cut the lenses in half.
+      if (!mesh.userData.templeClipMaterial) {
+        mesh.material = mesh.material.clone()
+        mesh.userData.templeClipMaterial = true
+      }
+      mesh.renderOrder = near ? TEMPLE_ON_TOP_ORDER : 0
+      const planes = near ? [earPlane] : null
+      const before = mesh.material.clippingPlanes
+      // Adding or removing a plane changes the shader, so it has to recompile.
+      if ((before ? before.length : 0) !== (planes ? planes.length : 0)) {
+        mesh.material.needsUpdate = true
+      }
+      mesh.material.clippingPlanes = planes
+    }
+  }
+}
+
+/**
+ * Below this yaw neither arm is meaningfully nearer, and the temples are hidden
+ * behind the frame and the head anyway. Flipping sides here would only pop.
+ */
+export const NEAR_ARM_YAW_DEG = 8

@@ -2,7 +2,8 @@
  * Main AR render loop that fuses face tracking, pose filtering, occlusion, and Three.js rendering.
  */
 import * as THREE from 'three'
-import { TEMPLE_CURL_RAD, applyCurl, applyOffset, applySplay, buildHinges, solveSplay } from '../models/templeHinge.js'
+import { NEAR_ARM_YAW_DEG, TEMPLE_CURL_RAD, applyCurl, applyNearArmClip, applyOffset, applySplay, buildHinges, solveSplay } from '../models/templeHinge.js'
+import { EAR_LANDMARKS, EYE_LANDMARKS, NOSE_LANDMARK, headFrame } from '../occlusion/headFrame.js'
 import { scaleMultiplier, xOffset, yOffset, zOffset, rotOffsetX, rotOffsetY, rotOffsetZ, trackingSmoothness } from '../config/poseConfig.js'
 import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
@@ -40,8 +41,10 @@ const MAX_PLAUSIBLE_HEAD_HALF_M = 0.13
 // opened, and how far that average must move to justify re-solving.
 const HEAD_WIDTH_SAMPLES = 90
 const HEAD_WIDTH_RESOLVE_M = 0.004
-// Face-oval extremes, at the tragion: the head's own centre line for width.
-const EAR_LANDMARKS = [234, 454]
+// Half-thickness of the horizontal slab the head is measured in, at the temple's
+// own height: wide enough to always catch face-mesh vertices, narrow enough not
+// to reach the shell's ear ring.
+const HEAD_SLAB_HALF_M = 0.008
 
 export class RenderLoop {
   constructor(options = {}) {
@@ -120,6 +123,9 @@ export class RenderLoop {
     })
 
     this.renderer.setClearColor(0x000000, 0)
+    // The near temple is cut at the ear plane rather than occluded there; see
+    // applyNearArmClip.
+    this.renderer.localClippingEnabled = true
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     // AgX matches Blender's default view transform, so the frame reads with the
     // same richness/contrast as in Blender (ACES was washing it out lighter).
@@ -832,6 +838,7 @@ export class RenderLoop {
     }
 
     this._openTemples(transform)
+    this._clipNearArm(transform)
   }
 
   /**
@@ -868,6 +875,7 @@ export class RenderLoop {
     // to send a solve keyed on it 3 degrees apart between two frames that need
     // the same answer.
     const axX = (this._splayAxX ??= new THREE.Vector3()).set(1, 0, 0).applyQuaternion(transform.quaternion)
+    const axY = (this._splayAxY ??= new THREE.Vector3()).set(0, 1, 0).applyQuaternion(transform.quaternion)
     const mid = (this._splayMid ??= new THREE.Vector3())
     const ear = (this._splayEar ??= new THREE.Vector3())
     mid.set(0, 0, 0)
@@ -876,13 +884,29 @@ export class RenderLoop {
       mid.add(ear)
     }
     mid.multiplyScalar(1 / EAR_LANDMARKS.length)
+
+    // How high the arm rides above the ear plane, so the head can be measured
+    // at THAT height rather than at its widest point anywhere.
+    const armTmp = (this._splayArmTmp ??= new THREE.Vector3())
+    let armHeight = 0
+    for (const hinge of this._hinges) {
+      hinge.curl?.getWorldPosition(armTmp)
+      armHeight += armTmp.sub(mid).dot(axY)
+    }
+    armHeight /= this._hinges.length
+
+    // The head's half-width WHERE THE TEMPLE RUNS. Taking the whole occluder's
+    // maximum instead aims the arm at a shell vertex 25.6 mm above the ear plane
+    // reading 101.9 mm, while the temple rides 38.8 mm up where the face is
+    // 90.0 -- 12 mm of reach the arm does not need, which is what put it around
+    // the outside of the ear instead of along the head.
     let headHalfWidth = 0
     for (let i = 0; i < position.count; i += 1) {
-      const d = Math.abs(
-        (position.getX(i) - mid.x) * axX.x +
-        (position.getY(i) - mid.y) * axX.y +
-        (position.getZ(i) - mid.z) * axX.z
-      )
+      const dx = position.getX(i) - mid.x
+      const dy = position.getY(i) - mid.y
+      const dz = position.getZ(i) - mid.z
+      if (Math.abs(dx * axY.x + dy * axY.y + dz * axY.z - armHeight) > HEAD_SLAB_HALF_M) continue
+      const d = Math.abs(dx * axX.x + dy * axX.y + dz * axX.z)
       if (d > headHalfWidth) headHalfWidth = d
     }
     // A plausible human half-head is ~0.05-0.13 m in this space. Outside that
@@ -906,12 +930,7 @@ export class RenderLoop {
     const scale = this.glassesRoot?.scale?.x || 1
     let angle = 0
     for (const hinge of this._hinges) {
-      const solved = solveSplay(
-        this._headWidthMean,
-        hinge.armLateral * scale,
-        hinge.jointDepth * scale,
-        hinge.armThickness * scale,
-      )
+      const solved = solveSplay(this._headWidthMean, hinge.armLateral * scale, hinge.jointDepth * scale)
       if (solved > angle) angle = solved
     }
 
@@ -921,6 +940,56 @@ export class RenderLoop {
     this.glassesRoot?.updateWorldMatrix(true, true)
     this._splayForWidth = this._headWidthMean
     this._splayAngle = angle
+  }
+
+  /**
+   * Points the near-arm cut at the ear plane, once per frame.
+   *
+   * The plane has to be rebuilt every frame because it is the HEAD's, and it
+   * moves with the head; the arm's own geometry cannot stand in for it. An
+   * earlier version cut at the articulation joint instead, which is fixed in the
+   * frame's own space -- it drifts up to 18 mm from the ear plane as the head
+   * turns, and the arm visibly ended short of the ear at some angles and left a
+   * detached fragment past it at others.
+   */
+  _clipNearArm(transform) {
+    if (!this._hinges?.length || !this.faceOccluder?.occluderMesh) {
+      return
+    }
+    const position = this.faceOccluder.occluderMesh.geometry.attributes.position
+    if (!this.faceOccluder.occluderMesh.visible || position.count <= Math.max(...EAR_LANDMARKS)) {
+      applyNearArmClip(this._hinges, 0, null)
+      return
+    }
+
+    const yaw = THREE.MathUtils.radToDeg(this.headYaw ?? 0)
+    const nearSide = Math.abs(yaw) < NEAR_ARM_YAW_DEG ? 0 : (yaw >= 0 ? -1 : 1)
+    if (nearSide === 0) {
+      applyNearArmClip(this._hinges, 0, null)
+      return
+    }
+
+    // The head's OWN frame, not the pose quaternion's +Z. Those sit about 29
+    // degrees apart, and the cut has to be the same plane the metric measures
+    // against or the arm being scored is not the arm being drawn.
+    const world = this.faceOccluder.occluderMesh.matrixWorld
+    const at = (index, into) => into.fromBufferAttribute(position, index).applyMatrix4(world)
+    const frame = headFrame(
+      at(EAR_LANDMARKS[0], (this._clipA ??= new THREE.Vector3())),
+      at(EAR_LANDMARKS[1], (this._clipB ??= new THREE.Vector3())),
+      at(EYE_LANDMARKS[0], (this._clipC ??= new THREE.Vector3())),
+      at(EYE_LANDMARKS[1], (this._clipD ??= new THREE.Vector3())),
+      at(NOSE_LANDMARK, (this._clipE ??= new THREE.Vector3())),
+      { origin: (this._clipMid ??= new THREE.Vector3()), forward: (this._clipForward ??= new THREE.Vector3()) },
+    )
+    if (!frame) {
+      applyNearArmClip(this._hinges, 0, null)
+      return
+    }
+
+    const plane = (this._clipPlane ??= new THREE.Plane())
+    plane.setFromNormalAndCoplanarPoint(frame.forward, frame.origin)
+    applyNearArmClip(this._hinges, nearSide, plane)
   }
 
   _isPositionInCameraView(position) {

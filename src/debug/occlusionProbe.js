@@ -23,14 +23,12 @@
  * exact glasses mask.
  */
 import * as THREE from 'three'
+import { EAR_LANDMARKS, EYE_LANDMARKS, NOSE_LANDMARK, headFrame } from '../occlusion/headFrame.js'
 
-/** Face-oval extremes, which sit at the tragion -- the ear reference. */
-const EAR_LANDMARKS = [234, 454]
-
-/** Nose tip: used ONLY to choose the sign of the fore-aft axis. */
-const NOSE_LANDMARK = 1
-/** Outer eye corners; tragion-to-canthus is close to the head's horizontal. */
-const EYE_LANDMARKS = [33, 263]
+// Re-exported so the probe's own tests, and anything already importing it from
+// here, keep working; the definition lives with the renderer's copy so the two
+// cannot drift apart.
+export { headFrame }
 
 const TEMPLE_NAME = /temple/i
 // Flat decals carry "temple" in their names but are not the arm, and they sit on
@@ -41,63 +39,6 @@ const NOT_TEMPLE = /logo|print|emblem|lettering|mark/i
 function isTemple(mesh) {
   const label = `${mesh.name ?? ''} ${mesh.parent?.name ?? ''}`
   return TEMPLE_NAME.test(label) && !NOT_TEMPLE.test(label)
-}
-
-/**
- * The head's fore-aft frame, origin on the EAR PLANE, axis near-horizontal.
- *
- * The axis is the mean of the two EAR-TO-EYE vectors with the lateral component
- * projected out. Tragion to outer canthus runs close to the anatomical
- * horizontal, which is the property being bought here: the depth coordinate
- * must not absorb a sample's HEIGHT, because a temple arm rides ~50 mm above the
- * ear plane and any tilt in the axis turns that offset into depth.
- *
- * Two earlier versions of this got it wrong in the same direction:
- *
- *   ear midpoint -> nose tip      the nose sits well below the ear line, so the
- *                                 axis tilted ~30 degrees down and every arm on
- *                                 every model read as comfortably behind the
- *                                 ear. One frame reported its end 17 mm PAST
- *                                 the ear plane while the render plainly showed
- *                                 the arm stopping 27 px in front of the tragion.
- *   cross(lateral, brow -> chin)  better, but the forehead and chin are at
- *                                 different depths, so the vertical it is built
- *                                 from leans and ~5% of the height leaks back
- *                                 in -- 2.6 mm on a temple, 0.015 of a span.
- *
- * Each eye is paired with whichever ear is nearer, so the landmark convention
- * does not have to be assumed. The nose is used only for its SIGN: it says which
- * way out of the face is forward.
- *
- * @param {THREE.Vector3} earA tragion, one side (234)
- * @param {THREE.Vector3} earB tragion, other side (454)
- * @param {THREE.Vector3} eyeA outer canthus (33)
- * @param {THREE.Vector3} eyeB outer canthus (263)
- * @param {THREE.Vector3} nose nose tip (1), for orientation only
- * @param {{origin: THREE.Vector3, forward: THREE.Vector3}} [out] reusable output
- * @returns {{origin: THREE.Vector3, forward: THREE.Vector3, span: number} | null}
- */
-export function headFrame(earA, earB, eyeA, eyeB, nose, out = {}) {
-  const span = earA.distanceTo(earB)
-  if (!(span > 0)) return null
-
-  const origin = (out.origin ?? new THREE.Vector3()).addVectors(earA, earB).multiplyScalar(0.5)
-  const forward = out.forward ?? new THREE.Vector3()
-
-  const lateral = new THREE.Vector3().subVectors(earB, earA).normalize()
-  const sameSide = earA.distanceToSquared(eyeA) <= earA.distanceToSquared(eyeB)
-  forward
-    .subVectors(sameSide ? eyeA : eyeB, earA)
-    .add(new THREE.Vector3().subVectors(sameSide ? eyeB : eyeA, earB))
-    .multiplyScalar(0.5)
-  // Strip the sideways part, so the axis lies square across the head.
-  forward.addScaledVector(lateral, -forward.dot(lateral))
-  if (!(forward.lengthSq() > 0)) return null
-  forward.normalize()
-
-  if (forward.dot(new THREE.Vector3().subVectors(nose, origin)) < 0) forward.negate()
-
-  return { origin, forward, span }
 }
 
 export class OcclusionProbe {
@@ -269,19 +210,24 @@ export class OcclusionProbe {
         uScale: { value: 1 / (2 * OcclusionProbe.DEPTH_RANGE) },
       },
       vertexShader: `
+        #include <clipping_planes_pars_vertex>
         uniform vec3 uOrigin;
         uniform vec3 uForward;
         uniform float uScale;
         varying float vDepth;
         void main() {
-          vec4 world = modelMatrix * vec4(position, 1.0);
-          vDepth = dot(world.xyz - uOrigin, uForward) * uScale + 0.5;
-          gl_Position = projectionMatrix * viewMatrix * world;
+          vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+          vDepth = dot(worldPosition.xyz - uOrigin, uForward) * uScale + 0.5;
+          vec4 mvPosition = viewMatrix * worldPosition;
+          gl_Position = projectionMatrix * mvPosition;
+          #include <clipping_planes_vertex>
         }
       `,
       fragmentShader: `
+        #include <clipping_planes_pars_fragment>
         varying float vDepth;
         void main() {
+          #include <clipping_planes_fragment>
           float d = clamp(vDepth, 0.0, 1.0);
           float hi = floor(d * 255.0) / 255.0;
           float lo = fract(d * 255.0);
@@ -289,6 +235,12 @@ export class OcclusionProbe {
         }
       `,
       side: THREE.DoubleSide,
+      // Custom shaders do NOT get clipping for free. `clipping: true` only
+      // declares the uniforms; the chunks above have to be included by hand, and
+      // without them the planes are accepted and silently ignored -- the probe
+      // then reads the near temple running 0.3 spans past the ear on a render
+      // that cuts it at the ear.
+      clipping: true,
     })
     return this._depthMat
   }
@@ -312,7 +264,16 @@ export class OcclusionProbe {
     material.uniforms.uOrigin.value.copy(frame.origin)
     material.uniforms.uForward.value.copy(frame.forward)
 
+    // Carry the arm's own clipping planes onto the depth material. Without this
+    // the probe measures an arm the renderer never drew: the near temple is cut
+    // at the ear plane by applyNearArmClip, and a swapped-in material with no
+    // planes reports it running on past the ear.
     const saved = arms.map((m) => m.material)
+    const clip = saved.find((m) => m?.clippingPlanes?.length)?.clippingPlanes ?? null
+    if ((material.clippingPlanes?.length ?? 0) !== (clip?.length ?? 0)) {
+      material.needsUpdate = true
+    }
+    material.clippingPlanes = clip
     arms.forEach((m) => { m.material = material })
 
     const prev = this.renderer.getRenderTarget()
