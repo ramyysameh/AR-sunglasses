@@ -57,6 +57,9 @@ const IRIS_USELESS_YAW_DEG = 42
 // over the brows) -- not derived, so re-tune with ?vlift if a frame reads low.
 const DEFAULT_VERTICAL_LIFT = 0.5
 
+/** Scratch for the forward-axis clearance offset; solve() runs every frame. */
+const FORWARD = new THREE.Vector3()
+
 function finiteVector3(vector) {
   return vector &&
     Number.isFinite(vector.x) &&
@@ -369,6 +372,23 @@ export class FaceFitSolver {
     const faceWorldPoints = Array.isArray(landmarks)
       ? landmarks.map((landmark) => anchorToWorld(landmark, camera, baseDepth, landmarkDepthToMetres(camera, baseDepth) * occluderDepthScale()))
       : []
+    // The nose bridge at its REAL depth, using the same per-landmark mapping the
+    // occluder above uses.
+    //
+    // anchorWorldPoints places every anchor on a FLAT plane -- bridgeTop included,
+    // at baseDepth + 22 mm, identical at every head angle. The occluder gives the
+    // same landmark its own depth. So the frame and the face disagree about where
+    // the skin is, and the disagreement moves with pitch: measured on a nod sweep,
+    // the frame's nose saddle travelled 33 mm along the head's forward axis
+    // (+22.8 mm ahead of the sellion looking up, 10.7 mm BEHIND it looking down)
+    // and the bridge ended up 23.6 mm inside the nose at the bottom of the nod.
+    //
+    // Same bug class as the landmark-depth unit error and the yaw foreshortening:
+    // a single scalar standing in for a quantity that actually varies.
+    const bridgeSurfaceWorld = pose.anchorPoints?.bridgeTop
+      ? anchorToWorld(pose.anchorPoints.bridgeTop, camera, baseDepth, landmarkDepthToMetres(camera, baseDepth))
+      : null
+
     const bridgeWorld = anchorWorldPoints.bridgeCenter ?? anchorWorldPoints.bridgeTop
     const irisWorld = anchorWorldPoints.irisCenter
     const leftTemple = anchorWorldPoints.leftTemple
@@ -475,10 +495,17 @@ export class FaceFitSolver {
     // correction -- and fixes its missing render scale, since the lever arm is in
     // model units but the frame is drawn at `scale`.
     if (saddleAnchored && Number.isFinite(scale)) {
-      targetPosition.copy(frameAnchor).sub(
-        localBridgePivot.clone().multiplyScalar(scale).applyQuaternion(quaternion)
-      )
-      targetPosition.z = Math.max(targetPosition.z, minVisibleDepth)
+      // Clearance is applied along the HEAD's forward axis, not world Z. A world-Z
+      // floor holds the frame off the skin only while the face points at the
+      // camera; once the head pitches, "forward" is no longer Z and the floor
+      // stops protecting the surface it was meant to protect.
+      const clearance = skuFitMetadata?.frontFrameClearanceMeters ?? 0.003
+      targetPosition
+        .copy(bridgeSurfaceWorld ?? frameAnchor)
+        .add(FORWARD.set(0, 0, clearance).applyQuaternion(quaternion))
+        .sub(localBridgePivot.clone().multiplyScalar(scale).applyQuaternion(quaternion))
+      // Deliberately no world-Z clamp here: it would reintroduce exactly the
+      // pitch-varying depth error this anchor removes.
     }
 
     const scaleDrift = faceSpan > 0 && currentSpan > 0
