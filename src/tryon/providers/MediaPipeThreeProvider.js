@@ -59,7 +59,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     // In mock mode the "face" is a static image, so the head-turn calibration
     // can never complete — relax the scanner to lock on from the front view only.
     const mockParam = new URLSearchParams(window.location.search).get('mock')
-    const mockMode = mockParam === '1' || mockParam === 'turn'
+    const mockMode = mockParam === '1' || mockParam === 'turn' || mockParam === 'pitch'
     const localFaceScanner = mockMode
       ? new LocalFaceScanner({ stageTargets: { front: 5, yawLeft: 0, yawRight: 0, neutralReturn: 0 } })
       : undefined
@@ -174,7 +174,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     // Dev/preview: ?mock=1 feeds a static face image instead of the webcam,
     // so the AR pipeline can be previewed without camera access.
     const mock = new URLSearchParams(window.location.search).get('mock')
-    if (mock === '1' || mock === 'turn') {
+    if (mock === '1' || mock === 'turn' || mock === 'pitch') {
       await this._startMockCamera()
       return
     }
@@ -217,13 +217,20 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
   }
 
   async _startMockCamera() {
-    // ?mock=1   -> static virtual face
-    // ?mock=turn-> virtual face that oscillates left/right (to test head turns)
+    // ?mock=1    -> static virtual face
+    // ?mock=turn -> virtual face that oscillates left/right (to test head turns)
+    // ?mock=pitch-> virtual face that nods up/down.
+    //
+    // Pitch is a separate sweep because the fit solver's rotation pivot is
+    // mathematically INVARIANT under yaw -- a pivot offset along Y is unchanged
+    // by a Y rotation -- so the turn sweep cannot see a pivot error at all, no
+    // matter how large. Frames are rendered from the same head.glb; see
+    // headrender.html ?axis=pitch.
     const mode = new URLSearchParams(window.location.search).get('mock')
     const cb = Date.now()
 
     let images
-    if (mode === 'turn') {
+    if (mode === 'turn' || mode === 'pitch') {
       // ?mockframes=<n> lets a denser turn sequence be dropped in for smoother
       // motion and finer angle steps; the repo ships 9. Frames that are missing
       // resolve to null and get filtered out rather than rejecting the whole
@@ -235,13 +242,13 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
         Array.from({ length: N }, (_, i) => {
           const im = new Image()
           im.crossOrigin = 'anonymous'
-          im.src = `/mock-turn/frame-${i}.png?v=${cb}`
+          im.src = `/mock-${mode}/frame-${i}.png?v=${cb}`
           return im.decode().then(() => im, () => null)
         })
       )
       images = loaded.filter(Boolean)
       if (!images.length) {
-        throw new Error('mock=turn: no /mock-turn/frame-*.png could be loaded')
+        throw new Error(`mock=${mode}: no /mock-${mode}/frame-*.png could be loaded`)
       }
     } else {
       const im = new Image()

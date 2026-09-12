@@ -55,13 +55,52 @@ const harnessPlugin = {
     // Registered in configureServer (not as a returned post-hook) so it runs
     // BEFORE vite's static handler and can shadow public/ without touching it.
     server.middlewares.use((req, res, next) => {
-      const match = /^\/mock-turn\/(frame-\d+\.png)$/.exec((req.url ?? '').split('?')[0])
+      const match = /^\/mock-(turn|pitch)\/(frame-\d+\.png)$/.exec((req.url ?? '').split('?')[0])
       if (!match) return next()
-      const file = path.join(MOCK_HEAD_DIR, 'turn', match[1])
+      const file = path.join(MOCK_HEAD_DIR, match[1], match[2])
       if (!fs.existsSync(file)) return next()
       res.setHeader('Content-Type', 'image/png')
       res.setHeader('Cache-Control', 'no-store')
       res.end(fs.readFileSync(file))
+    })
+
+    // The mock-head project (head.glb + headrender.html) lives outside the repo.
+    // Serving it here is what lets a sweep be RE-RENDERED rather than treated as
+    // a fixed asset -- the pitch set below did not exist until the fit work
+    // needed an axis the turn set does not cover.
+    server.middlewares.use('/mockhead', (req, res, next) => {
+      const rel = (req.url ?? '').split('?')[0].replace(/^\//, '')
+      const file = path.resolve(MOCK_HEAD_DIR, rel)
+      if (!file.startsWith(path.resolve(MOCK_HEAD_DIR)) || !fs.existsSync(file)) return next()
+      const type = { '.html': 'text/html', '.glb': 'model/gltf-binary', '.png': 'image/png' }[path.extname(file)]
+      if (type) res.setHeader('Content-Type', type)
+      res.setHeader('Cache-Control', 'no-store')
+      res.end(fs.readFileSync(file))
+    })
+
+    // Frame sink for headrender.html. ?dir=<name> picks the sweep directory, so
+    // rendering a new axis does not overwrite an existing one.
+    server.middlewares.use('/__save-frames', async (req, res) => {
+      try {
+        const chunks = []
+        for await (const chunk of req) chunks.push(chunk)
+        const { frames } = JSON.parse(Buffer.concat(chunks).toString())
+        const dir = (new URL(req.url ?? '', 'http://localhost').searchParams.get('dir') ?? 'turn')
+          .replace(/[^a-zA-Z0-9_-]/g, '')
+        const target = path.join(MOCK_HEAD_DIR, dir || 'turn')
+        fs.mkdirSync(target, { recursive: true })
+        frames.forEach((dataUrl, i) => {
+          fs.writeFileSync(
+            path.join(target, `frame-${i}.png`),
+            Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'),
+          )
+        })
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ saved: frames.length, dir: target }))
+      } catch (error) {
+        res.statusCode = 500
+        res.end(JSON.stringify({ error: String(error?.message ?? error) }))
+      }
     })
 
     // Screenshot sink. The agent driving this harness cannot see the preview
