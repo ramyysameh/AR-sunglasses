@@ -87,3 +87,13 @@ export function applyLensReflection(material, envMap, config) {
     material.clearcoatRoughness = config.clearcoatRoughness
   }
 }
+
+/**
+ * Which reflection environment to build: 'studio' (default) or 'sky'.
+ *
+ * ?env=sky restores the outdoor sun-and-horizon environment the frame shipped
+ * with before studio lighting.
+ */
+export function resolveEnvironmentName(search) {
+  return new URLSearchParams(search).get('env') === 'sky' ? 'sky' : 'studio'
+}

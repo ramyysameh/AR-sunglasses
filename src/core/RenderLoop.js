@@ -11,7 +11,7 @@ import { FaceFitSolver } from '../fit/FaceFitSolver.js'
 import { coverNDC } from '../fit/coverMap.js'
 import { resolveGlassesScaleMultiplier } from './glassesScale.js'
 import { createLensEnvironment } from './lensEnvironment.js'
-import { resolveLensReflectionConfig } from './lensReflection.js'
+import { resolveLensReflectionConfig, resolveEnvironmentName} from './lensReflection.js'
 import { resolveFrameReflectionConfig } from './frameReflection.js'
 import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
 
@@ -142,6 +142,7 @@ export class RenderLoop {
     this.lensReflection = resolveLensReflectionConfig(window.location.search)
     this.frameReflection = resolveFrameReflectionConfig(window.location.search)
     this.lensEnvironment = createLensEnvironment(this.renderer, {
+      environment: resolveEnvironmentName(window.location.search),
       sunAzimuthDeg: this.lensReflection.sunAzimuthDeg,
       sunElevationDeg: this.lensReflection.sunElevationDeg,
     })
