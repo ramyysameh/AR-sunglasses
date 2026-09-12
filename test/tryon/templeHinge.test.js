@@ -63,19 +63,26 @@ describe('solveSplay', () => {
 })
 
 describe('applyNearArmClip', () => {
-  const mesh = () => ({ material: { clone() { return { ...this, clippingPlanes: null } }, clippingPlanes: null }, userData: {}, renderOrder: 0 })
+  const arm = () => {
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]), 3))
+    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial())
+    new THREE.Group().add(m)
+    return m
+  }
   const hinges = () => [
-    { side: -1, meshes: [mesh(), mesh()] },
-    { side: 1, meshes: [mesh(), mesh()] },
+    { side: -1, meshes: [arm(), arm()] },
+    { side: 1, meshes: [arm(), arm()] },
   ]
-  const PLANE = { isPlane: true }
+  const FRONT = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
+  const BACK = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0)
 
   it('draws the near arm before the occluder and clips it, leaving the far arm alone', () => {
     const h = hinges()
-    applyNearArmClip(h, -1, PLANE)
+    applyNearArmClip(h, -1, FRONT, BACK)
     for (const m of h[0].meshes) {
       expect(m.renderOrder).toBe(TEMPLE_ON_TOP_ORDER)
-      expect(m.material.clippingPlanes).toEqual([PLANE])
+      expect(m.material.clippingPlanes).toEqual([FRONT])
     }
     for (const m of h[1].meshes) {
       expect(m.renderOrder).toBe(0)
@@ -83,10 +90,31 @@ describe('applyNearArmClip', () => {
     }
   })
 
+  it('draws the stretch behind the ear normally, so the ear hides the cut', () => {
+    // Discarding it instead leaves a hard diagonal edge on the cheek wherever
+    // the ear does not cover the cut -- plainly visible at +/-25 deg of pitch.
+    const h = hinges()
+    applyNearArmClip(h, -1, FRONT, BACK)
+    for (const m of h[0].meshes) {
+      const behind = m.userData.templeBehind
+      expect(behind).toBeTruthy()
+      expect(behind.visible).toBe(true)
+      expect(behind.renderOrder).toBe(0)
+      expect(behind.material.clippingPlanes).toEqual([BACK])
+      expect(behind.geometry).toBe(m.geometry)
+    }
+  })
+
+  it('hides the behind-ear sibling on the far arm', () => {
+    const h = hinges()
+    applyNearArmClip(h, -1, FRONT, BACK)
+    for (const m of h[1].meshes) expect(m.userData.templeBehind.visible).toBe(false)
+  })
+
   it('never lifts BOTH arms, which is what showed the far one through the head', () => {
     // Applied to both, 651 of the far arm's 1529 pixels drew through the skull.
     const h = hinges()
-    applyNearArmClip(h, 1, PLANE)
+    applyNearArmClip(h, 1, FRONT, BACK)
     const lifted = h.filter((x) => x.meshes.some((m) => m.renderOrder === TEMPLE_ON_TOP_ORDER))
     expect(lifted).toHaveLength(1)
     expect(lifted[0].side).toBe(1)
@@ -94,18 +122,25 @@ describe('applyNearArmClip', () => {
 
   it('lifts neither arm when the head is too frontal to have a near side', () => {
     const h = hinges()
-    applyNearArmClip(h, 0, PLANE)
-    for (const hinge of h) for (const m of hinge.meshes) expect(m.renderOrder).toBe(0)
+    applyNearArmClip(h, 0, FRONT, BACK)
+    for (const hinge of h) {
+      for (const m of hinge.meshes) {
+        expect(m.renderOrder).toBe(0)
+        expect(m.userData.templeBehind.visible).toBe(false)
+      }
+    }
   })
 
-  it('clones the material once, so clipping cannot leak into a shared one', () => {
+  it('clones the material and the sibling once each', () => {
     const h = hinges()
     const first = h[0].meshes[0].material
-    applyNearArmClip(h, -1, PLANE)
+    applyNearArmClip(h, -1, FRONT, BACK)
     const cloned = h[0].meshes[0].material
+    const sibling = h[0].meshes[0].userData.templeBehind
     expect(cloned).not.toBe(first)
-    applyNearArmClip(h, -1, PLANE)
+    applyNearArmClip(h, -1, FRONT, BACK)
     expect(h[0].meshes[0].material).toBe(cloned)
+    expect(h[0].meshes[0].userData.templeBehind).toBe(sibling)
   })
 })
 

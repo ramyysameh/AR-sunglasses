@@ -2,7 +2,7 @@
  * Main AR render loop that fuses face tracking, pose filtering, occlusion, and Three.js rendering.
  */
 import * as THREE from 'three'
-import { NEAR_ARM_YAW_DEG, TEMPLE_CURL_RAD, applyCurl, applyNearArmClip, applyOffset, applySplay, buildHinges, solveSplay } from '../models/templeHinge.js'
+import { NEAR_ARM_YAW_DEG, TEMPLE_CURL_RAD, TEMPLE_CUT_BEHIND_EAR_M, applyCurl, applyNearArmClip, applyOffset, applySplay, buildHinges, solveSplay } from '../models/templeHinge.js'
 import { EAR_LANDMARKS, EYE_LANDMARKS, NOSE_LANDMARK, headFrame } from '../occlusion/headFrame.js'
 import { scaleMultiplier, xOffset, yOffset, zOffset, rotOffsetX, rotOffsetY, rotOffsetZ, trackingSmoothness } from '../config/poseConfig.js'
 import { FitCalibrator } from '../fit/FitCalibrator.js'
@@ -958,14 +958,14 @@ export class RenderLoop {
     }
     const position = this.faceOccluder.occluderMesh.geometry.attributes.position
     if (!this.faceOccluder.occluderMesh.visible || position.count <= Math.max(...EAR_LANDMARKS)) {
-      applyNearArmClip(this._hinges, 0, null)
+      applyNearArmClip(this._hinges, 0, null, null)
       return
     }
 
     const yaw = THREE.MathUtils.radToDeg(this.headYaw ?? 0)
     const nearSide = Math.abs(yaw) < NEAR_ARM_YAW_DEG ? 0 : (yaw >= 0 ? -1 : 1)
     if (nearSide === 0) {
-      applyNearArmClip(this._hinges, 0, null)
+      applyNearArmClip(this._hinges, 0, null, null)
       return
     }
 
@@ -983,13 +983,23 @@ export class RenderLoop {
       { origin: (this._clipMid ??= new THREE.Vector3()), forward: (this._clipForward ??= new THREE.Vector3()) },
     )
     if (!frame) {
-      applyNearArmClip(this._hinges, 0, null)
+      applyNearArmClip(this._hinges, 0, null, null)
       return
     }
 
+    // Behind the tragion, not on it: the tragion is the ear's FRONT edge, so a
+    // cut there sits on bare skin instead of inside the ear's outline.
+    const cutAt = (this._clipCutAt ??= new THREE.Vector3())
+      .copy(frame.origin)
+      .addScaledVector(frame.forward, -TEMPLE_CUT_BEHIND_EAR_M)
     const plane = (this._clipPlane ??= new THREE.Plane())
-    plane.setFromNormalAndCoplanarPoint(frame.forward, frame.origin)
-    applyNearArmClip(this._hinges, nearSide, plane)
+    plane.setFromNormalAndCoplanarPoint(frame.forward, cutAt)
+    const behind = (this._clipBehind ??= new THREE.Plane())
+    behind.setFromNormalAndCoplanarPoint(
+      (this._clipBack ??= new THREE.Vector3()).copy(frame.forward).negate(),
+      cutAt,
+    )
+    applyNearArmClip(this._hinges, nearSide, plane, behind)
   }
 
   _isPositionInCameraView(position) {

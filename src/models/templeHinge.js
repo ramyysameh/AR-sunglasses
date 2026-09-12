@@ -543,7 +543,7 @@ export const TEMPLE_ON_TOP_ORDER = -2
  * @param {number} nearSide -1, 1, or 0 for "too frontal to say"
  * @param {THREE.Plane|null} earPlane world-space, normal pointing out of the face
  */
-export function applyNearArmClip(hinges, nearSide, earPlane) {
+export function applyNearArmClip(hinges, nearSide, earPlane, behindPlane) {
   for (const hinge of hinges) {
     const near = nearSide !== 0 && hinge.side === nearSide && earPlane
     for (const mesh of hinge.meshes) {
@@ -554,15 +554,47 @@ export function applyNearArmClip(hinges, nearSide, earPlane) {
         mesh.userData.templeClipMaterial = true
       }
       mesh.renderOrder = near ? TEMPLE_ON_TOP_ORDER : 0
-      const planes = near ? [earPlane] : null
-      const before = mesh.material.clippingPlanes
-      // Adding or removing a plane changes the shader, so it has to recompile.
-      if ((before ? before.length : 0) !== (planes ? planes.length : 0)) {
-        mesh.material.needsUpdate = true
-      }
-      mesh.material.clippingPlanes = planes
+      setClip(mesh.material, near ? [earPlane] : null)
+
+      // The stretch BEHIND the ear plane, drawn normally so the head and ear
+      // hide it. Discarding it instead leaves the cut edge showing wherever the
+      // ear does not happen to cover it -- at +/-25 degrees of pitch the arm
+      // ended in mid-air with a hard diagonal edge on the cheek.
+      const behind = nearArmRemainder(mesh)
+      behind.visible = Boolean(near && behindPlane)
+      behind.renderOrder = 0
+      if (behind.visible) setClip(behind.material, [behindPlane])
     }
   }
+}
+
+/** Adds or removes clipping planes, recompiling only when the count changes. */
+function setClip(material, planes) {
+  const before = material.clippingPlanes
+  if ((before ? before.length : 0) !== (planes ? planes.length : 0)) {
+    material.needsUpdate = true
+  }
+  material.clippingPlanes = planes
+}
+
+/**
+ * The sibling that draws the part of an arm behind the ear plane.
+ *
+ * Shares the geometry -- only the material and the clipping differ -- so this
+ * costs a draw call on one arm, not a copy of the mesh.
+ */
+function nearArmRemainder(mesh) {
+  if (mesh.userData.templeBehind) return mesh.userData.templeBehind
+  const behind = new THREE.Mesh(mesh.geometry, mesh.material.clone())
+  behind.name = `${mesh.name}__behind`
+  behind.castShadow = mesh.castShadow
+  behind.receiveShadow = mesh.receiveShadow
+  behind.position.copy(mesh.position)
+  behind.quaternion.copy(mesh.quaternion)
+  behind.scale.copy(mesh.scale)
+  mesh.parent?.add(behind)
+  mesh.userData.templeBehind = behind
+  return behind
 }
 
 /**
@@ -570,3 +602,14 @@ export function applyNearArmClip(hinges, nearSide, earPlane) {
  * behind the frame and the head anyway. Flipping sides here would only pop.
  */
 export const NEAR_ARM_YAW_DEG = 8
+
+/**
+ * How far BEHIND the tragion the near arm is cut, metres.
+ *
+ * The tragion is the front of the ear, so cutting exactly there leaves the cut
+ * edge on the skin rather than tucked behind anything -- at +/-25 degrees of
+ * pitch the arm visibly ended in mid-air with a hard diagonal edge, about 40 px
+ * short of where the ear actually looked. Moving the cut back puts it inside the
+ * ear's own outline, where the ear covers it.
+ */
+export const TEMPLE_CUT_BEHIND_EAR_M = 0.012
