@@ -41,6 +41,39 @@ const TEMPLE_SPAN_VERTEX = {
   right: TEMPLE_SPAN_LANDMARKS.right,
 }
 
+/**
+ * Central landmarks used as the head's origin for shell shaping.
+ *
+ * NOT the temple midpoint, which is the obvious choice and the wrong one. The
+ * face-oval sides sit on the silhouette edge and are half self-occluded through
+ * a turn, which makes them the noisiest landmarks on the face. Measured in
+ * head-local space over 90 frames of live turning, movement per frame that a
+ * rigid head should not have at all:
+ *
+ *   nose tip (1)        0.57 mm mean,  5.7 mm peak
+ *   forehead (10)       0.57 mm mean,  4.4 mm peak
+ *   face oval (234)     2.55 mm mean, 27.3 mm peak   <- silhouette edge
+ *   face oval (454)     2.52 mm mean, 25.2 mm peak   <- silhouette edge
+ *
+ * Anchoring on the central points keeps that 4x noise out of the shell's origin.
+ */
+const HEAD_ORIGIN_VERTICES = [1, 4, 10, 168]
+
+/**
+ * Smoothing on the shell's SHAPE, held in head-local space.
+ *
+ * A head's shape does not change; only its pose does. The shell was rebuilt from
+ * the face-oval ring every frame, so it inherited those landmarks' noise one for
+ * one -- the extruded ring measured 2.63 mm mean / 27.7 mm peak of head-local
+ * movement, essentially identical to the oval it is built from. The temple tip
+ * is cut exactly at that boundary, by design, so the visible end of the arm
+ * danced with it.
+ *
+ * Smoothing here costs no tracking latency: POSE still comes straight from the
+ * frame's quaternion and the head origin every frame. Only the shape is held.
+ */
+const SHELL_SHAPE_ALPHA = 0.08
+
 const OCCLUDER_INDICES = [
   ...tessellationTriangles(FaceLandmarker.FACE_LANDMARKS_TESSELATION),
   ...shellTriangles(FACE_OVAL_RING, EXTRUDED_START, CAP_VERTEX),
@@ -77,8 +110,6 @@ export class FaceOccluder {
       typeof window !== 'undefined' &&
       new URLSearchParams(window.location.search).get('occdbg') === '1'
     )
-    this._backward = new THREE.Vector3()
-    this._outward = new THREE.Vector3()
   }
 
   async init(scene) {
@@ -196,61 +227,86 @@ export class FaceOccluder {
     const s = this._smoothedPts
     const templeL = readPoint(s, TEMPLE_SPAN_VERTEX.left)
     const templeR = readPoint(s, TEMPLE_SPAN_VERTEX.right)
-    const span = templeSpan(templeL, templeR)
-    const depth = span * this.shellDepthRatio
+    const rawSpan = templeSpan(templeL, templeR)
 
-    if (!headQuaternion || !(depth > 0)) {
+    if (!headQuaternion || !(rawSpan > 0)) {
       this._collapseShell(position)
       return
     }
 
-    const back = this._backward.set(0, 0, -1).applyQuaternion(headQuaternion).multiplyScalar(depth)
+    // Head origin from central landmarks only -- see HEAD_ORIGIN_VERTICES.
+    let ox = 0, oy = 0, oz = 0
+    for (const vertex of HEAD_ORIGIN_VERTICES) {
+      const i = vertex * 3
+      ox += s[i]; oy += s[i + 1]; oz += s[i + 2]
+    }
+    ox /= HEAD_ORIGIN_VERTICES.length
+    oy /= HEAD_ORIGIN_VERTICES.length
+    oz /= HEAD_ORIGIN_VERTICES.length
 
-    // Lateral bulge, so the wall sits where the EARS are rather than on the face
-    // oval, which traces the narrower face. Weighted by how lateral each ring
-    // point already is (its projection onto the head's own X), so the sides push
-    // out and the chin and forehead stay put instead of inflating the whole
-    // head. The sign comes from that same projection rather than a hardcoded
-    // axis: which MediaPipe side maps to which world sign depends on mirroring,
-    // and guessing wrong would pull the wall INTO the head.
-    const axis = this._outward.set(1, 0, 0).applyQuaternion(headQuaternion)
-    const midX = (templeL.x + templeR.x) / 2
-    const midY = (templeL.y + templeR.y) / 2
-    const midZ = (templeL.z + templeR.z) / 2
+    const seeded = this._ringLocal != null
+    if (!seeded) this._ringLocal = new Float32Array(RING_LENGTH * 3)
+    const alpha = seeded ? SHELL_SHAPE_ALPHA : 1
+
+    // Span is a shape measurement too, and it is taken from the same noisy
+    // silhouette landmarks, so it gets the same treatment. Left unsmoothed it
+    // breathes the whole shell in and out, since it scales both the extrusion
+    // depth and the ear bulge.
+    this._shellSpan = seeded ? this._shellSpan + (rawSpan - this._shellSpan) * alpha : rawSpan
+    const span = this._shellSpan
+    const depth = span * this.shellDepthRatio
     const widen = span * this.shellLateralRatio
     const halfSpan = span * 0.5
+
+    const inverse = (this._invQuat ??= new THREE.Quaternion()).copy(headQuaternion).invert()
+    const v = (this._shellTmp ??= new THREE.Vector3())
 
     let capX = 0
     let capY = 0
     let capZ = 0
 
     for (let k = 0; k < RING_LENGTH; k += 1) {
-      // The ring vertex IS the face-oval landmark, already smoothed as part of
-      // the face mesh, so the wall starts exactly on the face surface.
       const i = FACE_OVAL_RING[k] * 3
-      const lateral = halfSpan > 1e-6
-        ? ((s[i] - midX) * axis.x + (s[i + 1] - midY) * axis.y + (s[i + 2] - midZ) * axis.z) / halfSpan
+      const j = k * 3
+
+      // Into the head's own frame, where the ring is a fixed shape, and average
+      // it there. Smoothing in WORLD space -- which is what the face mesh does --
+      // cannot do this job: through a turn the world position of a rigid point
+      // changes legitimately and fast, so a world-space average lags the head
+      // instead of removing shape noise.
+      v.set(s[i] - ox, s[i + 1] - oy, s[i + 2] - oz).applyQuaternion(inverse)
+      this._ringLocal[j] += (v.x - this._ringLocal[j]) * alpha
+      this._ringLocal[j + 1] += (v.y - this._ringLocal[j + 1]) * alpha
+      this._ringLocal[j + 2] += (v.z - this._ringLocal[j + 2]) * alpha
+
+      // Bulge and extrusion are now plain axis operations: in head-local space
+      // +X IS lateral and -Z IS backward, so no projection onto a rotated axis
+      // is needed and none of that arithmetic can pick up pose noise.
+      const lx = this._ringLocal[j]
+      const w = halfSpan > 1e-6
+        ? widen * Math.max(Math.min(lx / halfSpan, 1), -1)
         : 0
-      const w = widen * Math.max(Math.min(lateral, 1), -1)
-      const rx = s[i] + axis.x * w + cx
-      const ry = s[i + 1] + axis.y * w + cy
-      const rz = s[i + 2] + axis.z * w + cz
 
-      // Only the EXTRUDED copy moves outward. Widening the ring vertex itself
-      // would drag the shared face-mesh vertex with it and tear a hole in the
-      // face surface, since the tessellation uses the same vertex.
-      position.setXYZ(EXTRUDED_START + k, rx + back.x, ry + back.y, rz + back.z)
+      v.set(lx + w, this._ringLocal[j + 1], this._ringLocal[j + 2] - depth)
+        .applyQuaternion(headQuaternion)
 
-      capX += rx + back.x
-      capY += ry + back.y
-      capZ += rz + back.z
+      const ex = ox + v.x + cx
+      const ey = oy + v.y + cy
+      const ez = oz + v.z + cz
+
+      // Only the EXTRUDED copy is written. The ring vertex itself is a shared
+      // face-mesh vertex; moving it would tear a hole in the face surface.
+      position.setXYZ(EXTRUDED_START + k, ex, ey, ez)
+
+      capX += ex
+      capY += ey
+      capZ += ez
     }
 
-    // Single vertex closing the back. Its position is the mean of the extruded
-    // ring, which keeps the cap flat and inside the ring's own silhouette -- the
-    // cap only has to seal the volume, not model the back of the skull.
-    const n = RING_LENGTH
-    position.setXYZ(CAP_VERTEX, capX / n, capY / n, capZ / n)
+    // Single vertex closing the back: the mean of the extruded ring, which keeps
+    // the cap flat and inside the ring's own silhouette. It only has to seal the
+    // volume, not model the back of the skull.
+    position.setXYZ(CAP_VERTEX, capX / RING_LENGTH, capY / RING_LENGTH, capZ / RING_LENGTH)
   }
 
   updateFromFaceMesh(

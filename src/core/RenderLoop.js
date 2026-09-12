@@ -39,6 +39,10 @@ const MAX_PLAUSIBLE_HEAD_HALF_M = 0.13
 // Vertex stride when sampling an arm. The solve needs the arm's silhouette, not
 // every vertex of it; one in twelve keeps a 27k-vertex arm cheap to measure.
 const ARM_SAMPLE_STRIDE = 12
+// Frontal samples the head-width estimate averages over before the arms are
+// opened, and how far that average must move to justify opening them again.
+const HEAD_WIDTH_SAMPLES = 90
+const HEAD_WIDTH_RESOLVE_M = 0.004
 
 export class RenderLoop {
   constructor(options = {}) {
@@ -879,7 +883,17 @@ export class RenderLoop {
     if (!(headHalfWidth > MIN_PLAUSIBLE_HEAD_HALF_M && headHalfWidth < MAX_PLAUSIBLE_HEAD_HALF_M)) {
       return
     }
-    if (this._splayForWidth != null && Math.abs(headHalfWidth - this._splayForWidth) < 0.001) {
+    // Average the head width before acting on it. A head's width does not change,
+    // but the MEASURED width does: inside this same +/-12 deg gate it swings
+    // 110.6 to 128.9 mm on the mock purely from foreshortening. Re-solving on
+    // each reading would open and close the arms through every turn -- currently
+    // invisible only because the solve saturates at the cap, and a real jitter
+    // the moment it stops saturating.
+    this._headWidthCount = Math.min((this._headWidthCount ?? 0) + 1, HEAD_WIDTH_SAMPLES)
+    this._headWidthMean = this._headWidthMean == null
+      ? headHalfWidth
+      : this._headWidthMean + (headHalfWidth - this._headWidthMean) / this._headWidthCount
+    if (this._splayForWidth != null && Math.abs(this._headWidthMean - this._splayForWidth) < HEAD_WIDTH_RESOLVE_M) {
       return
     }
 
@@ -921,7 +935,7 @@ export class RenderLoop {
     }
 
     applySplay(this._hinges, angle)
-    this._splayForWidth = headHalfWidth
+    this._splayForWidth = this._headWidthMean
     this._splayAngle = angle
   }
 
