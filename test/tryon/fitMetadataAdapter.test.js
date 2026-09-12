@@ -23,3 +23,16 @@ describe('toEngineModelConfig', () => {
     expect(cfg.scaleLimits).toEqual({ min: 0.85, max: 1.15 })
   })
 })
+
+describe('modelScale passthrough', () => {
+  it('carries the factor the calibration pass measured', () => {
+    const cfg = toEngineModelConfig({ ...fit, modelScale: 0.0438 }, '/models/abc.glb')
+    expect(cfg.modelScale).toBeCloseTo(0.0438, 6)
+  })
+
+  it('defaults to 1 for rows written before raw passthrough', () => {
+    // Those models have the rescale baked into their stored file already;
+    // reporting anything but 1 here would shrink them a second time.
+    expect(toEngineModelConfig(fit, '/models/abc.glb').modelScale).toBe(1)
+  })
+})
