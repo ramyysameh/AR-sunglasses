@@ -62,3 +62,26 @@ describe('normalizeModel', () => {
     expect(transforms).not.toContain('rescale')
   })
 })
+
+describe('normalizeModel scale reporting', () => {
+  it('reports scale 1 for a model already in metres', () => {
+    const doc = buildDoc([-0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.024, -0.13])
+    const { transforms, scale } = normalizeModel(doc, MODELING_SPEC)
+    expect(scale).toBe(1)
+    expect(transforms).not.toContain('rescale')
+  })
+
+  it('reports the factor applied to a large-coordinate model', () => {
+    // 3-unit-wide front slab: a raw Blender-scene export.
+    const doc = buildDoc([-1.5, 0, 0.4, 1.5, 0, 0.4, 0, 0.5, -2.6])
+    const { transforms, scale } = normalizeModel(doc, MODELING_SPEC)
+    expect(transforms).toContain('rescale')
+    // CANONICAL_FRONT_WIDTH_M (0.145) / 3
+    expect(scale).toBeCloseTo(0.145 / 3, 6)
+  })
+
+  it('reports scale 1 for a model with no geometry', () => {
+    const doc = buildDoc([])
+    expect(normalizeModel(doc, MODELING_SPEC).scale).toBe(1)
+  })
+})
