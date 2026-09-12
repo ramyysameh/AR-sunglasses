@@ -1,0 +1,231 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Mock head sweep renderer</title>
+<style>
+  body{margin:0;background:#333;font:13px system-ui;color:#fff}
+  #out{padding:6px 10px;background:#0008}
+  canvas{width:340px;height:340px;display:inline-block;margin:2px;background:#000}
+  #sheet{display:flex;flex-wrap:wrap}
+  #sheet canvas{width:168px;height:168px}
+</style>
+<div id="out">loading…</div>
+<div id="sheet"></div>
+<script type="importmap">
+{"imports":{"three":"/node_modules/three/build/three.module.js","three/addons/":"/node_modules/three/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+
+const q = new URLSearchParams(location.search)
+const SIZE = 720
+
+// ?count=<odd n>&range=<deg> -> frame-0 .. frame-(n-1), sweeping -range..+range.
+// The count is forced ODD so there is always an exact centre frame: the mock
+// holds the middle frame while the calibration scan runs, and the scan will not
+// lock on an off-frontal face, so an even count means the glasses never appear.
+const RANGE = parseFloat(q.get('range') ?? '60')
+let COUNT = parseInt(q.get('count') ?? '9', 10)
+if (!Number.isFinite(COUNT) || COUNT < 3) COUNT = 9
+if (COUNT % 2 === 0) COUNT += 1
+const ANGLES = Array.from({ length: COUNT }, (_, i) => -RANGE + (2 * RANGE * i) / (COUNT - 1))
+const YAW_OFFSET = parseFloat(q.get('yawoffset') ?? '0')   // model's own facing correction
+const DIST = parseFloat(q.get('dist') ?? '1.0')            // camera pull-back multiplier
+const HEAD_Y = parseFloat(q.get('heady') ?? '0.30')        // head centre, as fraction down from bbox top
+// ?axis=yaw|pitch. Pitch exists because the fit solver's rotation pivot acts on
+// pitch and is invariant under yaw, so a yaw-only sweep cannot see it at all.
+const AXIS = (q.get('axis') ?? 'yaw').toLowerCase()
+// ?neck=0 rotates the whole bust instead, which is what the original turn set
+// did. Rotating a head-and-shoulders bust bodily reads as the torso tipping
+// rather than the neck working, and at +/-30deg of pitch the shoulders swing far
+// enough to change what is in frame.
+const NECK = q.get('neck') !== '0'
+const out = document.getElementById('out')
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
+renderer.setSize(SIZE, SIZE)
+renderer.setClearColor(0x9a9a9a)
+renderer.outputColorSpace = THREE.SRGBColorSpace
+
+const scene = new THREE.Scene()
+// Flat, even light on purpose: MediaPipe keys off feature contrast, and a hard
+// shadow across one eye socket is a good way to lose the landmarks entirely.
+scene.add(new THREE.AmbientLight(0xffffff, 2.4))
+const key = new THREE.DirectionalLight(0xffffff, 1.2); key.position.set(0.4, 0.6, 1.6); scene.add(key)
+const fill = new THREE.DirectionalLight(0xffffff, 0.9); fill.position.set(-1.4, 0.3, 1.0); scene.add(fill)
+const rim = new THREE.DirectionalLight(0xffffff, 0.5); rim.position.set(1.4, 0.3, -0.6); scene.add(rim)
+
+const camera = new THREE.PerspectiveCamera(30, 1, 0.01, 100)
+const pivot = new THREE.Group()
+scene.add(pivot)
+
+const gltf = await new GLTFLoader().loadAsync(q.get('glb') || '/mockhead/head.glb')
+const model = gltf.scene
+pivot.add(model)
+
+// The GLB is a head-and-shoulders bust, so centring on the whole bounding box
+// frames the chest. Aim at a point near the top instead and size the view to
+// the head, not the bust.
+const box = new THREE.Box3().setFromObject(model)
+const size = box.getSize(new THREE.Vector3())
+const center = box.getCenter(new THREE.Vector3())
+const headCenter = new THREE.Vector3(center.x, box.max.y - size.y * HEAD_Y, center.z)
+model.position.sub(headCenter)
+
+const headRadius = size.y * 0.30 * DIST
+camera.position.set(0, 0, headRadius / Math.tan(THREE.MathUtils.degToRad(15)))
+camera.lookAt(0, 0, 0)
+
+/**
+ * Neck rig for an unrigged bust.
+ *
+ * The GLB is a single 23k-vertex mesh with no skin, so there is no joint to
+ * rotate. Instead: find the neck from the model's own silhouette, then rotate
+ * vertices about it with a weight that falls to zero by the shoulders.
+ *
+ * The neck is the narrowest horizontal slice between head and shoulders, and on
+ * this model it is unmistakable -- half-width runs 0.395 through the skull, dips
+ * to 0.265, then flares to 0.950 across the shoulders. Detecting it rather than
+ * hard-coding a height means a different bust still rigs itself.
+ *
+ * NORMALS are rotated by the same per-vertex angle as the positions. Leaving
+ * them is precisely the bug that inverted shading on merchant models when the
+ * calibration pipeline baked node transforms into POSITION alone.
+ */
+function buildNeckRig(root) {
+  const meshes = []
+  root.traverse((o) => { if (o.isMesh && o.geometry?.attributes?.position) meshes.push(o) })
+  if (!meshes.length) return null
+
+  let minY = Infinity, maxY = -Infinity
+  for (const m of meshes) {
+    const p = m.geometry.attributes.position
+    for (let i = 0; i < p.count; i += 1) { const y = p.getY(i); if (y < minY) minY = y; if (y > maxY) maxY = y }
+  }
+  const H = maxY - minY
+  if (!(H > 0)) return null
+
+  // Widest |x| per horizontal slice, searched only between 35% and 65% down:
+  // above that is the skull, below it the shoulders, and the true minimum of the
+  // whole profile is the crown.
+  const BINS = 40
+  const width = new Array(BINS).fill(0)
+  for (const m of meshes) {
+    const p = m.geometry.attributes.position
+    for (let i = 0; i < p.count; i += 1) {
+      const b = Math.min(BINS - 1, Math.floor(((p.getY(i) - minY) / H) * BINS))
+      const ax = Math.abs(p.getX(i))
+      if (ax > width[b]) width[b] = ax
+    }
+  }
+  let neckBin = -1, neckWidth = Infinity
+  for (let b = 0; b < BINS; b += 1) {
+    const fracFromTop = (BINS - 1 - b) / (BINS - 1)
+    if (fracFromTop < 0.35 || fracFromTop > 0.65) continue
+    if (width[b] < neckWidth) { neckWidth = width[b]; neckBin = b }
+  }
+  if (neckBin < 0) return null
+  const neckY = minY + ((neckBin + 0.5) / BINS) * H
+
+  // Full rotation at and above the skull base; none at and below the shoulders.
+  const blendTop = neckY + 0.09 * H
+  const blendBottom = neckY - 0.06 * H
+  const pivotPoint = new THREE.Vector3(0, blendTop, center.z - headCenter.z)
+
+  const parts = meshes.map((m) => {
+    const p = m.geometry.attributes.position
+    const n = m.geometry.attributes.normal
+    const w = new Float32Array(p.count)
+    for (let i = 0; i < p.count; i += 1) {
+      const t = (p.getY(i) - blendBottom) / (blendTop - blendBottom)
+      const c = Math.max(0, Math.min(1, t))
+      w[i] = c * c * (3 - 2 * c)   // smoothstep: no crease at either end of the band
+    }
+    return { mesh: m, pos: p, nor: n, w, pos0: Float32Array.from(p.array), nor0: n ? Float32Array.from(n.array) : null }
+  })
+
+  const v = new THREE.Vector3()
+  const nrm = new THREE.Vector3()
+  const qt = new THREE.Quaternion()
+  const axis = new THREE.Vector3()
+
+  return {
+    info: { neckY, blendTop, blendBottom, neckWidth, height: H },
+    /** @param {number} deg @param {'yaw'|'pitch'} which */
+    apply(deg, which) {
+      axis.set(which === 'pitch' ? 1 : 0, which === 'pitch' ? 0 : 1, 0)
+      const rad = THREE.MathUtils.degToRad(deg)
+      for (const part of parts) {
+        const { pos, nor, w, pos0, nor0 } = part
+        for (let i = 0; i < pos.count; i += 1) {
+          const j = i * 3
+          qt.setFromAxisAngle(axis, rad * w[i])
+          v.set(pos0[j] - pivotPoint.x, pos0[j + 1] - pivotPoint.y, pos0[j + 2] - pivotPoint.z)
+          v.applyQuaternion(qt)
+          pos.array[j] = v.x + pivotPoint.x
+          pos.array[j + 1] = v.y + pivotPoint.y
+          pos.array[j + 2] = v.z + pivotPoint.z
+          if (nor0) {
+            nrm.set(nor0[j], nor0[j + 1], nor0[j + 2]).applyQuaternion(qt)
+            nor.array[j] = nrm.x
+            nor.array[j + 1] = nrm.y
+            nor.array[j + 2] = nrm.z
+          }
+        }
+        pos.needsUpdate = true
+        if (nor) nor.needsUpdate = true
+      }
+    },
+  }
+}
+
+const rig = NECK ? buildNeckRig(model) : null
+
+const frames = []
+const sheet = document.getElementById('sheet')
+for (let i = 0; i < ANGLES.length; i++) {
+  if (rig) {
+    // Bust stays put; only the head moves.
+    pivot.rotation.set(0, THREE.MathUtils.degToRad(YAW_OFFSET), 0)
+    rig.apply(ANGLES[i], AXIS)
+  } else if (AXIS === 'pitch') {
+    pivot.rotation.set(THREE.MathUtils.degToRad(ANGLES[i]), THREE.MathUtils.degToRad(YAW_OFFSET), 0)
+  } else {
+    pivot.rotation.set(0, THREE.MathUtils.degToRad(ANGLES[i] + YAW_OFFSET), 0)
+  }
+  renderer.render(scene, camera)
+  frames.push(renderer.domElement.toDataURL('image/png'))
+
+  const c = document.createElement('canvas')
+  c.width = c.height = SIZE
+  c.getContext('2d').drawImage(renderer.domElement, 0, 0)
+  c.title = `frame-${i} @ ${ANGLES[i].toFixed(1)}deg`
+  sheet.appendChild(c)
+  out.textContent = `rendering ${i + 1}/${ANGLES.length}…`
+}
+
+window.__frames = frames
+window.__angles = ANGLES
+
+let saved = 'not saved'
+if (q.get('save') === '1') {
+  const r = await fetch(`/__save-frames?dir=${encodeURIComponent(q.get('dir') ?? 'turn')}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      frames,
+      // Stored beside the frames so a later sweep can be rendered to MATCH.
+      // Apparent face size drives the IPD depth estimate, so comparing two
+      // sweeps rendered at different `dist` silently compares two cameras.
+      params: { axis: AXIS, count: COUNT, range: RANGE, yawoffset: YAW_OFFSET, dist: DIST, heady: HEAD_Y, size: SIZE, neck: NECK, glb: q.get('glb') || '/mockhead/head.glb' },
+    }),
+  })
+  saved = JSON.stringify(await r.json())
+}
+
+const step = (2 * RANGE) / (COUNT - 1)
+const rigInfo = rig
+  ? ` | neck y=${rig.info.neckY.toFixed(3)} halfWidth=${rig.info.neckWidth.toFixed(3)} band=${rig.info.blendBottom.toFixed(3)}..${rig.info.blendTop.toFixed(3)}`
+  : ' | whole-bust rotation (neck=0)'
+out.textContent = `done ${frames.length} ${AXIS} frames | ${-RANGE}..${RANGE}deg @ ${step.toFixed(1)}deg steps | dist=${DIST} heady=${HEAD_Y}${rigInfo} | save: ${saved}`
+</script>

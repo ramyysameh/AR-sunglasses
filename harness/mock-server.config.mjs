@@ -64,7 +64,18 @@ const harnessPlugin = {
       res.end(fs.readFileSync(file))
     })
 
-    // The mock-head project (head.glb + headrender.html) lives outside the repo.
+    // The sweep renderer is CODE and lives in the repo; only the bust and the
+    // rendered frames live outside it. Keeping the renderer here is what makes a
+    // sweep reproducible -- the camera and rig settings that produced a frame set
+    // are reviewable alongside the engine they are used to measure.
+    server.middlewares.use('/render', (req, res, next) => {
+      if ((req.url ?? '').split('?')[0] !== '/') return next()
+      res.setHeader('Content-Type', 'text/html')
+      res.setHeader('Cache-Control', 'no-store')
+      res.end(fs.readFileSync(path.join(ROOT, 'harness', 'headrender.html')))
+    })
+
+    // The mock-head assets (head.glb) live outside the repo.
     // Serving it here is what lets a sweep be RE-RENDERED rather than treated as
     // a fixed asset -- the pitch set below did not exist until the fit work
     // needed an axis the turn set does not cover.
