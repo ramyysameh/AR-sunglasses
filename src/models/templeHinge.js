@@ -563,7 +563,10 @@ export function applyNearArmClip(hinges, nearSide, earPlane, behindPlane) {
       const behind = nearArmRemainder(mesh)
       behind.visible = Boolean(near && behindPlane)
       behind.renderOrder = 0
-      if (behind.visible) setClip(behind.material, [behindPlane])
+      // Cleared, not just hidden. A plane left on an invisible piece is the
+      // LAST head pose's, so the first frame that makes the piece visible again
+      // without re-clipping draws it cut at where the ear used to be.
+      setClip(behind.material, behind.visible ? [behindPlane] : null)
     }
   }
 }

@@ -101,6 +101,19 @@ function createOcclusionGeometry() {
   return geometry
 }
 
+/**
+ * When the depth-only shell draws, relative to everything else in the scene.
+ *
+ * Exported because it is half of a contract, not a local detail: the shell is
+ * colorWrite:false, so it hides a mesh only by writing depth BEFORE that mesh
+ * draws. Anything with a smaller renderOrder is drawn first and therefore
+ * survives the shell entirely -- which is exactly how the near temple is lifted
+ * out of the face (templeHinge's TEMPLE_ON_TOP_ORDER), and equally how a temple
+ * could end up drawn straight through the skull if the two numbers ever drifted
+ * together. A test asserts the ordering across the two modules.
+ */
+export const OCCLUDER_RENDER_ORDER = -1
+
 export class FaceOccluder {
   constructor(options = {}) {
     this.scene = null
@@ -135,7 +148,7 @@ export class FaceOccluder {
     })
 
     this.occluderMesh = new THREE.Mesh(geometry, material)
-    this.occluderMesh.renderOrder = -1
+    this.occluderMesh.renderOrder = OCCLUDER_RENDER_ORDER
     this.occluderMesh.matrixAutoUpdate = false
     this.occluderMesh.frustumCulled = false
     this.occluderMesh.visible = false

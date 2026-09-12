@@ -4,14 +4,29 @@
     {
       "name": "vite-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 5173
     },
     {
       "name": "vite-preview",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "preview"],
+      "runtimeArgs": [
+        "run",
+        "preview"
+      ],
       "port": 4173
+    },
+    {
+      "name": "harness",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "harness"
+      ],
+      "port": 5175
     }
   ]
 }

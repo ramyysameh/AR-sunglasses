@@ -15,6 +15,7 @@ import {
   isTempleMesh,
   selectArms,
 } from '../../src/models/templeHinge.js'
+import { OCCLUDER_RENDER_ORDER } from '../../src/occlusion/FaceOccluder.js'
 
 const X = { x: 1, y: 0, z: 0 }
 const Z = { x: 0, y: 0, z: 1 }
@@ -317,5 +318,113 @@ describe('isTempleMesh / selectArms', () => {
     // sits entirely inside the front slab (frontZ = 0.0075), so it is not an arm
     expect(selectArms([{ zBack: 0.009, zFront: 0.01, minAbsX: 0.07 }], { minZ: 0, maxZ: 0.01, halfWidth: 0.07 }))
       .toEqual([])
+  })
+})
+
+/**
+ * The rules that make the head solid to a temple arm.
+ *
+ * Every one of these was a bug first. They are asserted here rather than left
+ * to a reviewer's eye because each is a single number or flag in a different
+ * file, each looks harmless on its own, and the symptom -- an arm drawn
+ * straight through the skull, or an arm eaten from the cheek back -- only
+ * appears on a face at an angle, which no unit test renders.
+ */
+describe('occluder contract: a temple can never draw through the head', () => {
+  const arm = () => {
+    const g = new THREE.BufferGeometry()
+    g.setAttribute('position', new THREE.BufferAttribute(Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]), 3))
+    const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial())
+    new THREE.Group().add(m)
+    return m
+  }
+  const hinges = () => [
+    { side: -1, meshes: [arm(), arm()] },
+    { side: 1, meshes: [arm(), arm()] },
+  ]
+  const FRONT = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
+  const BACK = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0)
+
+  /** Every temple mesh the clip touches, front pieces and behind-siblings alike. */
+  const allPieces = (h) => h.flatMap((hinge) => hinge.meshes.flatMap(
+    (m) => [m, m.userData.templeBehind].filter(Boolean)
+  ))
+
+  it('lifts a temple above the shell ONLY by drawing earlier, never by ignoring depth', () => {
+    // The tempting one-line "fix" for an eaten arm is depthTest:false, and it
+    // works -- the arm then also draws over the nose, the cheek and the far
+    // lens. Drawing earlier is the only lift that still respects the rest of
+    // the scene.
+    const h = hinges()
+    applyNearArmClip(h, -1, FRONT, BACK)
+    for (const piece of allPieces(h)) {
+      expect(piece.material.depthTest).toBe(true)
+      expect(piece.material.depthWrite).toBe(true)
+    }
+  })
+
+  it('keeps the lifted order strictly ahead of the shell, across the two modules', () => {
+    // The shell only hides what draws AFTER it. These two numbers live in
+    // different files; if they ever meet, the near arm silently goes back to
+    // being eaten at the cheek, and if the shell's were to drop below, every
+    // arm would draw through the skull.
+    expect(TEMPLE_ON_TOP_ORDER).toBeLessThan(OCCLUDER_RENDER_ORDER)
+  })
+
+  it('leaves every piece it does not lift behind the shell, where the head hides it', () => {
+    const h = hinges()
+    applyNearArmClip(h, -1, FRONT, BACK)
+    const lifted = allPieces(h).filter((p) => p.renderOrder === TEMPLE_ON_TOP_ORDER)
+    const rest = allPieces(h).filter((p) => p.renderOrder !== TEMPLE_ON_TOP_ORDER)
+    expect(lifted.length).toBeGreaterThan(0)
+    for (const piece of rest) expect(piece.renderOrder).toBeGreaterThan(OCCLUDER_RENDER_ORDER)
+  })
+
+  it('never lifts a piece that is not clipped to the front of the ear', () => {
+    // An unclipped lift is the whole arm in front of the face, tip included --
+    // it reads as a stick growing out of the cheek.
+    const h = hinges()
+    applyNearArmClip(h, -1, FRONT, BACK)
+    for (const piece of allPieces(h)) {
+      if (piece.renderOrder !== TEMPLE_ON_TOP_ORDER) continue
+      expect(piece.material.clippingPlanes).toEqual([FRONT])
+    }
+  })
+
+  it('lifts nothing at all when the head frame is unavailable', () => {
+    // Landmarks drop out between frames. Lifting on a stale or missing plane
+    // puts the arm in front of the face at an angle where it should be behind
+    // it, so the fallback has to be the SAFE state, not the last good one.
+    for (const args of [[0, FRONT, BACK], [-1, null, BACK], [-1, null, null]]) {
+      const h = hinges()
+      applyNearArmClip(h, ...args)
+      for (const piece of allPieces(h)) {
+        expect(piece.renderOrder).toBeGreaterThan(OCCLUDER_RENDER_ORDER)
+      }
+    }
+  })
+
+  it("lifts one arm at most, so the far temple is always the shell's to hide", () => {
+    // Lifting both put 651 of the far arm's 1529 pixels through the skull.
+    for (const side of [-1, 1]) {
+      const h = hinges()
+      applyNearArmClip(h, side, FRONT, BACK)
+      const sides = new Set(h.filter((x) => x.meshes.some((m) => m.renderOrder === TEMPLE_ON_TOP_ORDER)).map((x) => x.side))
+      expect(sides.size).toBe(1)
+      expect([...sides][0]).toBe(side)
+    }
+  })
+
+  it('returns a lifted arm to the shell when the head turns back to frontal', () => {
+    // The clip is re-evaluated every frame, so the state has to be reversible;
+    // an earlier version only ever ADDED the lift, and the arm stayed in front
+    // of the face for the rest of the session once any turn had happened.
+    const h = hinges()
+    applyNearArmClip(h, -1, FRONT, BACK)
+    applyNearArmClip(h, 0, null, null)
+    for (const piece of allPieces(h)) {
+      expect(piece.renderOrder).toBeGreaterThan(OCCLUDER_RENDER_ORDER)
+      expect(piece.material.clippingPlanes).toBeNull()
+    }
   })
 })
