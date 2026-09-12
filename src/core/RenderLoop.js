@@ -305,6 +305,15 @@ export class RenderLoop {
         return shots
       },
 
+      /**
+       * DISCARD THE FIRST SWEEP AFTER A PAGE LOAD.
+       *
+       * The fit keeps converging for a few seconds after the scan locks, so the
+       * first pass reads worse than the engine settles to. Measured back to back
+       * on one pose set: sweep 1 gave 0.123 short with 18 px of hole, sweeps 2-4
+       * gave 0.056 and 9. Both are real; only the later ones are the steady
+       * state, and a tuning pass driven by the first is chasing a transient.
+       */
       sweep: async ({ settleFrames = 14, step = 1 } = {}) => {
         const mock = window.__mock
         if (!mock) return { error: 'no mock camera: use ?mock=turn' }
