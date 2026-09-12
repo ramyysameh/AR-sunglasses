@@ -906,7 +906,12 @@ export class RenderLoop {
     const scale = this.glassesRoot?.scale?.x || 1
     let angle = 0
     for (const hinge of this._hinges) {
-      const solved = solveSplay(this._headWidthMean, hinge.armLateral * scale, hinge.jointDepth * scale)
+      const solved = solveSplay(
+        this._headWidthMean,
+        hinge.armLateral * scale,
+        hinge.jointDepth * scale,
+        hinge.armThickness * scale,
+      )
       if (solved > angle) angle = solved
     }
 

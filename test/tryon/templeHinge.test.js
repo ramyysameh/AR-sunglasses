@@ -5,7 +5,8 @@ import {
   MAX_SPLAY_RAD,
   TEMPLE_CURL_RAD,
   TEMPLE_CUT_RATIO,
-  TEMPLE_GRAZE_RATIO,
+  TEMPLE_GRAZE_HEAD_RATIO,
+  TEMPLE_GRAZE_THICKNESS,
   applyCurl,
   solveSplay,
   applySplay,
@@ -24,52 +25,57 @@ function attr(points) {
 
 describe('solveSplay', () => {
   const deg = (rad) => (rad * 180) / Math.PI
-  // GRIPZ on the mock head, in world units.
-  // The engine's own measurements on the mock head, GRIPZ fitted.
-  const HEAD = 101.5, ARM = 75.6, JOINT = 121.7
+  // The engine's own measurements on the mock head, per model.
+  const GRIPZ = [101.5, 75.6, 121.7, 4.85]
+  const WILLOW = [101.6, 73.8, 131.2, 1.65]
+  const LARSSON = [102.8, 79.5, 121.8, 5.92]
 
-  it('lands both models inside the window they were measured to pass', () => {
-    // The margin is set by WILLOW, the binding one: its joint is further back,
-    // so the same reach costs it more angle. Both land in the window they were
-    // measured to pass, which only works because the head is measured about the
-    // head -- see TEMPLE_GRAZE_RATIO.
-    const gripz = deg(solveSplay(HEAD, ARM, JOINT))
-    const willow = deg(solveSplay(101.6, 73.8, 131.2))
-    expect(gripz).toBeGreaterThanOrEqual(20)
-    expect(gripz).toBeLessThanOrEqual(22)
-    expect(willow).toBeLessThanOrEqual(21)
-    expect(willow).toBeGreaterThanOrEqual(19.9)
+  it('lands each model on the angle it was measured to need', () => {
+    expect(deg(solveSplay(...GRIPZ))).toBeCloseTo(18, 0)
+    expect(deg(solveSplay(...WILLOW))).toBeCloseTo(20, 0)
+    expect(deg(solveSplay(...LARSSON))).toBeCloseTo(16, 0)
+  })
+
+  it('opens a THIN arm further than a thick one, which is the whole point', () => {
+    // Backwards from intuition, and the reason three earlier per-model terms
+    // failed: a thin arm loses more of itself to the grazing band, so it has to
+    // sit further out. WILLOW's 1.65 mm wire needs more than GRIPZ's 4.85 mm.
+    const thin = solveSplay(101.5, 75.6, 121.7, 1.65)
+    const thick = solveSplay(101.5, 75.6, 121.7, 5.92)
+    expect(thin).toBeGreaterThan(thick)
+    expect(TEMPLE_GRAZE_THICKNESS).toBeGreaterThan(0)
   })
 
   it('opens FURTHER on a wider head and less on a narrower one', () => {
-    // The property a fixed angle cannot have, and the reason this exists: at 20
-    // degrees a narrower head showed 43.6 px of temple past the silhouette and
-    // 0/8 judged poses.
-    const wide = solveSplay(HEAD * 1.1, ARM, JOINT)
-    const narrow = solveSplay(HEAD * 0.9, ARM, JOINT)
-    expect(wide).toBeGreaterThan(solveSplay(HEAD, ARM, JOINT))
-    expect(narrow).toBeLessThan(solveSplay(HEAD, ARM, JOINT))
+    const [h, a, j, t] = GRIPZ
+    expect(solveSplay(h * 1.1, a, j, t)).toBeGreaterThan(solveSplay(h, a, j, t))
+    expect(solveSplay(h * 0.9, a, j, t)).toBeLessThan(solveSplay(h, a, j, t))
   })
 
-  it('matches the two frame scales it was validated against', () => {
-    // Scaling the frame is equivalent to changing the head's relative width, and
-    // that is how the law was validated: predicted 28.6 and 14.5 degrees before
-    // measuring, measured 28 and 12-16.
-    expect(deg(solveSplay(HEAD, ARM * 0.9, JOINT * 0.9))).toBeGreaterThan(deg(solveSplay(HEAD, ARM, JOINT)))
-    expect(deg(solveSplay(HEAD, ARM * 1.12, JOINT * 1.12))).toBeLessThan(deg(solveSplay(HEAD, ARM, JOINT)))
+  it('tracks the frame-to-head ratio, which is how the head term was validated', () => {
+    // Scaling the frame is equivalent to changing the head's relative width.
+    const [h, a, j, t] = GRIPZ
+    expect(solveSplay(h, a * 0.9, j * 0.9, t * 0.9)).toBeGreaterThan(solveSplay(h, a, j, t))
+    expect(solveSplay(h, a * 1.12, j * 1.12, t * 1.12)).toBeLessThan(solveSplay(h, a, j, t))
   })
 
   it('needs no splay at all once the arm already clears the head', () => {
-    expect(solveSplay(HEAD, HEAD * (1 + TEMPLE_GRAZE_RATIO) + 1, JOINT)).toBe(0)
+    expect(solveSplay(101.5, 101.5 * (1 + TEMPLE_GRAZE_HEAD_RATIO) + 1, 121.7, 0)).toBe(0)
   })
 
   it('caps instead of asking for an impossible angle', () => {
-    expect(solveSplay(HEAD * 5, ARM, JOINT)).toBe(MAX_SPLAY_RAD)
+    expect(solveSplay(101.5 * 5, 75.6, 121.7, 4.85)).toBe(MAX_SPLAY_RAD)
+  })
+
+  it('never goes negative, however thick the arm', () => {
+    // A very thick arm drives the margin below zero; the arm still must not be
+    // pulled INWARD of where the model put it.
+    expect(solveSplay(101.5, 75.6, 121.7, 500)).toBe(0)
   })
 
   it('returns 0 rather than NaN when the arm was never measured', () => {
-    expect(solveSplay(HEAD, ARM, 0)).toBe(0)
-    expect(solveSplay(0, ARM, JOINT)).toBe(0)
+    expect(solveSplay(101.5, 75.6, 0, 4.85)).toBe(0)
+    expect(solveSplay(0, 75.6, 121.7, 4.85)).toBe(0)
   })
 })
 

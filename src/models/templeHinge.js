@@ -85,31 +85,37 @@ export function selectArms(candidates, bounds) {
 }
 
 /**
- * Grazing margin, as a fraction of the head's half-width.
+ * Grazing margin: how far outside the head the arm must sit to survive.
  *
- * How far OUTSIDE the head's surface the arm has to sit before it reliably
- * draws. It is not zero and it is not small: near the silhouette the arm runs
- * almost tangent to the occluder, so a millimetre of depth hides tens of pixels
- * of arm, and the lateral margin that buys reliability is about a quarter of a
- * head half-width.
+ *   margin = headHalf * TEMPLE_GRAZE_HEAD_RATIO
+ *          - TEMPLE_GRAZE_THICKNESS * armThickness
  *
- * Set by the model that needs the most of it, and the two agree closely once
- * the head is measured as a head: GRIPZ implies 0.1645 and WILLOW 0.1683, a
- * 2.3% spread. They did NOT agree before -- 0.147 against 0.067 -- because the
- * head's half-width was being measured about each frame's own temple anchors,
- * so the same head read 105.2 mm under one model and 111.9 under another. That
- * was a measurement bug standing in for a per-model law, and three earlier
- * hypotheses were chased before it was found. It now reads 101.5 and 101.6.
+ * The second term is the one worth explaining. Near the head's silhouette the
+ * arm runs almost tangent to the occluder, so the occluder shaves a band off it
+ * -- and a THIN arm loses proportionally more of itself to that band than a
+ * chunky one, so it has to sit further out to survive. The effect is large and
+ * it runs opposite to intuition: WILLOW's 1.65 mm rimless wire needs MORE
+ * opening than GRIPZ's 4.85 mm acetate, not less.
  *
- * That it IS a margin, rather than a number fitted to one case, is what the
- * frame-scale sweep shows: across a 25% range of frame-to-head ratio the implied
- * value moves by only 3%.
+ * That inversion is why three earlier attempts at a per-model term failed. The
+ * rear segment's authored lean, the tip's inward displacement and the frame's
+ * half-width are all documented as refuted; jointDepth is worse than useless
+ * here, because the deeper joint that WILLOW has hands it LESS angle exactly
+ * when it needs more.
  *
- * Expressed as a RATIO because the effect is one of apparent size, so it should
- * track the face like everything else here. One head cannot distinguish that
- * from an absolute distance; the ratio is the safer of the two.
+ * Fitted on GRIPZ and WILLOW, then used to PREDICT LARSSON before measuring it:
+ *
+ *   model     thickness   predicted   measured
+ *   GRIPZ      4.85 mm      18 deg     18 -> 16/16
+ *   WILLOW     1.65 mm      20 deg     20 -> 16/16
+ *   LARSSON    5.92 mm    15.8 deg     16 -> 8/8   (14 deg gives 4/8)
+ *
+ * The head term is a ratio because grazing is an effect of apparent size; the
+ * thickness term is a plain multiplier because both sides of it are lengths.
  */
-export const TEMPLE_GRAZE_RATIO = 0.168
+export const TEMPLE_GRAZE_HEAD_RATIO = 0.196
+export const TEMPLE_GRAZE_THICKNESS = 1.6875
+
 
 /**
  * Ceiling on the opening, radians (~34 deg).
@@ -278,6 +284,7 @@ export function buildHinges(glassesRoot) {
       // frame and the head -- see solveSplay.
       armLateral: armLateralAt(rearMeshes.concat(frontMeshes), glassesRoot, cutZ),
       jointDepth: Math.abs(cutZ),
+      armThickness: armThicknessOf(rearMeshes.concat(frontMeshes), glassesRoot, hingeZ, cutZ),
       // The lean the rear segment ALREADY has, as the model was authored. This
       // is what lets one target angle suit every frame: a temple that already
       // hooks hard inward needs little curl added, one that runs straight back
@@ -301,6 +308,41 @@ const CUT_PLANE_EPSILON_M = 1e-4
 
 /** Half-thickness of the slice averaged to locate the arm at the joint. */
 const JOINT_SLICE_M = 0.004
+
+/**
+ * How thick the arm is side-to-side, in the frame's own space.
+ *
+ * Sampled at three points along the run and taken as the median, so a chunky
+ * hinge boss or a decorative flare does not stand in for the arm.
+ *
+ * This is what decides how much clearance the arm needs, which is not obvious
+ * and is the opposite of what shape alone suggests -- see TEMPLE_GRAZE_*.
+ */
+function armThicknessOf(meshes, glassesRoot, hingeZ, cutZ) {
+  const v = new THREE.Vector3()
+  const span = (hingeZ - cutZ) / TEMPLE_CUT_RATIO
+  const widths = []
+  for (const frac of [0.3, 0.5, 0.7]) {
+    const z = hingeZ - span * frac
+    let lo = Infinity, hi = -Infinity
+    for (const mesh of meshes) {
+      const attribute = mesh.geometry?.attributes?.position
+      if (!attribute) continue
+      for (let i = 0; i < attribute.count; i += 1) {
+        v.fromBufferAttribute(attribute, i)
+        mesh.localToWorld(v)
+        glassesRoot.worldToLocal(v)
+        if (Math.abs(v.z - z) > JOINT_SLICE_M / 2) continue
+        if (v.x < lo) lo = v.x
+        if (v.x > hi) hi = v.x
+      }
+    }
+    if (hi > lo) widths.push(hi - lo)
+  }
+  if (!widths.length) return 0
+  widths.sort((a, b) => a - b)
+  return widths[Math.floor(widths.length / 2)]
+}
 
 /**
  * Mean |lateral| of the arm where the joint cuts it, in the frame's own space.
@@ -442,11 +484,13 @@ function splitArm(mesh, group, cutZ) {
  * @param {number} headHalf measured head half-width, world units
  * @param {number} armLateral where the arm sits at the joint, world units
  * @param {number} jointDepth how far back the joint is, world units
+ * @param {number} armThickness the arm's side-to-side thickness, world units
  * @returns {number} radians
  */
-export function solveSplay(headHalf, armLateral, jointDepth) {
+export function solveSplay(headHalf, armLateral, jointDepth, armThickness = 0) {
   if (!(jointDepth > 0) || !(headHalf > 0)) return 0
-  const reach = headHalf * (1 + TEMPLE_GRAZE_RATIO) - armLateral
+  const margin = headHalf * TEMPLE_GRAZE_HEAD_RATIO - TEMPLE_GRAZE_THICKNESS * armThickness
+  const reach = headHalf + margin - armLateral
   const sine = Math.min(Math.max(reach / jointDepth, 0), 1)
   return Math.min(Math.asin(sine), MAX_SPLAY_RAD)
 }
