@@ -118,7 +118,48 @@ export function selectArms(candidates, bounds) {
 export const TEMPLE_OPEN_RAD = 0.349
 
 /**
- * How far the rear segment curls back IN from the front segment, radians (~28).
+ * What this angle costs in the FRONT view, and why it is not lower.
+ *
+ * The splay is what makes the temples read as too wide head-on. Traced: the
+ * widest drawn point is the joint itself, 98 mm back, which 20 degrees swings
+ * 33.6 mm outward -- it projects 24 px past the head's silhouette, growing
+ * steadily from the hinge, where the arm is exactly flush.
+ *
+ * It is also the ONLY lever on that. Measured against the head silhouette at
+ * frontal, alternating A/B so the fit cannot drift between readings:
+ *
+ *   splay        17     18     20
+ *   overhang   7.4px  9.7px  15.6px
+ *   GRIPZ      14/15  16/16  16/16
+ *   WILLOW       --   11/16  16/16
+ *
+ * So 18 would cut the overhang by 38%, and it costs WILLOW five judged poses
+ * and opens a 9 px hole. WILLOW needs 20 and pays nothing for it -- its thin
+ * rimless arms sit ~20 px INSIDE the silhouette at any of these angles, so the
+ * cost is entirely GRIPZ's and entirely cosmetic, while the benefit is entirely
+ * Willow's and entirely functional.
+ *
+ * Things that do NOT move the front view, so do not re-test them:
+ *   the joint position   cut 0.40 -> 24 px (worse: an outward displacement near
+ *                        the camera projects wider), 0.66 -> 15.6, 0.74 -> 15.4
+ *   the shell bulge      0.02 lets GRIPZ drop to 17 deg and 7.2 px, but WILLOW
+ *                        falls to 10/16 -- the bulge is what hides Willow's tip
+ *
+ * A per-model splay is the obvious answer and there is no basis for one yet.
+ * Three candidate quantities have each been measured and refuted: the rear
+ * segment's authored lean, the tip's inward displacement (both arms are 65-66 mm
+ * there), and the frame's own half-width -- which cannot work at all, because
+ * normalizeModel forces every model to the same 0.145 m, so GRIPZ and WILLOW
+ * both measure 85 mm and differ anyway.
+ *
+ * Worth noting where the pressure really comes from: that same normalisation
+ * puts a 145 mm frame on a 162 mm head here, so the arms have to reach outward
+ * further than they would on a head the frame was sized for. Sizing the frame
+ * to the head (the gscale lever) is the untested way out.
+ */
+
+/**
+ * How far the rear segment curls back IN from the front segment, radians (~22).
  *
  * A fixed relative angle, and two attempts at making it per-model were both
  * refuted by measurement rather than abandoned on taste:

@@ -176,15 +176,29 @@ describe('applySplay', () => {
   it('keeps the hinge end put while the tip moves', () => {
     const root = makeFrame()
     const hinges = buildHinges(root)
-    const arm = hinges.find((h) => h.side === 1).meshes[0]
-    const p = arm.geometry.attributes.position
-    const at = (i) => new THREE.Vector3().fromBufferAttribute(p, i).applyMatrix4(arm.matrixWorld)
+    const h = hinges.find((x) => x.side === 1)
+    // The arm is two meshes now, so find the real ends rather than assuming the
+    // first mesh spans the whole thing -- with the joint near the cheekbone the
+    // front piece stops less than a centimetre back.
+    const ends = () => {
+      let hinge = null, tip = null
+      for (const mesh of h.meshes) {
+        const p = mesh.geometry.attributes.position
+        for (let i = 0; i < p.count; i += 1) {
+          const v = new THREE.Vector3().fromBufferAttribute(p, i).applyMatrix4(mesh.matrixWorld)
+          if (!hinge || v.z > hinge.z) hinge = v.clone()
+          if (!tip || v.z < tip.z) tip = v.clone()
+        }
+      }
+      return { hinge, tip }
+    }
     root.updateMatrixWorld(true)
-    const hinge0 = at(0), tip0 = at(p.count - 1)
+    const before = ends()
     applySplay(hinges, 0.15)
     root.updateMatrixWorld(true)
-    expect(at(0).distanceTo(hinge0)).toBeLessThan(1e-6)
-    expect(at(p.count - 1).distanceTo(tip0)).toBeGreaterThan(0.01)
+    const after = ends()
+    expect(after.hinge.distanceTo(before.hinge)).toBeLessThan(1e-6)
+    expect(after.tip.distanceTo(before.tip)).toBeGreaterThan(0.01)
   })
 })
 
