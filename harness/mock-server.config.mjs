@@ -28,7 +28,7 @@
  *       turn      yaw, the workhorse          ?mock=turn&mockframes=25
  *       yaw       yaw +/-30, finer steps      ?mock=yaw&mockframes=21
  *       pitch     pitch +/-30, yaw 0          ?mock=pitch&mockframes=21
- *       pitchyaw  pitch +/-25 held at yaw 35  ?mock=pitchyaw&mockframes=13
+ *       pitchyaw  pitch +/-25 held at yaw 35  ?mock=pitchyaw&mockframes=14&mockhold=13
  *
  *     pitchyaw exists because the occlusion criterion cannot be applied at yaw
  *     0: head-on, the arm is foreshortened and its rear extent is set by the
@@ -37,12 +37,17 @@
  *     entirely. Holding a yaw while pitch sweeps makes both criteria valid.
  *     Re-render it with:
  *
- *       /render?axis=pitch&yawoffset=35&range=25&count=13&frontalcentre=1
+ *       /render?axis=pitch&yawoffset=35&range=25&count=13&anchor=1
  *              &dist=1.45&heady=0.3&neck=1&save=1&dir=pitchyaw
  *
- *     frontalcentre is not optional there: the mock holds the middle frame for
- *     the whole calibration scan and the scan will not lock on a turned face, so
- *     without it nothing ever renders and every row reads "glasses hidden".
+ *     ?anchor=1 is not optional there, and neither is &mockhold=13 when loading
+ *     it: the scan will not lock on a turned face, so without a square-on frame
+ *     to hold nothing ever renders and every row reads "glasses hidden". The
+ *     anchor is frame 13, APPENDED after the 13-frame series -- so frame index
+ *     still maps to pitch, and the series itself is a clean nod at a constant
+ *     yaw. An earlier version substituted the anchor into the middle instead,
+ *     which put a frontal picture in the middle of a nodding sweep and silently
+ *     removed the pitch-0 sample.
  *
  * Usage:
  *   npm run harness        -> http://localhost:5175  (Claude's in-app browser

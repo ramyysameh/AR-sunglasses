@@ -284,8 +284,16 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     const pinned = parseInt(new URLSearchParams(window.location.search).get('mockframe'), 10)
     this._mockFrame = Number.isFinite(pinned) ? Math.min(Math.max(pinned, 0), N - 1) : null
 
+    // Which frame the mock shows while the scan runs. The middle one is frontal
+    // in a symmetric sweep, which is why it is the default -- but a sweep that
+    // holds a yaw while pitching has no frontal frame in its series at all, and
+    // the scan will not lock on a turned face. Those sets render an extra
+    // square-on frame on the end (headrender ?anchor=1) and point this at it.
+    const hold = parseInt(new URLSearchParams(window.location.search).get('mockhold'), 10)
+    const HOLD_FRAME = Number.isFinite(hold) ? Math.min(Math.max(hold, 0), N - 1) : (N - 1) >> 1
+
     const draw = () => {
-      let idx = (N - 1) >> 1 // front frame (middle)
+      let idx = HOLD_FRAME
       // Hold front during init warm-up AND while the calibration overlay is
       // visible; only start oscillating once the scan has actually locked, so it
       // never starts turning before calibration completes.
