@@ -11,6 +11,8 @@ import { resolveGlassesScaleMultiplier } from './glassesScale.js'
 import { createLensEnvironment } from './lensEnvironment.js'
 import { resolveLensReflectionConfig } from './lensReflection.js'
 import { resolveFrameReflectionConfig } from './frameReflection.js'
+import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
+import { applyClearance, buildHeadProfile, collectTemples } from '../models/templeClearance.js'
 
 const TRACK_LOSS_RESET_MS = 180
 // Lower lead than before (was 0.85): heavy lead on an already-smoothed signal
@@ -25,6 +27,15 @@ const FALLBACK_FACE_DEPTH = -0.78
 const NEAREST_DISPLAY_DEPTH = -0.62
 const LOW_QUALITY_FREEZE_FRAMES = 3
 const LOW_QUALITY_THRESHOLD = 0.42
+// How many frontal samples the running size estimate averages over. Capped so it
+// remains a long moving average and can still follow a genuine change of face.
+const FRONTAL_SCALE_SAMPLES = 120
+// Beyond this yaw the face mesh is too foreshortened to measure head width from.
+const CLEARANCE_MEASURE_YAW_DEG = 12
+// Sanity bounds on the measured head half-width, as a guard against acting on an
+// occluder that has not been populated yet.
+const MIN_PLAUSIBLE_HEAD_HALF_M = 0.05
+const MAX_PLAUSIBLE_HEAD_HALF_M = 0.13
 
 export class RenderLoop {
   constructor(options = {}) {
@@ -73,6 +84,8 @@ export class RenderLoop {
     this.lowQualityFrames = 0
     this.smoothedScale = null
     this.smoothedDepth = null
+    this._frontalScaleMean = null
+    this._frontalScaleCount = 0
     this.lastPredictionTimestamp = null
     this.occlusionEnabled = true
     // The flat CircleGeometry "contact shadow" reads as a grey disc on the nose,
@@ -81,17 +94,25 @@ export class RenderLoop {
     this.filterMode = 'still'
     this.motionLevel = 0
     this.lastScanStateKey = ''
+    // Read here rather than in init(): setGlassesRoot/setFaceOccluder can run
+    // before init, and a flag set later would leave both of them early-returning
+    // with nothing ever installing the probe.
+    this.probeEnabled = typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('probe') === '1'
+    this._probe = null
   }
 
   async init() {
+    // preserveDrawingBuffer stays OFF: on iOS it makes the alpha canvas render
+    // as solid green (uninitialized GPU buffer). The occlusion probe reads an
+    // offscreen render target instead of the canvas, so pixel verification does
+    // not need it -- see src/debug/occlusionProbe.js.
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       alpha: true,
       antialias: true,
-      // preserveDrawingBuffer is intentionally OFF: on iOS it makes the alpha
-      // canvas render as solid green (uninitialized GPU buffer). It was only
-      // needed for the since-removed capture/screenshot feature.
     })
+
     this.renderer.setClearColor(0x000000, 0)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     // AgX matches Blender's default view transform, so the frame reads with the
@@ -156,6 +177,7 @@ export class RenderLoop {
     this.scene.add(this.contactShadow)
 
     this._syncSize()
+    this._installProbe()
 
     return this
   }
@@ -171,10 +193,18 @@ export class RenderLoop {
     }
 
     this.glassesRoot = glassesRoot
+    // Baseline vertices for temple clearance. A new model needs a new cache;
+    // re-collecting later would bake a previous push into the baseline.
+    this._temples = glassesRoot ? collectTemples(glassesRoot) : null
+    this._clearedForWidth = null
 
     if (this.glassesRoot && this.scene) {
       this.scene.add(this.glassesRoot)
     }
+
+    // The probe needs both the glasses and the occluder; they are set by
+    // different callers in either order, so try from both.
+    this._installProbe()
 
     // A new model can have a radically different fitted scale/depth (e.g. a
     // normalized frame ~1.0 vs a raw-unit frame ~0.05). Force a tracking-state
@@ -189,6 +219,114 @@ export class RenderLoop {
 
     if (this.faceOccluder?.occluderMesh && this.scene && this.faceOccluder.occluderMesh.parent !== this.scene) {
       this.scene.add(this.faceOccluder.occluderMesh)
+    }
+
+    this._installProbe()
+  }
+
+  /**
+   * Wires up ?probe=1 once both the glasses and the occluder exist -- the probe
+   * needs to toggle each of them, and they arrive from different callers.
+   */
+  _installProbe() {
+    if (!this.probeEnabled || this._probe || !this.glassesRoot || !this.faceOccluder) {
+      return
+    }
+
+    this._probe = new OcclusionProbe({
+      renderer: this.renderer,
+      scene: this.scene,
+      camera: this.camera,
+      glassesRoot: this.glassesRoot,
+      faceOccluder: this.faceOccluder,
+    })
+
+    // The objects the probe measures, exposed so the HARNESS itself can be
+    // debugged. A measurement of zero is ambiguous without them -- nothing drawn
+    // because it was occluded, or because the glasses were hidden that frame?
+    window.__probeRefs = {
+      loop: this,
+      glassesRoot: this.glassesRoot,
+      faceOccluder: this.faceOccluder,
+      scene: this.scene,
+      camera: this.camera,
+      renderer: this.renderer,
+    }
+
+    window.__probe = {
+      measure: () => this._probe.measure(THREE.MathUtils.radToDeg(this.headYaw ?? 0)),
+      /**
+       * Advances the engine by hand: pushes a mock video frame, then runs one
+       * tracking+render step for it. Needed because both the mock camera and
+       * this loop are rAF-driven, and rAF stops when the page is not painted.
+       */
+      tick: (frames = 1) => {
+        for (let i = 0; i < frames; i += 1) {
+          window.__mock?.step(1)
+          this._step()
+        }
+      },
+      /**
+       * Walks every mock frame and scores the result.
+       *
+       * Settles by STEPPING FRAMES rather than sleeping. The video frame,
+       * MediaPipe's landmarks and the smoothed pose each lag a pin by several
+       * frames, so measuring immediately reports the previous pose -- but
+       * waiting on wall time made the sweep depend on how fast the page happened
+       * to be running, which is exactly what made earlier runs unreproducible
+       * (three settings silently sampled three different parts of the turn).
+       * A frame count is the same on any machine, and works while throttled.
+       *
+       * It has to yield between steps even so. requestFrame() only QUEUES a
+       * frame onto the capture track; the <video> element picks it up when the
+       * event loop turns, so a fully synchronous settle loop leaves the video
+       * frozen on the previous pose and every row reports the same angle. The
+       * yield is what lets the media pipeline deliver -- the frame count, not
+       * the elapsed time, is still what defines the settle.
+       */
+      /**
+       * Captures the composited view at one mock frame and writes it to disk via
+       * the harness, returning the path. This is how an automated run SEES its
+       * own work instead of asking a human to look.
+       */
+      shot: async (name, { frame = null, settleFrames = 14 } = {}) => {
+        if (frame != null) window.__mock?.pin(frame)
+        for (let f = 0; f < settleFrames; f += 1) {
+          window.__probe.tick(1)
+          await new Promise((r) => setTimeout(r, 16))
+        }
+        const dataUrl = compositeFrame(this._probe, this.video)
+        const response = await fetch('/__shot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, dataUrl }),
+        })
+        return { ...(await response.json()), yaw: Math.round(THREE.MathUtils.radToDeg(this.headYaw ?? 0) * 10) / 10 }
+      },
+
+      /** Captures a whole turn, so a sweep can be reviewed as pictures. */
+      sheet: async (prefix, frames, opts) => {
+        const shots = []
+        for (const frame of frames) shots.push(await window.__probe.shot(`${prefix}-f${frame}`, { frame, ...opts }))
+        window.__mock?.release()
+        return shots
+      },
+
+      sweep: async ({ settleFrames = 14, step = 1 } = {}) => {
+        const mock = window.__mock
+        if (!mock) return { error: 'no mock camera: use ?mock=turn' }
+        const rows = []
+        for (let i = 0; i < mock.frameCount; i += step) {
+          mock.pin(i)
+          for (let f = 0; f < settleFrames; f += 1) {
+            window.__probe.tick(1)
+            await new Promise((r) => setTimeout(r, 16))
+          }
+          rows.push({ frame: i, ...window.__probe.measure() })
+        }
+        mock.release()
+        return { rows, ...evaluate(rows) }
+      },
     }
   }
 
@@ -274,6 +412,8 @@ export class RenderLoop {
     this.lastPredictionTimestamp = null
     this.smoothedScale = null
     this.smoothedDepth = null
+    this._frontalScaleMean = null
+    this._frontalScaleCount = 0
     this._lastRotQuat = null
     this._angVelQ = null
   }
@@ -298,7 +438,11 @@ export class RenderLoop {
     if (yaw > this._fitDbgPeak) this._fitDbgPeak = yaw
     this._fitDbgEl.textContent =
       `yaw      ${data.yaw.toFixed(1)}°  (peak ${this._fitDbgPeak.toFixed(0)}°)\n` +
-      `scale    applied ${data.scale.toFixed(4)}  target ${data.raw.toFixed(4)}\n` +
+      // Show what the solver actually asked for whenever the limits overrode it.
+      // A frame sitting exactly on its ceiling reads as a confident fit here and
+      // is really the solver requesting a size it is not allowed to have.
+      `scale    applied ${data.scale.toFixed(4)}  target ${data.raw.toFixed(4)}` +
+      `${data.clamped ? `  WANTED ${Number(data.fittedRaw).toFixed(4)}` : ''}\n` +
       `depth z  ${data.z.toFixed(4)}  (more -neg = farther)\n` +
       `fitQual  ${(data.quality ?? 0).toFixed(2)}`
   }
@@ -577,13 +721,38 @@ export class RenderLoop {
     // still; hold it steady through turns (the face isn't actually resizing).
     const yawAbs = Math.abs(this.headYaw ?? 0)
     const frontal = yawAbs < THREE.MathUtils.degToRad(5)
+
+    // Frontal samples feed a RUNNING MEAN rather than easing an EMA toward
+    // whatever the latest sample happens to be.
+    //
+    // The freeze below holds the size through a turn, so the held value is
+    // whatever the EMA reached during the brief window the head was frontal --
+    // and that window is short, so it never fully converged. Each pass latched a
+    // different number and the whole turn inherited it: measured 1.1966 sweeping
+    // one way against 1.1755 the other, a 1.8% step at the crossing that read as
+    // the frame changing size depending on which way the head had turned.
+    //
+    // A face's width does not change, so every good frontal sample is an
+    // estimate of the same constant and averaging them is strictly better than
+    // taking the most recent. The mean is direction-independent, which is what
+    // removes the hysteresis, and it keeps converging the longer a face is seen.
+    if (frontal && Number.isFinite(clampedScale)) {
+      this._frontalScaleCount = Math.min((this._frontalScaleCount ?? 0) + 1, FRONTAL_SCALE_SAMPLES)
+      this._frontalScaleMean = this._frontalScaleMean == null
+        ? clampedScale
+        : this._frontalScaleMean + (clampedScale - this._frontalScaleMean) / this._frontalScaleCount
+    }
+
+    // Capped count, so it stays a long moving average rather than becoming
+    // immovable -- a different person in front of the camera still takes effect.
+    const target = this._frontalScaleMean ?? clampedScale
     const damping = frontal
       ? THREE.MathUtils.lerp(baseDamping, 0.004, this.motionLevel ?? 0)
       : 0.0
 
     this.smoothedScale = this.smoothedScale === null
-      ? clampedScale
-      : THREE.MathUtils.lerp(this.smoothedScale, clampedScale, damping)
+      ? target
+      : THREE.MathUtils.lerp(this.smoothedScale, target, damping)
 
     return this.smoothedScale
   }
@@ -635,13 +804,102 @@ export class RenderLoop {
         transform.occlusionMesh.faceWorldPoints,
         transform.anchorWorldPoints,
         occluderAlpha,
-        transform.occluderCorrection
+        transform.occluderCorrection,
+        // The frame's OWN rotation, for the same reason occluderCorrection is the
+        // frame's own position delta: the head shell extrudes along this axis, so
+        // the surface the temple arm hides behind is locked to the arm by
+        // construction instead of by two smoothing curves agreeing.
+        transform.quaternion
       )
     } else if (transform.anchorWorldPoints) {
       this.faceOccluder?.updateFromAnchors(transform.anchorWorldPoints)
     } else if (transform.occluderMatrix) {
       this.faceOccluder?.update(transform.occluderMatrix)
     }
+
+    // AFTER the occluder has been rebuilt for this frame, never before. Run
+    // first, it measures the PREVIOUS frame's occluder -- and on the very first
+    // frame that is all zeros, which reads as a 146 mm half-width head (a real
+    // one is ~100 mm) and bakes a nonsense correction the width gate then
+    // refuses to revisit.
+    this._clearTemplesFromHead(transform)
+  }
+
+  /**
+   * Pushes the temple arms out of the head wherever they are buried in it.
+   *
+   * Measured NEAR-FRONTAL only and then held. Off-frontal the face mesh is
+   * foreshortened and half self-occluded, so its apparent width shrinks with
+   * yaw; re-measuring through a turn would make the frame change shape as the
+   * head moves. A head's width does not change, so measuring it once is right.
+   *
+   * The correction is per-vertex against a depth profile of the head, not one
+   * global splay -- see templeClearance.js for the measurements showing the
+   * intrusion is a narrow band while the rest of the arm is already clear by up
+   * to 35 mm. Two earlier global attempts moved the whole arm and left it
+   * hanging off the skull.
+   */
+  _clearTemplesFromHead(transform) {
+    if (!this._temples?.length || !this.faceOccluder?.occluderMesh) {
+      return
+    }
+    // Only once the occluder is actually driving a face; while the scan runs it
+    // is hidden and its shell vertices are collapsed onto a single point.
+    if (!this.faceOccluder.occluderMesh.visible) {
+      return
+    }
+    if (Math.abs(THREE.MathUtils.radToDeg(this.headYaw ?? 0)) > CLEARANCE_MEASURE_YAW_DEG) {
+      return
+    }
+
+    const anchors = transform.anchorWorldPoints
+    const left = anchors?.leftTemple
+    const right = anchors?.rightTemple
+    if (!left || !right) {
+      return
+    }
+
+    const axX = (this._clrAxX ??= new THREE.Vector3()).set(1, 0, 0).applyQuaternion(transform.quaternion)
+    const axZ = (this._clrAxZ ??= new THREE.Vector3()).set(0, 0, 1).applyQuaternion(transform.quaternion)
+    const mid = (this._clrMid ??= new THREE.Vector3()).set(
+      (left.x + right.x) / 2,
+      (left.y + right.y) / 2,
+      (left.z + right.z) / 2
+    )
+
+    const position = this.faceOccluder.occluderMesh.geometry.attributes.position
+    let headHalfWidth = 0
+    for (let i = 0; i < position.count; i += 1) {
+      const d = Math.abs(
+        (position.getX(i) - mid.x) * axX.x +
+        (position.getY(i) - mid.y) * axX.y +
+        (position.getZ(i) - mid.z) * axX.z
+      )
+      if (d > headHalfWidth) headHalfWidth = d
+    }
+    // A plausible human half-head is ~0.07-0.13 m in this space. Anything
+    // outside that means the occluder was not ready, and acting on it bakes in a
+    // correction sized for a head that does not exist.
+    if (!(headHalfWidth > MIN_PLAUSIBLE_HEAD_HALF_M && headHalfWidth < MAX_PLAUSIBLE_HEAD_HALF_M)) {
+      return
+    }
+
+    // Rebuilding ~6k vertices is not free, and a sub-millimetre wobble in the
+    // measured head should not rewrite the arms every frame.
+    if (this._clearedForWidth != null && Math.abs(headHalfWidth - this._clearedForWidth) < 0.001) {
+      return
+    }
+
+    this.glassesRoot.updateWorldMatrix(true, true)
+    const profile = buildHeadProfile(position, mid, axX, axZ)
+    applyClearance(this._temples, profile, {
+      mid,
+      axX,
+      axZ,
+      tmp: (this._clrTmp ??= new THREE.Vector3()),
+      local: (this._clrLocal ??= new THREE.Vector3()),
+    })
+    this._clearedForWidth = headHalfWidth
   }
 
   _isPositionInCameraView(position) {
@@ -772,7 +1030,20 @@ export class RenderLoop {
     }
 
     this.rafId = requestAnimationFrame(() => this._frame())
+    this._step()
+  }
 
+  /**
+   * One frame of tracking and rendering, with no scheduling of its own.
+   *
+   * Split out so a harness can drive the engine directly. requestAnimationFrame
+   * is throttled to a crawl whenever the page is not being painted, so with the
+   * preview pane hidden the whole pipeline stalls: the scan never locks, the
+   * glasses stay hidden, and every measurement comes back empty. Stepping this
+   * by hand makes automated runs independent of whether anyone is watching --
+   * and deterministic, since a step is a frame rather than a slice of wall time.
+   */
+  _step() {
     try {
       this._syncSize()
 
@@ -934,6 +1205,8 @@ export class RenderLoop {
         yaw: THREE.MathUtils.radToDeg(this.headYaw ?? 0),
         scale: fitScale,
         raw: fitSolution.glassesTransform.scale,
+        fittedRaw: fitSolution.fittedScaleRaw,
+        clamped: fitSolution.scaleClamped,
         z: predictedPos.z,
         quality: fitSolution.fitQuality,
       })

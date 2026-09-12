@@ -224,15 +224,25 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
 
     let images
     if (mode === 'turn') {
-      const N = 9
-      images = await Promise.all(
+      // ?mockframes=<n> lets a denser turn sequence be dropped in for smoother
+      // motion and finer angle steps; the repo ships 9. Frames that are missing
+      // resolve to null and get filtered out rather than rejecting the whole
+      // Promise.all -- asking for more frames than exist should thin the
+      // sequence, not kill the mock camera outright.
+      const requested = parseInt(new URLSearchParams(window.location.search).get('mockframes'), 10)
+      const N = Number.isFinite(requested) ? Math.min(Math.max(requested, 2), 121) : 9
+      const loaded = await Promise.all(
         Array.from({ length: N }, (_, i) => {
           const im = new Image()
           im.crossOrigin = 'anonymous'
           im.src = `/mock-turn/frame-${i}.png?v=${cb}`
-          return im.decode().then(() => im)
+          return im.decode().then(() => im, () => null)
         })
       )
+      images = loaded.filter(Boolean)
+      if (!images.length) {
+        throw new Error('mock=turn: no /mock-turn/frame-*.png could be loaded')
+      }
     } else {
       const im = new Image()
       im.crossOrigin = 'anonymous'
@@ -251,6 +261,16 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     const start = performance.now()
     const PERIOD_MS = 2600 // one full left->right->left cycle (brisk, to stress tracking)
     this._oscStart = null
+    // Deterministic pose control. Without it every A/B comparison is taken at a
+    // slightly different head angle, because the oscillation never stops -- which
+    // is how a run comparing three occluder settings ended up silently sampling
+    // three different parts of the turn and "proving" the wrong thing. Pinning a
+    // frame makes before/after captures differ by exactly one variable.
+    //
+    // ?mockframe=<n> pins from the start; window.__mock drives it at runtime.
+    const pinned = parseInt(new URLSearchParams(window.location.search).get('mockframe'), 10)
+    this._mockFrame = Number.isFinite(pinned) ? Math.min(Math.max(pinned, 0), N - 1) : null
+
     const draw = () => {
       let idx = (N - 1) >> 1 // front frame (middle)
       // Hold front during init warm-up AND while the calibration overlay is
@@ -259,17 +279,61 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
       const scanOverlay = document.getElementById('scan-overlay')
       const calibrating = scanOverlay ? scanOverlay.hidden === false : false
       const warmup = performance.now() - start < 2500
-      if (N > 1 && !calibrating && !warmup) {
+      // A pin still waits for calibration: the scan will not lock off-frontal, so
+      // pinning a turned frame before it completes means the glasses never appear.
+      if (this._mockFrame != null && !calibrating && !warmup) {
+        idx = this._mockFrame
+      } else if (N > 1 && !calibrating && !warmup) {
         if (this._oscStart == null) this._oscStart = performance.now()
         const phase = Math.sin(((performance.now() - this._oscStart) / PERIOD_MS) * Math.PI * 2) // -1..1
         idx = Math.round((phase * 0.5 + 0.5) * (N - 1))
       }
-      ctx.drawImage(images[idx], 0, 0, canvas.width, canvas.height)
+      paint(idx)
       this._mockRAF = requestAnimationFrame(draw)
     }
+
+    // Manual frame delivery. captureStream(0) hands back a track that only
+    // emits when requestFrame() is called, instead of sampling the canvas on a
+    // clock. That matters because requestAnimationFrame is throttled to a crawl
+    // (or stopped) whenever the page is not being painted -- a hidden or
+    // backgrounded preview pane froze the video mid-calibration, the scan never
+    // locked, and every probe reading came back "glasses hidden". Pushing frames
+    // explicitly makes the mock independent of whether anyone is watching.
+    const stream = canvas.captureStream(0)
+    const track = stream.getVideoTracks()[0]
+    const paint = (idx) => {
+      ctx.drawImage(images[idx], 0, 0, canvas.width, canvas.height)
+      track.requestFrame?.()
+    }
+
     draw()
 
-    this.stream = canvas.captureStream(30)
+    window.__mock = {
+      frameCount: N,
+      pin: (i) => {
+        this._mockFrame = i == null ? null : Math.min(Math.max(i, 0), N - 1)
+        return this._mockFrame
+      },
+      release: () => {
+        this._mockFrame = null
+        this._oscStart = null
+      },
+      current: () => this._mockFrame,
+      /**
+       * Pushes `count` frames by hand, for driving the pipeline while the page
+       * is throttled. MediaPipe, the pose filters and the fit solver each lag
+       * the input by a few frames, so a single frame is never enough to settle.
+       */
+      step: (count = 1) => {
+        const idx = this._mockFrame ?? ((N - 1) >> 1)
+        for (let i = 0; i < count; i += 1) paint(idx)
+        return idx
+      },
+    }
+
+    // Reuses the manual-delivery stream created above; capturing a second one at
+    // a fixed frame rate here would silently re-introduce the clock dependency.
+    this.stream = stream
     this.video.srcObject = this.stream
     this.video.muted = true
     this.video.playsInline = true

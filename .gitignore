@@ -17,3 +17,8 @@ __pycache__/
 Thumbs.db
 # Subagent-driven dev scratch (briefs, reports, ledger, diffs)
 .superpowers/
+
+# Scratch model fixtures: merchant GLBs copied in for local verification
+# (scripts/verify-raw-passthrough.mjs, ?model=). Customer assets and several MB
+# each -- kept on disk, never committed.
+public/models/_*.glb
