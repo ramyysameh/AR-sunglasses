@@ -65,8 +65,13 @@ export const DEFAULT_SHELL_DEPTH_RATIO = 0.8
  *   verdict  0/4        4/4       4/4
  *
  * Below zero the number stops moving, because the face oval itself becomes the
- * limiter -- which is the clue that the occluder's head is still ~30% wider than
- * a real one and that this constant is compensating for it.
+ * limiter. That is NOT evidence of an oversized head, though it was read that
+ * way at the time: world units are not metres (~1.16x here), so comparing the
+ * occluder's world-space span to real millimetres overstates it badly. Compared
+ * unit-free against the frame it sits on, the head is right to within a few per
+ * cent -- frame/outer-canthi 1.572 against 1.516 for a real adult, frame/face-
+ * oval 0.908 against 0.890. Re-derived after the depth relief was calibrated,
+ * this constant lands on zero again, so it is not compensating for anything.
  *
  * The old 0.078 was chosen against rearTrimPx, a metric that rewards an
  * occluder for removing as much of the arm as possible and therefore scored this
