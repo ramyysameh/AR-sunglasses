@@ -24,6 +24,9 @@
  */
 import * as THREE from 'three'
 
+/** Face-oval extremes, which sit at the tragion -- the ear reference. */
+const EAR_LANDMARKS = [234, 454]
+
 const TEMPLE_NAME = /temple/i
 // Flat decals carry "temple" in their names but are not the arm, and they sit on
 // its surface, so including them would report the arm as visible wherever a logo
@@ -88,6 +91,31 @@ export class OcclusionProbe {
   }
 
   /**
+   * Screen X of the ear, in the capture's pixel space.
+   *
+   * This is the reference the arm's visible end is judged against. Landmarks 234
+   * and 454 are the face oval's widest points, which sit at the tragion -- the
+   * notch in front of the ear canal, and very close to where a real temple
+   * passes out of sight.
+   */
+  _earScreenX(w, headYaw) {
+    const occ = this.faceOccluder?.occluderMesh
+    const attribute = occ?.geometry?.attributes?.position
+    if (!attribute || !this.camera) return null
+
+    const v = (this._earTmp ??= new THREE.Vector3())
+    const xs = []
+    for (const index of EAR_LANDMARKS) {
+      v.fromBufferAttribute(attribute, index).applyMatrix4(occ.matrixWorld).project(this.camera)
+      if (!Number.isFinite(v.x)) continue
+      xs.push((v.x * 0.5 + 0.5) * w)
+    }
+    if (!xs.length) return null
+    // The rear side is the one the arm runs towards, which flips with yaw.
+    return headYaw >= 0 ? Math.min(...xs) : Math.max(...xs)
+  }
+
+  /**
    * One measurement at the CURRENT pose.
    *
    * Both captures happen back to back without advancing the render loop, so the
@@ -149,12 +177,27 @@ export class OcclusionProbe {
         ? on.minX - off.minX
         : off.maxX - on.maxX
 
+    // WHERE the arm ends, against where the ear is. This is the number that
+    // actually describes the thing being judged; rearTrimPx describes how much
+    // was removed, which is maximised by an occluder so large it eats the arm.
+    const earX = this._earScreenX(w, headYaw)
+    const armEndX = headYaw >= 0 ? on.minX : on.maxX
+    const earGapPx = earX == null || on.count === 0
+      ? null
+      : headYaw >= 0
+        ? armEndX - earX
+        : earX - armEndX
+
     return {
       yaw: Math.round(headYaw * 10) / 10,
       templePixelsOn: on.count,
       templePixelsOff: off.count,
       hiddenPct: off.count ? Math.round((100 * (off.count - on.count)) / off.count) : 0,
       rearTrimPx,
+      // > 0: the arm stops SHORT of the ear (occluder eating it).
+      // < 0: the arm carries on PAST the ear (tip not hidden).
+      earGapPx: earGapPx == null ? null : Math.round(earGapPx),
+      earScreenX: earX == null ? null : Math.round(earX),
       // Raw extents, so the verdict above can be audited rather than trusted.
       // A derived number that cannot be checked against its inputs is how a
       // broken metric survives: several of this probe's predecessors reported
@@ -168,25 +211,43 @@ export class OcclusionProbe {
 /**
  * Pass/fail criterion for a sweep.
  *
- * Deliberately keyed on rearTrimPx rather than on total pixels hidden: hiding
- * pixels anywhere is easy and was happening even while the bug was live. Only
- * shortening the arm means the end actually went behind something.
+ * Keyed on WHERE the arm ends relative to the ear, not on how much of it was
+ * removed.
+ *
+ * rearTrimPx -- the previous criterion -- measures how much shorter the arm got.
+ * That is maximised by an occluder so large it swallows the arm, which is a real
+ * and visible bug: measured on one model, an over-wide shell scored 4/4 with
+ * 92 px of trim while the arm visibly died in mid-air over the cheek, and every
+ * configuration that fixed the render scored 0/4. The metric was voting for the
+ * defect, and repeatedly overruled the picture.
  *
  * Head-on, the arm is foreshortened and its rear extent is set by the hinge
- * rather than the tip, so no trim is expected there and only turned poses are
- * judged.
+ * rather than the tip, so only turned poses are judged.
  */
 export const MIN_REAR_TRIM_PX = 6
 export const JUDGED_ABOVE_YAW = 25
+
+/**
+ * How far the arm's visible end may sit from the ear, in pixels.
+ *
+ * Asymmetric on purpose. Stopping SHORT of the ear is the visible defect -- the
+ * arm dies in mid-air over the cheek -- so it is held tight. Running a little
+ * PAST the ear is what a real temple does before it hooks down behind the lobe,
+ * so there is more room that way.
+ */
+export const EAR_GAP_MAX_SHORT_PX = 10
+export const EAR_GAP_MAX_PAST_PX = 45
 
 export function evaluate(rows) {
   // Skipped rows carry no measurement, so they cannot pass. Counting them
   // separately keeps a sweep that mostly failed to measure from looking like a
   // sweep that mostly passed.
   const skipped = rows.filter((r) => r.skipped)
-  const measured = rows.filter((r) => !r.skipped && Number.isFinite(r.rearTrimPx))
+  const measured = rows.filter((r) => !r.skipped && Number.isFinite(r.earGapPx))
   const judged = measured.filter((r) => Math.abs(r.yaw) >= JUDGED_ABOVE_YAW)
-  const failures = judged.filter((r) => r.rearTrimPx < MIN_REAR_TRIM_PX)
+  const failures = judged.filter(
+    (r) => r.earGapPx > EAR_GAP_MAX_SHORT_PX || r.earGapPx < -EAR_GAP_MAX_PAST_PX
+  )
   return {
     judged: judged.length,
     passed: judged.length - failures.length,
@@ -194,6 +255,7 @@ export function evaluate(rows) {
     skipped: skipped.length,
     pass: judged.length > 0 && failures.length === 0,
     failingYaws: failures.map((r) => r.yaw),
+    earGaps: judged.map((r) => r.earGapPx),
   }
 }
 

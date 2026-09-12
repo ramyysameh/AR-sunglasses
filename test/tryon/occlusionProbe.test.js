@@ -1,29 +1,45 @@
 import { describe, it, expect } from 'vitest'
-import { evaluate, MIN_REAR_TRIM_PX, JUDGED_ABOVE_YAW } from '../../src/debug/occlusionProbe.js'
+import {
+  EAR_GAP_MAX_PAST_PX,
+  EAR_GAP_MAX_SHORT_PX,
+  JUDGED_ABOVE_YAW,
+  evaluate,
+} from '../../src/debug/occlusionProbe.js'
 
-const row = (yaw, rearTrimPx, hiddenPct = 20) => ({ yaw, rearTrimPx, hiddenPct })
+/**
+ * earGapPx: where the arm's visible end sits relative to the ear.
+ *   > 0  the arm stops SHORT of the ear -- the occluder is eating it
+ *   < 0  the arm carries on PAST the ear -- the tip is not being hidden
+ */
+const row = (yaw, earGapPx, extra = {}) => ({ yaw, earGapPx, hiddenPct: 20, ...extra })
 
 describe('occlusion pass/fail criterion', () => {
-  it('passes when every turned pose shortens the arm', () => {
-    const result = evaluate([row(-45, 14), row(-30, 9), row(0, 0), row(30, 8), row(45, 12)])
+  it('passes when the arm ends at the ear on every turned pose', () => {
+    const result = evaluate([row(-45, -8), row(-30, 2), row(0, 40), row(30, -3), row(45, 5)])
     expect(result.pass).toBe(true)
     expect(result.failed).toBe(0)
   })
 
-  it('ignores head-on poses, where the hinge sets the rear extent, not the tip', () => {
-    // 0 trim at 0 degrees is expected and must not fail the run.
-    const result = evaluate([row(0, 0), row(45, 12)])
-    expect(result.judged).toBe(1)
-    expect(result.pass).toBe(true)
-  })
-
-  it('fails the exact bug this was built to catch: pixels hidden, arm not shortened', () => {
-    // The open-strip occluder scored 6-24% hidden at every angle while never
-    // trimming the rear -- it shaved the middle of the arm and left the tip.
-    const result = evaluate([row(-45, 0, 24), row(30, 0, 16), row(45, 0, 22)])
+  it('fails an arm that dies short of the ear', () => {
+    // The defect the previous criterion scored as a PERFECT result: an over-wide
+    // shell swallowed the arm from the cheekbone back, and because that maximises
+    // "how much was trimmed" it read as 4/4 with 92 px of trim.
+    const result = evaluate([row(-45, 60), row(30, 48), row(45, 55)])
     expect(result.pass).toBe(false)
     expect(result.failed).toBe(3)
     expect(result.failingYaws).toEqual([-45, 30, 45])
+  })
+
+  it('fails an arm that runs far past the ear, which is the tip never hiding', () => {
+    const result = evaluate([row(-45, -120), row(45, -140)])
+    expect(result.pass).toBe(false)
+    expect(result.failed).toBe(2)
+  })
+
+  it('ignores head-on poses, where the hinge sets the rear extent, not the tip', () => {
+    const result = evaluate([row(0, 80), row(45, 0)])
+    expect(result.judged).toBe(1)
+    expect(result.pass).toBe(true)
   })
 
   it('does not pass a sweep that never reached a judged angle', () => {
@@ -33,10 +49,21 @@ describe('occlusion pass/fail criterion', () => {
     expect(evaluate([]).pass).toBe(false)
   })
 
-  it('judges by the documented thresholds', () => {
-    expect(evaluate([row(JUDGED_ABOVE_YAW, MIN_REAR_TRIM_PX)]).pass).toBe(true)
-    expect(evaluate([row(JUDGED_ABOVE_YAW, MIN_REAR_TRIM_PX - 1)]).pass).toBe(false)
-    expect(evaluate([row(JUDGED_ABOVE_YAW - 1, 0)]).judged).toBe(0)
+  it('judges by the documented thresholds, and is deliberately asymmetric', () => {
+    // Short of the ear is the visible defect, so it is held tighter than past it.
+    expect(EAR_GAP_MAX_PAST_PX).toBeGreaterThan(EAR_GAP_MAX_SHORT_PX)
+    expect(evaluate([row(JUDGED_ABOVE_YAW, EAR_GAP_MAX_SHORT_PX)]).pass).toBe(true)
+    expect(evaluate([row(JUDGED_ABOVE_YAW, EAR_GAP_MAX_SHORT_PX + 1)]).pass).toBe(false)
+    expect(evaluate([row(JUDGED_ABOVE_YAW, -EAR_GAP_MAX_PAST_PX)]).pass).toBe(true)
+    expect(evaluate([row(JUDGED_ABOVE_YAW, -EAR_GAP_MAX_PAST_PX - 1)]).pass).toBe(false)
+    expect(evaluate([row(JUDGED_ABOVE_YAW - 1, 999)]).judged).toBe(0)
+  })
+
+  it('cannot be satisfied by hiding pixels anywhere else on the arm', () => {
+    // hiddenPct is reported but never gates: shaving the middle of the arm while
+    // leaving the end exactly where it was is not occlusion working.
+    const result = evaluate([row(45, 55, { hiddenPct: 90 })])
+    expect(result.pass).toBe(false)
   })
 })
 
@@ -56,10 +83,17 @@ describe('skipped measurements', () => {
   it('scores only the poses it actually measured', () => {
     const result = evaluate([
       { skipped: 'glasses hidden (tracking lost or calibrating)' },
-      row(45, 12),
+      row(45, -4),
     ])
     expect(result.judged).toBe(1)
     expect(result.skipped).toBe(1)
     expect(result.pass).toBe(true)
+  })
+
+  it('treats a row with no ear reference as unmeasured, not as a pass', () => {
+    // earGapPx is null when the ear landmarks could not be projected.
+    const result = evaluate([{ yaw: 45, earGapPx: null, rearTrimPx: 90 }])
+    expect(result.judged).toBe(0)
+    expect(result.pass).toBe(false)
   })
 })

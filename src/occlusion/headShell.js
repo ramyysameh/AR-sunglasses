@@ -50,27 +50,29 @@ export const TEMPLE_SPAN_LANDMARKS = { left: 234, right: 454 }
 export const DEFAULT_SHELL_DEPTH_RATIO = 0.8
 
 /**
- * How far the widest part of the ring stands out past the face oval.
+ * Outward bulge at the ear ring, as a fraction of the temple span.
  *
- * The face oval traces the FACE, which is narrower than the head: it has no
- * ears, and ears protrude ~15-20 mm. Without this the shell's side wall sits
- * inboard of the temple arm and the arm never intersects it. Applied weighted
- * by how lateral each ring point is, so the sides bulge and the chin and
- * forehead stay put rather than inflating the whole head. Tunable with ?shellwide.
+ * Zero: the shell's wall starts exactly on the face oval at the ear plane and
+ * narrows behind it. It is not a mistake that there is no bulge -- pushing the
+ * wall outward past the face silhouette is what swallowed the temple arm from
+ * the cheekbone backwards, leaving it to die in mid-air short of the ear.
  *
- * Sized to an actual ear. Measured frontal on the mock head: the face mesh has a
- * 97 mm half-width and the frame's temples sit at 107 mm, so the arms already
- * clear the FACE comfortably. At 0.12 this bulge put the shell at 122 mm -- a
- * head wider than any real one -- and the arms then ran inside a skull that did
- * not exist, which is what made them look like they were sinking into the skin.
- * An ear protrudes ~15 mm past the face oval, which against a ~193 mm temple
- * span is this ratio.
+ * Measured against where the arm's visible end actually lands, relative to the
+ * ear (positive = stops short of it, the defect):
  *
- * It had briefly been 0.36, inflated to compensate for the old flat 22-vertex
- * mask; with MediaPipe's real face mesh doing the occluding that was both wrong
- * and inert.
+ *   bulge   +0.078      0.0      -0.08
+ *   earGap  +54..+11   -37..-29  -37..-29
+ *   verdict  0/4        4/4       4/4
+ *
+ * Below zero the number stops moving, because the face oval itself becomes the
+ * limiter -- which is the clue that the occluder's head is still ~30% wider than
+ * a real one and that this constant is compensating for it.
+ *
+ * The old 0.078 was chosen against rearTrimPx, a metric that rewards an
+ * occluder for removing as much of the arm as possible and therefore scored this
+ * exact defect as a perfect 4/4. See occlusionProbe.evaluate.
  */
-export const DEFAULT_SHELL_LATERAL_RATIO = 0.078
+export const DEFAULT_SHELL_LATERAL_RATIO = 0
 
 function resolve(search, key, fallback, max) {
   const raw = parseFloat(new URLSearchParams(search).get(key))
