@@ -55,7 +55,7 @@ const harnessPlugin = {
     // Registered in configureServer (not as a returned post-hook) so it runs
     // BEFORE vite's static handler and can shadow public/ without touching it.
     server.middlewares.use((req, res, next) => {
-      const match = /^\/mock-(turn|pitch)\/(frame-\d+\.png)$/.exec((req.url ?? '').split('?')[0])
+      const match = /^\/mock-([a-z0-9][a-z0-9-]{0,23})\/(frame-\d+\.png)$/.exec((req.url ?? '').split('?')[0])
       if (!match) return next()
       const file = path.join(MOCK_HEAD_DIR, match[1], match[2])
       if (!fs.existsSync(file)) return next()
@@ -84,7 +84,7 @@ const harnessPlugin = {
       try {
         const chunks = []
         for await (const chunk of req) chunks.push(chunk)
-        const { frames } = JSON.parse(Buffer.concat(chunks).toString())
+        const { frames, params } = JSON.parse(Buffer.concat(chunks).toString())
         const dir = (new URL(req.url ?? '', 'http://localhost').searchParams.get('dir') ?? 'turn')
           .replace(/[^a-zA-Z0-9_-]/g, '')
         const target = path.join(MOCK_HEAD_DIR, dir || 'turn')
@@ -95,8 +95,14 @@ const harnessPlugin = {
             Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'),
           )
         })
+        // Record what rendered this sweep. Two sweeps are only comparable if
+        // their CAMERA matches: apparent face size drives the IPD depth
+        // estimate, and a pitch set re-rendered at the default `dist` measured
+        // 9% smaller than the yaw set for the same model and solver, which read
+        // as a fit regression until the framing was checked.
+        if (params) fs.writeFileSync(path.join(target, 'params.json'), JSON.stringify(params, null, 2))
         res.setHeader('Content-Type', 'application/json')
-        res.end(JSON.stringify({ saved: frames.length, dir: target }))
+        res.end(JSON.stringify({ saved: frames.length, dir: target, params: params ?? null }))
       } catch (error) {
         res.statusCode = 500
         res.end(JSON.stringify({ error: String(error?.message ?? error) }))

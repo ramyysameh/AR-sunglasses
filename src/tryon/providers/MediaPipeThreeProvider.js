@@ -59,7 +59,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     // In mock mode the "face" is a static image, so the head-turn calibration
     // can never complete — relax the scanner to lock on from the front view only.
     const mockParam = new URLSearchParams(window.location.search).get('mock')
-    const mockMode = mockParam === '1' || mockParam === 'turn' || mockParam === 'pitch'
+    const mockMode = Boolean(mockParam)
     const localFaceScanner = mockMode
       ? new LocalFaceScanner({ stageTargets: { front: 5, yawLeft: 0, yawRight: 0, neutralReturn: 0 } })
       : undefined
@@ -174,7 +174,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     // Dev/preview: ?mock=1 feeds a static face image instead of the webcam,
     // so the AR pipeline can be previewed without camera access.
     const mock = new URLSearchParams(window.location.search).get('mock')
-    if (mock === '1' || mock === 'turn' || mock === 'pitch') {
+    if (mock) {
       await this._startMockCamera()
       return
     }
@@ -230,7 +230,13 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     const cb = Date.now()
 
     let images
-    if (mode === 'turn' || mode === 'pitch') {
+    // Any other value names a sweep directory: /mock-<mode>/frame-N.png. Sweeps
+    // are rendered, not fixtures, so a new axis costs a render rather than a
+    // code change -- see headrender.html. Camera framing must MATCH across
+    // sweeps being compared: apparent face size drives the IPD depth estimate,
+    // and re-rendering one axis at a different `dist` moved measured scale 9%
+    // with nothing about the model or solver changed.
+    if (mode && mode !== '1') {
       // ?mockframes=<n> lets a denser turn sequence be dropped in for smoother
       // motion and finer angle steps; the repo ships 9. Frames that are missing
       // resolve to null and get filtered out rather than rejecting the whole
