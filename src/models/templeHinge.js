@@ -85,78 +85,40 @@ export function selectArms(candidates, bounds) {
 }
 
 /**
- * How far each temple is opened at the HINGE, radians (~20 deg).
+ * Grazing margin, as a fraction of the head's half-width.
  *
- * Half of a two-part articulation; read it with TEMPLE_CURL_RAD. The front
- * segment swings out to carry the arm clear of the cheekbone, and the rear
- * segment then curls back in so the tip hides behind the ear. Neither angle
- * makes sense alone: at this opening with no curl the tip is drawn 0.18-0.37
- * spans BEHIND the ear plane and never hides.
+ * How far OUTSIDE the head's surface the arm has to sit before it reliably
+ * draws. It is not zero and it is not small: near the silhouette the arm runs
+ * almost tangent to the occluder, so a millimetre of depth hides tens of pixels
+ * of arm, and the lateral margin that buys reliability is about a quarter of a
+ * head half-width.
  *
- * Why two angles rather than one. The arm has to move 13-17 mm outward over the
- * cheek, and that requirement grows FASTER than the distance from the hinge, so
- * a single rotation that satisfies the middle overshoots the tip badly. Swept on
- * GRIPZ against the head-frame end metric, one transform never passed:
+ * Set by the model that needs the most of it, and the two agree closely once
+ * the head is measured as a head: GRIPZ implies 0.1645 and WILLOW 0.1683, a
+ * 2.3% spread. They did NOT agree before -- 0.147 against 0.067 -- because the
+ * head's half-width was being measured about each frame's own temple anchors,
+ * so the same head read 105.2 mm under one model and 111.9 under another. That
+ * was a measurement bug standing in for a per-model law, and three earlier
+ * hypotheses were chased before it was found. It now reads 101.5 and 101.6.
  *
- *   splay only        4     8    14.32   20     26 deg
- *   judged ok       0/14  0/8    0/8    0/8    3/8
- *   end             +0.25 +0.22  mixed  -0.31  -0.27
+ * That it IS a margin, rather than a number fitted to one case, is what the
+ * frame-scale sweep shows: across a 25% range of frame-to-head ratio the implied
+ * value moves by only 3%.
  *
- *   shift only        0    14     18     21     24 mm
- *   judged ok       0/14  0/8    0/8    0/8    1/8
- *   end             +0.25 +0.19  +0.16  +0.14  +0.08
- *
- * Two angles pass comfortably, and the curl is what does it:
- *
- *   splay/curl    16/0  16/12  16/20  16/28  18/22  20/20  20/24  24/20
- *   judged ok     1/7    6/8    6/8    5/8    7/8    6/8    8/8    1/8
- *   hole           14     22      2     13      0      2      0      0
- *
- * 20/24 is the only 8/8, with the arm's end landing -0.138..-0.006 -- just
- * inside the ear plane, where a temple belongs.
+ * Expressed as a RATIO because the effect is one of apparent size, so it should
+ * track the face like everything else here. One head cannot distinguish that
+ * from an absolute distance; the ratio is the safer of the two.
  */
-export const TEMPLE_OPEN_RAD = 0.349
+export const TEMPLE_GRAZE_RATIO = 0.168
 
 /**
- * What this angle costs in the FRONT view, and why it is not lower.
+ * Ceiling on the opening, radians (~34 deg).
  *
- * The splay is what makes the temples read as too wide head-on. Traced: the
- * widest drawn point is the joint itself, 98 mm back, which 20 degrees swings
- * 33.6 mm outward -- it projects 24 px past the head's silhouette, growing
- * steadily from the hinge, where the arm is exactly flush.
- *
- * It is also the ONLY lever on that. Measured against the head silhouette at
- * frontal, alternating A/B so the fit cannot drift between readings:
- *
- *   splay        17     18     20
- *   overhang   7.4px  9.7px  15.6px
- *   GRIPZ      14/15  16/16  16/16
- *   WILLOW       --   11/16  16/16
- *
- * So 18 would cut the overhang by 38%, and it costs WILLOW five judged poses
- * and opens a 9 px hole. WILLOW needs 20 and pays nothing for it -- its thin
- * rimless arms sit ~20 px INSIDE the silhouette at any of these angles, so the
- * cost is entirely GRIPZ's and entirely cosmetic, while the benefit is entirely
- * Willow's and entirely functional.
- *
- * Things that do NOT move the front view, so do not re-test them:
- *   the joint position   cut 0.40 -> 24 px (worse: an outward displacement near
- *                        the camera projects wider), 0.66 -> 15.6, 0.74 -> 15.4
- *   the shell bulge      0.02 lets GRIPZ drop to 17 deg and 7.2 px, but WILLOW
- *                        falls to 10/16 -- the bulge is what hides Willow's tip
- *
- * A per-model splay is the obvious answer and there is no basis for one yet.
- * Three candidate quantities have each been measured and refuted: the rear
- * segment's authored lean, the tip's inward displacement (both arms are 65-66 mm
- * there), and the frame's own half-width -- which cannot work at all, because
- * normalizeModel forces every model to the same 0.145 m, so GRIPZ and WILLOW
- * both measure 85 mm and differ anyway.
- *
- * Worth noting where the pressure really comes from: that same normalisation
- * puts a 145 mm frame on a 162 mm head here, so the arms have to reach outward
- * further than they would on a head the frame was sized for. Sizing the frame
- * to the head (the gscale lever) is the untested way out.
+ * A guard on a bad head measurement, not a target. The solve asks for 28 degrees
+ * at the widest frame-to-head ratio tested, so this sits clear of the working
+ * range.
  */
+export const MAX_SPLAY_RAD = 0.6
 
 /**
  * How far the rear segment curls back IN from the front segment, radians (~22).
@@ -311,6 +273,11 @@ export function buildHinges(glassesRoot) {
       rearMeshes,
       hingeLocal: { x: hx / n, y: hy / n, z: hingeZ },
       cutZ,
+      // Where the arm actually SITS at the joint, and how far back that is. The
+      // splay is solved from these rather than fixed, so it adapts to both the
+      // frame and the head -- see solveSplay.
+      armLateral: armLateralAt(rearMeshes.concat(frontMeshes), glassesRoot, cutZ),
+      jointDepth: Math.abs(cutZ),
       // The lean the rear segment ALREADY has, as the model was authored. This
       // is what lets one target angle suit every frame: a temple that already
       // hooks hard inward needs little curl added, one that runs straight back
@@ -331,6 +298,35 @@ export function buildHinges(glassesRoot) {
  * nothing.
  */
 const CUT_PLANE_EPSILON_M = 1e-4
+
+/** Half-thickness of the slice averaged to locate the arm at the joint. */
+const JOINT_SLICE_M = 0.004
+
+/**
+ * Mean |lateral| of the arm where the joint cuts it, in the frame's own space.
+ *
+ * This, not the frame's overall half-width, is where the arm has to reach OUT
+ * from. The two are not the same and only one of them is a property of the arm:
+ * normalizeModel forces every model to the same 0.145 m front, so GRIPZ and
+ * WILLOW both measure 85 mm across and tell you nothing, while their arms sit at
+ * 78.6 mm and 78.9 mm -- which is the number the geometry actually turns on.
+ */
+function armLateralAt(meshes, glassesRoot, cutZ) {
+  const v = new THREE.Vector3()
+  let sum = 0, n = 0
+  for (const mesh of meshes) {
+    const attribute = mesh.geometry?.attributes?.position
+    if (!attribute) continue
+    for (let i = 0; i < attribute.count; i += 1) {
+      v.fromBufferAttribute(attribute, i)
+      mesh.localToWorld(v)
+      glassesRoot.worldToLocal(v)
+      if (Math.abs(v.z - cutZ) > JOINT_SLICE_M) continue
+      sum += Math.abs(v.x); n += 1
+    }
+  }
+  return n ? sum / n : 0
+}
 
 /**
  * Mean x,y of the rear piece's vertices lying on the cut plane.
@@ -422,6 +418,38 @@ function splitArm(mesh, group, cutZ) {
 }
 
 
+
+/**
+ * The opening angle each arm needs, solved from the head it is being worn on.
+ *
+ * A fixed angle cannot be right, and the cost of pretending otherwise is not
+ * subtle. Scaling the frame is equivalent to changing the head's width relative
+ * to it, and swept that way on GRIPZ the required angle moves from 12 to 28
+ * degrees over a 25% range -- while the angle that suits this mock head, 20,
+ * leaves a NARROWER head with 43.6 px of temple hanging past the silhouette and
+ * 0/8 judged poses, the tip sailing clear of the ear. Real head breadth averages
+ * 145-155 mm and this fixture is 162, so that broken case is the common one.
+ *
+ * What has to happen is a REACH: the arm starts at `armLateral` and must arrive
+ * at the head's half-width plus a grazing margin, and the angle is whatever
+ * delivers that at the joint. Validated by predicting before measuring --
+ *
+ *   frame scale     0.90    1.00    1.12
+ *   predicted       28.6    20.0    14.5 deg
+ *   measured        28      18-20   12-16
+ *   (at 0.90, 24 scores 2/7 and 28 scores 8/8; at 1.12, 20 scores 0/8)
+ *
+ * @param {number} headHalf measured head half-width, world units
+ * @param {number} armLateral where the arm sits at the joint, world units
+ * @param {number} jointDepth how far back the joint is, world units
+ * @returns {number} radians
+ */
+export function solveSplay(headHalf, armLateral, jointDepth) {
+  if (!(jointDepth > 0) || !(headHalf > 0)) return 0
+  const reach = headHalf * (1 + TEMPLE_GRAZE_RATIO) - armLateral
+  const sine = Math.min(Math.max(reach / jointDepth, 0), 1)
+  return Math.min(Math.asin(sine), MAX_SPLAY_RAD)
+}
 
 /**
  * Sets the rear segment's inward angle, relative to the front segment.

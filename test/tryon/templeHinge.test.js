@@ -2,10 +2,12 @@ import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import {
   MAX_CURL_RAD,
+  MAX_SPLAY_RAD,
   TEMPLE_CURL_RAD,
   TEMPLE_CUT_RATIO,
-  TEMPLE_OPEN_RAD,
+  TEMPLE_GRAZE_RATIO,
   applyCurl,
+  solveSplay,
   applySplay,
   buildHinges,
   isTempleMesh,
@@ -20,21 +22,54 @@ function attr(points) {
   return { count: points.length, getX: (i) => points[i][0], getY: (i) => points[i][1], getZ: (i) => points[i][2] }
 }
 
-describe('the two articulation angles', () => {
+describe('solveSplay', () => {
   const deg = (rad) => (rad * 180) / Math.PI
+  // GRIPZ on the mock head, in world units.
+  // The engine's own measurements on the mock head, GRIPZ fitted.
+  const HEAD = 101.5, ARM = 75.6, JOINT = 121.7
 
-  it('opens at the hinge and curls back in at the ear', () => {
-    expect(deg(TEMPLE_OPEN_RAD)).toBeCloseTo(20, 0)
-    expect(deg(TEMPLE_CURL_RAD)).toBeCloseTo(22, 0)
+  it('lands both models inside the window they were measured to pass', () => {
+    // The margin is set by WILLOW, the binding one: its joint is further back,
+    // so the same reach costs it more angle. Both land in the window they were
+    // measured to pass, which only works because the head is measured about the
+    // head -- see TEMPLE_GRAZE_RATIO.
+    const gripz = deg(solveSplay(HEAD, ARM, JOINT))
+    const willow = deg(solveSplay(101.6, 73.8, 131.2))
+    expect(gripz).toBeGreaterThanOrEqual(20)
+    expect(gripz).toBeLessThanOrEqual(22)
+    expect(willow).toBeLessThanOrEqual(21)
+    expect(willow).toBeGreaterThanOrEqual(19.9)
   })
 
-  it('curls at least as far as it opens, or the tip never hides', () => {
-    expect(TEMPLE_CURL_RAD).toBeGreaterThanOrEqual(TEMPLE_OPEN_RAD)
+  it('opens FURTHER on a wider head and less on a narrower one', () => {
+    // The property a fixed angle cannot have, and the reason this exists: at 20
+    // degrees a narrower head showed 43.6 px of temple past the silhouette and
+    // 0/8 judged poses.
+    const wide = solveSplay(HEAD * 1.1, ARM, JOINT)
+    const narrow = solveSplay(HEAD * 0.9, ARM, JOINT)
+    expect(wide).toBeGreaterThan(solveSplay(HEAD, ARM, JOINT))
+    expect(narrow).toBeLessThan(solveSplay(HEAD, ARM, JOINT))
   })
 
-  it('puts the joint between the hinge and the tip', () => {
-    expect(TEMPLE_CUT_RATIO).toBeGreaterThan(0)
-    expect(TEMPLE_CUT_RATIO).toBeLessThan(1)
+  it('matches the two frame scales it was validated against', () => {
+    // Scaling the frame is equivalent to changing the head's relative width, and
+    // that is how the law was validated: predicted 28.6 and 14.5 degrees before
+    // measuring, measured 28 and 12-16.
+    expect(deg(solveSplay(HEAD, ARM * 0.9, JOINT * 0.9))).toBeGreaterThan(deg(solveSplay(HEAD, ARM, JOINT)))
+    expect(deg(solveSplay(HEAD, ARM * 1.12, JOINT * 1.12))).toBeLessThan(deg(solveSplay(HEAD, ARM, JOINT)))
+  })
+
+  it('needs no splay at all once the arm already clears the head', () => {
+    expect(solveSplay(HEAD, HEAD * (1 + TEMPLE_GRAZE_RATIO) + 1, JOINT)).toBe(0)
+  })
+
+  it('caps instead of asking for an impossible angle', () => {
+    expect(solveSplay(HEAD * 5, ARM, JOINT)).toBe(MAX_SPLAY_RAD)
+  })
+
+  it('returns 0 rather than NaN when the arm was never measured', () => {
+    expect(solveSplay(HEAD, ARM, 0)).toBe(0)
+    expect(solveSplay(0, ARM, JOINT)).toBe(0)
   })
 })
 
