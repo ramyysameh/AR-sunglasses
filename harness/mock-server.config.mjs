@@ -16,11 +16,33 @@
  *     ships. Production serves the merchant's original bytes, and so does the
  *     static handler here, so the delivery path now matches too.
  *
- *  2. Serves a denser, wider-range mock head over /mock-turn/frame-N.png. The
+ *  2. Serves a denser, wider-range mock head over /mock-<sweep>/frame-N.png. The
  *     repo's own turn frames peak at 26 degrees of yaw, which is not enough to
  *     expose the temple arm alongside the head -- the frontal mask still covers
  *     it there, so an occluder bug in that region is invisible. The replacement
  *     set sweeps +/-60 in 5 degree steps.
+ *
+ *     Sweeps available, each a directory under MOCK_HEAD_DIR with the render's
+ *     own params.json beside it:
+ *
+ *       turn      yaw, the workhorse          ?mock=turn&mockframes=25
+ *       yaw       yaw +/-30, finer steps      ?mock=yaw&mockframes=21
+ *       pitch     pitch +/-30, yaw 0          ?mock=pitch&mockframes=21
+ *       pitchyaw  pitch +/-25 held at yaw 35  ?mock=pitchyaw&mockframes=13
+ *
+ *     pitchyaw exists because the occlusion criterion cannot be applied at yaw
+ *     0: head-on, the arm is foreshortened and its rear extent is set by the
+ *     hinge rather than the tip, so JUDGED_ABOVE_YAW drops every row and a pure
+ *     pitch sweep scores 0/0 -- the pitch axis was unguarded for the temples
+ *     entirely. Holding a yaw while pitch sweeps makes both criteria valid.
+ *     Re-render it with:
+ *
+ *       /render?axis=pitch&yawoffset=35&range=25&count=13&frontalcentre=1
+ *              &dist=1.45&heady=0.3&neck=1&save=1&dir=pitchyaw
+ *
+ *     frontalcentre is not optional there: the mock holds the middle frame for
+ *     the whole calibration scan and the scan will not lock on a turned face, so
+ *     without it nothing ever renders and every row reads "glasses hidden".
  *
  * Usage:
  *   npm run harness        -> http://localhost:5175  (Claude's in-app browser

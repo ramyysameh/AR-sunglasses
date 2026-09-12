@@ -40,6 +40,19 @@ const AXIS = (q.get('axis') ?? 'yaw').toLowerCase()
 // rather than the neck working, and at +/-30deg of pitch the shoulders swing far
 // enough to change what is in frame.
 const NECK = q.get('neck') !== '0'
+// ?frontalcentre=1 renders the CENTRE frame square-on regardless of yawoffset.
+//
+// Needed to sweep one axis while the head is turned on another. The mock camera
+// holds the middle frame for the whole calibration scan, and the scan will not
+// lock on an off-frontal face -- so a sweep rendered entirely at yawoffset=35
+// never gets past the overlay and every row comes back "glasses hidden". With
+// this, the scan locks on the centre frame and the sweep then visits the turned
+// ones, which is exactly how the yaw sets already work (their centre frame is
+// frontal because 0 is the middle of -range..+range).
+//
+// The centre frame is therefore NOT part of the series being measured; it is the
+// calibration anchor. Judge the other frames.
+const FRONTAL_CENTRE = q.get('frontalcentre') === '1'
 const out = document.getElementById('out')
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
@@ -184,14 +197,17 @@ const rig = NECK ? buildNeckRig(model) : null
 const frames = []
 const sheet = document.getElementById('sheet')
 for (let i = 0; i < ANGLES.length; i++) {
+  const anchor = FRONTAL_CENTRE && i === (ANGLES.length - 1) / 2
+  const yaw = anchor ? 0 : YAW_OFFSET
+  const angle = anchor ? 0 : ANGLES[i]
   if (rig) {
     // Bust stays put; only the head moves.
-    pivot.rotation.set(0, THREE.MathUtils.degToRad(YAW_OFFSET), 0)
-    rig.apply(ANGLES[i], AXIS)
+    pivot.rotation.set(0, THREE.MathUtils.degToRad(yaw), 0)
+    rig.apply(angle, AXIS)
   } else if (AXIS === 'pitch') {
-    pivot.rotation.set(THREE.MathUtils.degToRad(ANGLES[i]), THREE.MathUtils.degToRad(YAW_OFFSET), 0)
+    pivot.rotation.set(THREE.MathUtils.degToRad(angle), THREE.MathUtils.degToRad(yaw), 0)
   } else {
-    pivot.rotation.set(0, THREE.MathUtils.degToRad(ANGLES[i] + YAW_OFFSET), 0)
+    pivot.rotation.set(0, THREE.MathUtils.degToRad(angle + yaw), 0)
   }
   renderer.render(scene, camera)
   frames.push(renderer.domElement.toDataURL('image/png'))
@@ -217,7 +233,7 @@ if (q.get('save') === '1') {
       // Stored beside the frames so a later sweep can be rendered to MATCH.
       // Apparent face size drives the IPD depth estimate, so comparing two
       // sweeps rendered at different `dist` silently compares two cameras.
-      params: { axis: AXIS, count: COUNT, range: RANGE, yawoffset: YAW_OFFSET, dist: DIST, heady: HEAD_Y, size: SIZE, neck: NECK, glb: q.get('glb') || '/mockhead/head.glb' },
+      params: { axis: AXIS, count: COUNT, range: RANGE, yawoffset: YAW_OFFSET, frontalcentre: FRONTAL_CENTRE, dist: DIST, heady: HEAD_Y, size: SIZE, neck: NECK, glb: q.get('glb') || '/mockhead/head.glb' },
     }),
   })
   saved = JSON.stringify(await r.json())
