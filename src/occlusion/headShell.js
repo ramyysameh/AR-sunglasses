@@ -52,32 +52,38 @@ export const DEFAULT_SHELL_DEPTH_RATIO = 0.8
 /**
  * Outward bulge at the ear ring, as a fraction of the temple span.
  *
- * Zero: the shell's wall starts exactly on the face oval at the ear plane and
- * narrows behind it. It is not a mistake that there is no bulge -- pushing the
- * wall outward past the face silhouette is what swallowed the temple arm from
- * the cheekbone backwards, leaving it to die in mid-air short of the ear.
+ * The face oval is the silhouette of the FACE, and the skull behind it is wider:
+ * projected against the rendered head, the oval sits 20-24 px inside the real
+ * silhouette at ear height. A shell built flat on the oval therefore hides the
+ * temple tip later than the head would, and that showed up as the tip sailing
+ * past the ear on every model.
  *
- * Measured against where the arm's visible end actually lands, relative to the
- * ear (positive = stops short of it, the defect):
+ * This was 0 for a long time, chosen against earGapPx and rearTrimPx -- metrics
+ * that paid an occluder for REMOVING arm, so any bulge looked like damage. The
+ * old measurement table is preserved below for exactly that reason. Re-derived
+ * against the head-frame metric, a small bulge is what lets the tip hide with
+ * LESS curl, which in turn leaves the arm further out where it runs past the
+ * cheek. That coupling is the point: widening the shell and reducing the curl
+ * both help, where every single knob on its own only traded one model against
+ * another.
+ *
+ *   bulge        0      0.05
+ *   GRIPZ      14/16   16/16
+ *   WILLOW     16/16   16/16
+ *   LARSSON    16/16   15/16
+ *   (at splay 20, curl 22, cut 0.66; bulge 0 needs curl 28 and still leaves
+ *    WILLOW 0.006 past the bound with GRIPZ 0.001 off the other one)
+ *
+ * Superseded measurements, kept because they are why this sat at 0: against the
+ * old screen-space metric a bulge scored 0/4 where zero scored 4/4 --
  *
  *   bulge   +0.078      0.0      -0.08
  *   earGap  +54..+11   -37..-29  -37..-29
- *   verdict  0/4        4/4       4/4
  *
- * Below zero the number stops moving, because the face oval itself becomes the
- * limiter. That is NOT evidence of an oversized head, though it was read that
- * way at the time: world units are not metres (~1.16x here), so comparing the
- * occluder's world-space span to real millimetres overstates it badly. Compared
- * unit-free against the frame it sits on, the head is right to within a few per
- * cent -- frame/outer-canthi 1.572 against 1.516 for a real adult, frame/face-
- * oval 0.908 against 0.890. Re-derived after the depth relief was calibrated,
- * this constant lands on zero again, so it is not compensating for anything.
- *
- * The old 0.078 was chosen against rearTrimPx, a metric that rewards an
- * occluder for removing as much of the arm as possible and therefore scored this
- * exact defect as a perfect 4/4. See occlusionProbe.evaluate.
+ * -- and that metric was later shown to reward an arm held away from the head.
+ * Tunable with ?shellwide.
  */
-export const DEFAULT_SHELL_LATERAL_RATIO = 0
+export const DEFAULT_SHELL_LATERAL_RATIO = 0.05
 
 function resolve(search, key, fallback, max) {
   const raw = parseFloat(new URLSearchParams(search).get(key))

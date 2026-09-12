@@ -120,20 +120,34 @@ export const TEMPLE_OPEN_RAD = 0.349
 /**
  * How far the rear segment curls back IN from the front segment, radians (~28).
  *
- * This is the angle that makes the arm hide at the ear instead of sailing past
- * the head. See TEMPLE_OPEN_RAD for the sweep the pair was chosen from.
+ * A fixed relative angle, and two attempts at making it per-model were both
+ * refuted by measurement rather than abandoned on taste:
+ *
+ *   aim the rear segment at a fixed absolute lean, subtracting each model's
+ *   own authored hook -- predicts WILLOW (hook 25.2 deg) needs LESS curl than
+ *   GRIPZ (16.5). Measured, Willow needs MORE. Applied, it gave Willow 2.8
+ *   degrees of curl and 0/16 judged poses, end -0.48..-0.39.
+ *
+ *   target the tip's inward DISPLACEMENT instead, length x sin(angle) -- but
+ *   the two rear segments are 65.3 mm and 66.0 mm long, so that predicts the
+ *   same angle for both, which is what a fixed curl already does.
+ *
+ * So the per-model spread is driven by something neither the rear segment's
+ * direction nor its length explains, and a third guess fitted to three models
+ * would be worth less than the honest constant. See occlusionProbe for where
+ * Willow's remaining margin came from instead.
  */
-export const TEMPLE_CURL_RAD = 0.489
+export const TEMPLE_CURL_RAD = 0.384
 
 /**
- * Where along the arm the second pivot sits, as a fraction of hinge-to-tip.
+ * Ceiling on the curl, radians (~40 deg).
  *
- * Placed near the ear, because that is where a temple stops running back and
- * starts curving in. Cutting further forward makes the front piece too short to
- * carry the arm clear of the cheek; further back leaves too little behind the
- * joint to tuck away.
+ * A guard, not a target: the alternative to clamping a bad angle is a rear
+ * segment folded through the skull.
  */
-export const TEMPLE_CUT_RATIO = 0.62
+export const MAX_CURL_RAD = 0.7
+
+export const TEMPLE_CUT_RATIO = 0.66
 
 /**
  * Reparents each arm under a pivot at its own hinge so it can be rotated rigidly.
@@ -222,11 +236,6 @@ export function buildHinges(glassesRoot) {
     for (const c of mine) if (c.zBack < zBack) zBack = c.zBack
     const cutZ = hingeZ - (hingeZ - zBack) * TEMPLE_CUT_RATIO
 
-    const curl = new THREE.Group()
-    curl.name = `templeCurl${side < 0 ? 'Left' : 'Right'}`
-    group.add(curl)
-    curl.position.set(0, 0, cutZ - hingeZ)
-
     const frontMeshes = []
     const rearMeshes = []
     for (const c of mine) {
@@ -234,8 +243,23 @@ export function buildHinges(glassesRoot) {
       if (!pieces) { frontMeshes.push(c.mesh); continue }
       frontMeshes.push(pieces.front)
       rearMeshes.push(pieces.rear)
-      curl.attach(pieces.rear)
     }
+
+    // splitArm added fresh meshes, whose world matrices are not computed until
+    // asked for. Measuring the cut before this update silently found no vertices
+    // on the plane at all and fell back to the group axis -- the exact placement
+    // the joint is meant to avoid.
+    glassesRoot.updateMatrixWorld(true)
+
+    // The pivot goes ON the arm, at the centre of the cut face. Putting it on
+    // the group's own axis instead is off to one side of a tapering temple, and
+    // rotating about an axis beside the arm translates it as well as turning it.
+    const joint = cutCentre(rearMeshes, group, cutZ - hingeZ)
+    const curl = new THREE.Group()
+    curl.name = `templeCurl${side < 0 ? 'Left' : 'Right'}`
+    group.add(curl)
+    curl.position.set(joint.x, joint.y, cutZ - hingeZ)
+    for (const mesh of rearMeshes) curl.attach(mesh)
 
     hinges.push({
       side,
@@ -246,11 +270,71 @@ export function buildHinges(glassesRoot) {
       rearMeshes,
       hingeLocal: { x: hx / n, y: hy / n, z: hingeZ },
       cutZ,
+      // The lean the rear segment ALREADY has, as the model was authored. This
+      // is what lets one target angle suit every frame: a temple that already
+      // hooks hard inward needs little curl added, one that runs straight back
+      // needs a lot, and a fixed curl gave the two extremes opposite errors.
+      rearAngle: rearLean(rearMeshes, group, curl, side),
       baseX: group.position.x,
     })
   }
 
   return hinges
+}
+
+/**
+ * How close to the cut plane a vertex must sit to count as ON it, metres.
+ *
+ * The cut vertices are exact in the geometry, but they are read back through a
+ * local -> world -> group round trip in float32, so an exact comparison finds
+ * nothing.
+ */
+const CUT_PLANE_EPSILON_M = 1e-4
+
+/**
+ * Mean x,y of the rear piece's vertices lying on the cut plane.
+ *
+ * Those vertices are exactly the ones splitAtPlane generated, so this is the
+ * centre of the cut face rather than an approximation of it.
+ */
+function cutCentre(rearMeshes, group, cutLocalZ) {
+  const v = new THREE.Vector3()
+  let sx = 0, sy = 0, n = 0
+  for (const mesh of rearMeshes) {
+    const attribute = mesh.geometry?.attributes?.position
+    if (!attribute) continue
+    for (let i = 0; i < attribute.count; i += 1) {
+      v.fromBufferAttribute(attribute, i)
+      mesh.localToWorld(v)
+      group.worldToLocal(v)
+      if (Math.abs(v.z - cutLocalZ) > CUT_PLANE_EPSILON_M) continue
+      sx += v.x; sy += v.y; n += 1
+    }
+  }
+  return n ? { x: sx / n, y: sy / n } : { x: 0, y: 0 }
+}
+
+/**
+ * Inward angle of the rear segment as authored, measured at the joint.
+ *
+ * Zero means it runs straight back; positive means it already hooks toward the
+ * head. Sign is folded per side so both arms report the same way.
+ */
+function rearLean(rearMeshes, group, curl, side) {
+  const v = new THREE.Vector3()
+  let tip = null
+  for (const mesh of rearMeshes) {
+    const attribute = mesh.geometry?.attributes?.position
+    if (!attribute) continue
+    for (let i = 0; i < attribute.count; i += 1) {
+      v.fromBufferAttribute(attribute, i)
+      mesh.localToWorld(v)
+      curl.worldToLocal(v)
+      if (!tip || v.z < tip.z) tip = v.clone()
+    }
+  }
+  if (!tip || !(tip.z < 0)) return 0
+  return Math.atan2(-side * tip.x, -tip.z)
 }
 
 /**
@@ -298,10 +382,15 @@ function splitArm(mesh, group, cutZ) {
 
 
 
-/** Sets the rear segment's inward angle, relative to the front segment. */
+/**
+ * Sets the rear segment's inward angle, relative to the front segment.
+ *
+ * Clamped, so a bad angle cannot fold an arm through the head.
+ */
 export function applyCurl(hinges, angle) {
   for (const hinge of hinges) {
-    if (hinge.curl) hinge.curl.rotation.y = hinge.side * angle
+    if (!hinge.curl) continue
+    hinge.curl.rotation.y = hinge.side * Math.min(Math.max(angle, 0), MAX_CURL_RAD)
   }
 }
 

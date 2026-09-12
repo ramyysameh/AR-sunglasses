@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import {
+  MAX_CURL_RAD,
   TEMPLE_CURL_RAD,
   TEMPLE_CUT_RATIO,
   TEMPLE_OPEN_RAD,
@@ -23,23 +24,35 @@ describe('the two articulation angles', () => {
   const deg = (rad) => (rad * 180) / Math.PI
 
   it('opens at the hinge and curls back in at the ear', () => {
-    // Signs matter more than magnitudes: the front segment must swing OUT and
-    // the rear must come back IN. Both positive, applied with opposite sign per
-    // side by applySplay/applyCurl.
     expect(deg(TEMPLE_OPEN_RAD)).toBeCloseTo(20, 0)
-    expect(deg(TEMPLE_CURL_RAD)).toBeCloseTo(28, 0)
+    expect(deg(TEMPLE_CURL_RAD)).toBeCloseTo(22, 0)
   })
 
   it('curls at least as far as it opens, or the tip never hides', () => {
-    // With the opening but no curl, GRIPZ draws its tip 0.18-0.37 spans behind
-    // the ear plane -- sailing past the head. The curl has to at least undo the
-    // opening for the tip to turn back toward the skull.
     expect(TEMPLE_CURL_RAD).toBeGreaterThanOrEqual(TEMPLE_OPEN_RAD)
   })
 
   it('puts the joint between the hinge and the tip', () => {
     expect(TEMPLE_CUT_RATIO).toBeGreaterThan(0)
     expect(TEMPLE_CUT_RATIO).toBeLessThan(1)
+  })
+})
+
+describe('applyCurl', () => {
+  const hinge = (side = 1) => ({ side, rearAngle: 0, curl: { rotation: { y: 0 } } })
+
+  it('mirrors the sign per side', () => {
+    const right = hinge(1), left = hinge(-1)
+    applyCurl([right, left], 0.4)
+    expect(left.curl.rotation.y).toBeCloseTo(-right.curl.rotation.y, 9)
+  })
+
+  it('clamps rather than folding an arm through the head', () => {
+    const wild = hinge()
+    applyCurl([wild], 5)
+    expect(wild.curl.rotation.y).toBe(MAX_CURL_RAD)
+    applyCurl([wild], -5)
+    expect(wild.curl.rotation.y).toBe(0)
   })
 })
 
