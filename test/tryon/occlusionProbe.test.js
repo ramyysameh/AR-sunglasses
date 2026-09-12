@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest'
+import * as THREE from 'three'
 import {
   EAR_GAP_MAX_PAST_RATIO,
   EAR_GAP_MAX_SHORT_RATIO,
   JUDGED_ABOVE_YAW,
   MAX_ARM_HOLE_PX,
   evaluate,
+  headFrame,
 } from '../../src/debug/occlusionProbe.js'
 
 /**
@@ -145,5 +147,76 @@ describe('the stand-off bias the screen-space metric had', () => {
     const result = evaluate([{ yaw: 38, earGapRatio: 0.3, reachRatio: 0.22, armHolePx: 0 }])
     expect(result.pass).toBe(false)
     expect(result.reaches).toEqual([0.22])
+  })
+})
+
+describe('headFrame', () => {
+  // A head facing +Z, ears on X. The outer canthi sit just above the ear line
+  // and well forward; the nose tip is placed 50 mm BELOW it, as a real one is --
+  // that offset is what broke the first version of this frame.
+  const build = ({ nose = [0, -0.05, 0.09], eyeA = [-0.045, 0.008, 0.06], eyeB = [0.045, 0.008, 0.06] } = {}) =>
+    headFrame(
+      new THREE.Vector3(-0.09, 0, 0),
+      new THREE.Vector3(0.09, 0, 0),
+      new THREE.Vector3(...eyeA),
+      new THREE.Vector3(...eyeB),
+      new THREE.Vector3(...nose),
+    )
+
+  it('puts the origin on the ear plane and measures the span across it', () => {
+    const f = build()
+    expect(f.origin.toArray()).toEqual([0, 0, 0])
+    expect(f.span).toBeCloseTo(0.18, 6)
+  })
+
+  it('points forward out of the face, not down at the nose', () => {
+    // The nose is 50 mm below the ear line. An axis aimed at it tilts ~30
+    // degrees down; this one must stay within a couple of degrees of level.
+    const f = build()
+    expect(f.forward.z).toBeGreaterThan(0.99)
+    expect(Math.abs(f.forward.y)).toBeLessThan(0.14)
+  })
+
+  it('gives a depth that barely moves when only HEIGHT changes', () => {
+    // The property the whole metric rests on. With the old nose-aimed axis a
+    // temple riding 50 mm above the ear plane picked up ~25 mm of spurious
+    // depth -- 0.14 of a span, more than the entire short/past tolerance -- and
+    // so read as reaching past the ear on every model.
+    const f = build()
+    const depth = (p) => p.clone().sub(f.origin).dot(f.forward)
+    const low = new THREE.Vector3(0.08, 0, -0.01)
+    const high = new THREE.Vector3(0.08, 0.05, -0.01)
+    expect(Math.abs(depth(high) - depth(low))).toBeLessThan(0.007)
+  })
+
+  it('is unmoved by pushing a sample sideways, which is why it replaced screen X', () => {
+    const f = build()
+    const depth = (p) => p.clone().sub(f.origin).dot(f.forward)
+    const near = new THREE.Vector3(0.07, 0.03, -0.02)
+    const wide = new THREE.Vector3(0.13, 0.03, -0.02)
+    expect(depth(wide)).toBeCloseTo(depth(near), 9)
+  })
+
+  it('uses the nose only for sign, so a nose far off-centre cannot tilt it', () => {
+    const straight = build()
+    const skewed = build({ nose: [0.04, -0.12, 0.06] })
+    expect(skewed.forward.angleTo(straight.forward)).toBeCloseTo(0, 9)
+  })
+
+  it('pairs each eye with its nearer ear, so the landmark order need not be assumed', () => {
+    const a = build()
+    const b = build({ eyeA: [0.045, 0.008, 0.06], eyeB: [-0.045, 0.008, 0.06] })
+    expect(b.forward.angleTo(a.forward)).toBeCloseTo(0, 9)
+  })
+
+  it('returns null rather than a garbage frame when the landmarks are degenerate', () => {
+    const o = new THREE.Vector3()
+    expect(headFrame(o, o.clone(), new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 1))).toBeNull()
+    // eyes coincident with the ears: nothing left after the lateral part is out
+    expect(headFrame(
+      new THREE.Vector3(-0.09, 0, 0), new THREE.Vector3(0.09, 0, 0),
+      new THREE.Vector3(-0.09, 0, 0), new THREE.Vector3(0.09, 0, 0),
+      new THREE.Vector3(0, 0, 1),
+    )).toBeNull()
   })
 })

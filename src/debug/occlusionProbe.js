@@ -27,8 +27,10 @@ import * as THREE from 'three'
 /** Face-oval extremes, which sit at the tragion -- the ear reference. */
 const EAR_LANDMARKS = [234, 454]
 
-/** Nose tip, used only to orient the head's fore-aft axis. */
+/** Nose tip: used ONLY to choose the sign of the fore-aft axis. */
 const NOSE_LANDMARK = 1
+/** Outer eye corners; tragion-to-canthus is close to the head's horizontal. */
+const EYE_LANDMARKS = [33, 263]
 
 const TEMPLE_NAME = /temple/i
 // Flat decals carry "temple" in their names but are not the arm, and they sit on
@@ -39,6 +41,63 @@ const NOT_TEMPLE = /logo|print|emblem|lettering|mark/i
 function isTemple(mesh) {
   const label = `${mesh.name ?? ''} ${mesh.parent?.name ?? ''}`
   return TEMPLE_NAME.test(label) && !NOT_TEMPLE.test(label)
+}
+
+/**
+ * The head's fore-aft frame, origin on the EAR PLANE, axis near-horizontal.
+ *
+ * The axis is the mean of the two EAR-TO-EYE vectors with the lateral component
+ * projected out. Tragion to outer canthus runs close to the anatomical
+ * horizontal, which is the property being bought here: the depth coordinate
+ * must not absorb a sample's HEIGHT, because a temple arm rides ~50 mm above the
+ * ear plane and any tilt in the axis turns that offset into depth.
+ *
+ * Two earlier versions of this got it wrong in the same direction:
+ *
+ *   ear midpoint -> nose tip      the nose sits well below the ear line, so the
+ *                                 axis tilted ~30 degrees down and every arm on
+ *                                 every model read as comfortably behind the
+ *                                 ear. One frame reported its end 17 mm PAST
+ *                                 the ear plane while the render plainly showed
+ *                                 the arm stopping 27 px in front of the tragion.
+ *   cross(lateral, brow -> chin)  better, but the forehead and chin are at
+ *                                 different depths, so the vertical it is built
+ *                                 from leans and ~5% of the height leaks back
+ *                                 in -- 2.6 mm on a temple, 0.015 of a span.
+ *
+ * Each eye is paired with whichever ear is nearer, so the landmark convention
+ * does not have to be assumed. The nose is used only for its SIGN: it says which
+ * way out of the face is forward.
+ *
+ * @param {THREE.Vector3} earA tragion, one side (234)
+ * @param {THREE.Vector3} earB tragion, other side (454)
+ * @param {THREE.Vector3} eyeA outer canthus (33)
+ * @param {THREE.Vector3} eyeB outer canthus (263)
+ * @param {THREE.Vector3} nose nose tip (1), for orientation only
+ * @param {{origin: THREE.Vector3, forward: THREE.Vector3}} [out] reusable output
+ * @returns {{origin: THREE.Vector3, forward: THREE.Vector3, span: number} | null}
+ */
+export function headFrame(earA, earB, eyeA, eyeB, nose, out = {}) {
+  const span = earA.distanceTo(earB)
+  if (!(span > 0)) return null
+
+  const origin = (out.origin ?? new THREE.Vector3()).addVectors(earA, earB).multiplyScalar(0.5)
+  const forward = out.forward ?? new THREE.Vector3()
+
+  const lateral = new THREE.Vector3().subVectors(earB, earA).normalize()
+  const sameSide = earA.distanceToSquared(eyeA) <= earA.distanceToSquared(eyeB)
+  forward
+    .subVectors(sameSide ? eyeA : eyeB, earA)
+    .add(new THREE.Vector3().subVectors(sameSide ? eyeB : eyeA, earB))
+    .multiplyScalar(0.5)
+  // Strip the sideways part, so the axis lies square across the head.
+  forward.addScaledVector(lateral, -forward.dot(lateral))
+  if (!(forward.lengthSq() > 0)) return null
+  forward.normalize()
+
+  if (forward.dot(new THREE.Vector3().subVectors(nose, origin)) < 0) forward.negate()
+
+  return { origin, forward, span }
 }
 
 export class OcclusionProbe {
@@ -161,35 +220,24 @@ export class OcclusionProbe {
   /**
    * The head's own fore-aft frame, with the EAR PLANE as its origin.
    *
-   * Origin at the midpoint of the two tragion landmarks and the axis pointing at
-   * the nose, so a point's coordinate IS its distance in front of the ear -- no
-   * separate ear reference to subtract, and nothing that moves when the arm is
-   * pushed sideways.
-   *
    * @returns {{origin: THREE.Vector3, forward: THREE.Vector3, span: number} | null}
    */
   _headFrame() {
     const occ = this.faceOccluder?.occluderMesh
     const attribute = occ?.geometry?.attributes?.position
-    if (!attribute || attribute.count <= NOSE_LANDMARK) return null
+    if (!attribute || attribute.count <= Math.max(...EAR_LANDMARKS)) return null
 
-    const a = (this._frameA ??= new THREE.Vector3())
-    const b = (this._frameB ??= new THREE.Vector3())
-    const origin = (this._frameOrigin ??= new THREE.Vector3())
-    const forward = (this._frameForward ??= new THREE.Vector3())
+    const read = (index, into) =>
+      into.fromBufferAttribute(attribute, index).applyMatrix4(occ.matrixWorld)
 
-    a.fromBufferAttribute(attribute, EAR_LANDMARKS[0]).applyMatrix4(occ.matrixWorld)
-    b.fromBufferAttribute(attribute, EAR_LANDMARKS[1]).applyMatrix4(occ.matrixWorld)
-    const span = a.distanceTo(b)
-    if (!(span > 0)) return null
-    origin.addVectors(a, b).multiplyScalar(0.5)
-
-    a.fromBufferAttribute(attribute, NOSE_LANDMARK).applyMatrix4(occ.matrixWorld)
-    forward.subVectors(a, origin)
-    if (!(forward.lengthSq() > 0)) return null
-    forward.normalize()
-
-    return { origin, forward, span }
+    return headFrame(
+      read(EAR_LANDMARKS[0], (this._frameA ??= new THREE.Vector3())),
+      read(EAR_LANDMARKS[1], (this._frameB ??= new THREE.Vector3())),
+      read(EYE_LANDMARKS[0], (this._frameC ??= new THREE.Vector3())),
+      read(EYE_LANDMARKS[1], (this._frameD ??= new THREE.Vector3())),
+      read(NOSE_LANDMARK, (this._frameE ??= new THREE.Vector3())),
+      { origin: (this._frameOrigin ??= new THREE.Vector3()), forward: (this._frameForward ??= new THREE.Vector3()) },
+    )
   }
 
   /**
