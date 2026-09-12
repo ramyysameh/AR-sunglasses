@@ -10,20 +10,28 @@ const DEFAULT_LANDMARK_DEPTH_SCALE = 0.08
 /**
  * How much of the face's real depth relief the occluder mesh keeps.
  *
- * This was 0.45 -- the face flattened to under half its true depth -- and that
- * is why the FAR temple stayed visible through every head turn. Measured at 38
- * degrees of yaw: 100% of the far temple's pixels landed inside the occluder's
- * silhouette, yet only 1% were hidden, because flattening pulls the protruding
- * near-side features back toward the mean plane until they no longer sit in
- * front of an arm passing behind them. The occluder covered the right pixels
- * and lost the depth test.
+ * Calibrated against a property that cannot be argued with: distances between
+ * RIGID landmark pairs must not change when the head rotates. They did. Sweeping
+ * this constant and measuring the worst inflation across +/-33 degrees of yaw:
  *
- * Glasses are NOT flattened, so anything below 1 shrinks the face's relief
- * relative to the frame it has to mask. Now a MULTIPLIER on the metric
- * conversion in landmarkDepthToMetres, so 1.0 means "the face's true depth"
- * rather than an arbitrary fraction. ?occdepth=<n> overrides for tuning.
+ *   scale      1.0    0.8    0.6    0.5    0.3
+ *   worst     16.4%   7.1%   5.7%   ~9%   ~11%
+ *   canthi    +16%   +7.1%  +1.3%  -4.8%  -10.9%
+ *
+ * The sign of the error flips between 0.5 and 0.7, so 0.6 is a real minimum
+ * rather than a preference. Too much relief and the excess -- which points along
+ * the view axis head-on, where it hides -- rotates into the lateral direction as
+ * the head turns and inflates the head sideways.
+ *
+ * This was 0.45, then 1.0. The move to 1.0 was made to stop the FAR temple
+ * showing through a turn, and was judged on rearTrimPx, which rewards an
+ * occluder for removing as much of the arm as possible and is now known to
+ * score that failure mode as a perfect result. Re-checked here on the honest
+ * metric: at 0.6 the fraction of temple pixels hidden is 39.3% against 40.8% at
+ * 1.0, i.e. unchanged, and every judged angle still passes. ?occdepth=<n>
+ * overrides for tuning.
  */
-const DEFAULT_OCCLUDER_DEPTH_SCALE = 1.0
+const DEFAULT_OCCLUDER_DEPTH_SCALE = 0.6
 
 let _occluderDepthScale = null
 
