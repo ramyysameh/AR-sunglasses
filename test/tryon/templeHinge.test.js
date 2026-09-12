@@ -1,16 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import {
-  MAX_SPLAY_RAD,
-  SKIN_CLEARANCE_M,
+  TEMPLE_OPEN_RAD,
   applySplay,
-  buildHeadProfile,
   buildHinges,
-  earLineDepth,
-  headWidthAt,
   isTempleMesh,
   selectArms,
-  solveSplay,
 } from '../../src/models/templeHinge.js'
 
 const X = { x: 1, y: 0, z: 0 }
@@ -21,77 +16,22 @@ function attr(points) {
   return { count: points.length, getX: (i) => points[i][0], getY: (i) => points[i][1], getZ: (i) => points[i][2] }
 }
 
-describe('buildHeadProfile / headWidthAt', () => {
-  it('records the widest point per depth bin', () => {
-    const p = buildHeadProfile(attr([[0.05, 0, 0], [0.09, 0, 0], [-0.07, 0, 0], [0.03, 0, 0.02]]), ORIGIN, X, Z)
-    expect(p.get(0)).toBeCloseTo(0.09)
-    expect(p.get(2)).toBeCloseTo(0.03)
+describe('TEMPLE_OPEN_RAD', () => {
+  it('sits inside the window all three models passed', () => {
+    // Swept per model against the head-frame end metric; the passing ranges were
+    // GRIPZ 3-8, WILLOW 3-8, LARSSON 0-5, intersecting at 3-5 degrees. The
+    // bounds are what the constant means, so they are asserted rather than left
+    // to the comment.
+    const degrees = (TEMPLE_OPEN_RAD * 180) / Math.PI
+    expect(degrees).toBeGreaterThanOrEqual(3)
+    expect(degrees).toBeLessThanOrEqual(5)
   })
 
-  it('returns 0 where the head was never measured, so no data means no constraint', () => {
-    expect(headWidthAt(new Map([[0, 0.09]]), 1.0)).toBe(0)
-  })
-})
-
-describe('earLineDepth', () => {
-  it('finds the depth where the head is widest', () => {
-    const p = new Map([[0, 0.05], [-4, 0.08], [-7, 0.096], [-12, 0.04]])
-    expect(earLineDepth(p)).toBeCloseTo(-0.07, 6)
-  })
-
-  it('returns null for an empty profile', () => {
-    expect(earLineDepth(new Map())).toBeNull()
-  })
-})
-
-describe('solveSplay', () => {
-  // Head 90 mm half-width at the ear line (-70 mm), narrowing front and back.
-  const profile = new Map()
-  for (let b = 0; b >= -7; b -= 1) profile.set(b, 0.05 + (0.09 - 0.05) * (-b / 7))
-  for (let b = -8; b >= -16; b -= 1) profile.set(b, 0.09 - (0.09 - 0.03) * ((-b - 7) / 9))
-
-  const hinge = { lateral: 0.083, depth: -0.01 }
-  const armAt = (depths, lateral = 0.083) => depths.map((d) => ({ lateral, depth: d }))
-
-  it('leaves an arm that already clears the head alone', () => {
-    const wide = armAt([-0.02, -0.04, -0.06], 0.12)
-    expect(solveSplay(wide, { lateral: 0.12, depth: -0.01 }, profile)).toBe(0)
-  })
-
-  it('opens a buried arm far enough to clear the head plus the skin gap', () => {
-    const samples = armAt([-0.02, -0.04, -0.06, -0.07])
-    const angle = solveSplay(samples, hinge, profile)
-    expect(angle).toBeGreaterThan(0)
-    expect(angle).toBeLessThanOrEqual(MAX_SPLAY_RAD)
-
-    // every enforced sample must actually be clear at that angle
-    const c = Math.cos(angle), s = Math.sin(angle)
-    for (const sample of samples) {
-      const dx = sample.lateral - hinge.lateral
-      const dz = sample.depth - hinge.depth
-      const lateral = hinge.lateral + dx * c + Math.abs(dz) * s
-      const depth = hinge.depth + dx * s + dz * c
-      expect(lateral).toBeGreaterThanOrEqual(headWidthAt(profile, depth) + SKIN_CLEARANCE_M - 1e-9)
-    }
-  })
-
-  it('ignores the hook behind the ear line, which belongs inside the head', () => {
-    // A tip tucked well in at -0.13 would demand a huge angle if enforced.
-    const withHook = [...armAt([-0.02, -0.04]), { lateral: 0.03, depth: -0.13 }]
-    const withoutHook = armAt([-0.02, -0.04])
-    expect(solveSplay(withHook, hinge, profile)).toBeCloseTo(solveSplay(withoutHook, hinge, profile), 6)
-  })
-
-  it('caps rather than opening the arm arbitrarily far', () => {
-    // A head far wider than any angle can clear: the cap is a guard against a
-    // bad measurement, not a target to chase.
-    const huge = new Map()
-    for (let b = 0; b >= -16; b -= 1) huge.set(b, 0.5)
-    expect(solveSplay(armAt([-0.02, -0.05]), hinge, huge)).toBe(MAX_SPLAY_RAD)
-  })
-
-  it('does nothing when the head was never measured', () => {
-    expect(solveSplay(armAt([-0.02]), hinge, new Map())).toBe(0)
+  it('is nowhere near the angle the lateral solve used to ask for', () => {
+    // The solve this replaced saturated at 0.25 rad (14.32 deg) on every model,
+    // which scored 0/8 on all three once the metric stopped paying for
+    // stand-off. Guarding the order of magnitude, not the exact value.
+    expect(TEMPLE_OPEN_RAD).toBeLessThan(0.25 / 2)
   })
 })
 

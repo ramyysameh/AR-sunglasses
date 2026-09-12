@@ -27,6 +27,9 @@ import * as THREE from 'three'
 /** Face-oval extremes, which sit at the tragion -- the ear reference. */
 const EAR_LANDMARKS = [234, 454]
 
+/** Nose tip, used only to orient the head's fore-aft axis. */
+const NOSE_LANDMARK = 1
+
 const TEMPLE_NAME = /temple/i
 // Flat decals carry "temple" in their names but are not the arm, and they sit on
 // its surface, so including them would report the arm as visible wherever a logo
@@ -156,6 +159,135 @@ export class OcclusionProbe {
   }
 
   /**
+   * The head's own fore-aft frame, with the EAR PLANE as its origin.
+   *
+   * Origin at the midpoint of the two tragion landmarks and the axis pointing at
+   * the nose, so a point's coordinate IS its distance in front of the ear -- no
+   * separate ear reference to subtract, and nothing that moves when the arm is
+   * pushed sideways.
+   *
+   * @returns {{origin: THREE.Vector3, forward: THREE.Vector3, span: number} | null}
+   */
+  _headFrame() {
+    const occ = this.faceOccluder?.occluderMesh
+    const attribute = occ?.geometry?.attributes?.position
+    if (!attribute || attribute.count <= NOSE_LANDMARK) return null
+
+    const a = (this._frameA ??= new THREE.Vector3())
+    const b = (this._frameB ??= new THREE.Vector3())
+    const origin = (this._frameOrigin ??= new THREE.Vector3())
+    const forward = (this._frameForward ??= new THREE.Vector3())
+
+    a.fromBufferAttribute(attribute, EAR_LANDMARKS[0]).applyMatrix4(occ.matrixWorld)
+    b.fromBufferAttribute(attribute, EAR_LANDMARKS[1]).applyMatrix4(occ.matrixWorld)
+    const span = a.distanceTo(b)
+    if (!(span > 0)) return null
+    origin.addVectors(a, b).multiplyScalar(0.5)
+
+    a.fromBufferAttribute(attribute, NOSE_LANDMARK).applyMatrix4(occ.matrixWorld)
+    forward.subVectors(a, origin)
+    if (!(forward.lengthSq() > 0)) return null
+    forward.normalize()
+
+    return { origin, forward, span }
+  }
+
+  /**
+   * Half-range of the depth encoding, world units either side of the ear plane.
+   * Anything outside is clamped, which only matters for points far behind the
+   * skull -- already a failure by any threshold here.
+   */
+  static DEPTH_RANGE = 0.25
+
+  /**
+   * Material that paints each arm fragment with its distance in front of the
+   * ear plane, packed across two channels.
+   *
+   * Reading the answer out of the RENDER rather than out of the geometry is the
+   * whole point. The obvious version of this -- project each arm vertex and ask
+   * whether the pixel it lands on is lit -- looks equivalent and is not: at a
+   * turned pose the arm overlaps itself on screen, so an occluded tip projects
+   * onto pixels lit by the visible middle and reports itself as drawn. That
+   * version put the arm's end 113 mm BEHIND the ear and claimed the occluder had
+   * removed nothing, on a frame where it had plainly removed the tip. Letting
+   * the rasterizer decide visibility is the only way to be sure.
+   */
+  _depthMaterial() {
+    if (this._depthMat) return this._depthMat
+    this._depthMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uOrigin: { value: new THREE.Vector3() },
+        uForward: { value: new THREE.Vector3() },
+        uScale: { value: 1 / (2 * OcclusionProbe.DEPTH_RANGE) },
+      },
+      vertexShader: `
+        uniform vec3 uOrigin;
+        uniform vec3 uForward;
+        uniform float uScale;
+        varying float vDepth;
+        void main() {
+          vec4 world = modelMatrix * vec4(position, 1.0);
+          vDepth = dot(world.xyz - uOrigin, uForward) * uScale + 0.5;
+          gl_Position = projectionMatrix * viewMatrix * world;
+        }
+      `,
+      fragmentShader: `
+        varying float vDepth;
+        void main() {
+          float d = clamp(vDepth, 0.0, 1.0);
+          float hi = floor(d * 255.0) / 255.0;
+          float lo = fract(d * 255.0);
+          gl_FragColor = vec4(hi, lo, 0.0, 1.0);
+        }
+      `,
+      side: THREE.DoubleSide,
+    })
+    return this._depthMat
+  }
+
+  /**
+   * How far in front of the ear plane the arm's REARMOST DRAWN point sits.
+   *
+   * The predecessor to this measured screen X against the projected tragion, and
+   * it was biased in the one direction that mattered: at a turned pose an arm
+   * held away from the head projects further back than one lying against it, so
+   * the metric paid for stand-off. It scored the configuration that visibly
+   * floated 20 px off the skull as "reaching the ear" and the one that hugged it
+   * as "stopping short" -- the same way rearTrimPx once scored an occluder for
+   * eating the arm. Measured along the head's own fore-aft axis instead, moving
+   * the arm sideways cannot change the number at all.
+   *
+   * @returns {number | null} world units; positive is in FRONT of the ear plane
+   */
+  _rearmostDrawn(arms, w, h, frame) {
+    const material = this._depthMaterial()
+    material.uniforms.uOrigin.value.copy(frame.origin)
+    material.uniforms.uForward.value.copy(frame.forward)
+
+    const saved = arms.map((m) => m.material)
+    arms.forEach((m) => { m.material = material })
+
+    const prev = this.renderer.getRenderTarget()
+    this.renderer.setRenderTarget(this.target)
+    this.renderer.render(this.scene, this.camera)
+    this.renderer.readRenderTargetPixels(this.target, 0, 0, w, h, this.buffer)
+    this.renderer.setRenderTarget(prev)
+
+    arms.forEach((m, i) => { m.material = saved[i] })
+
+    const d = this.buffer
+    const scale = material.uniforms.uScale.value
+    let depth = null
+    for (let i = 0; i < w * h; i += 1) {
+      if (d[i * 4 + 3] === 0) continue
+      const encoded = d[i * 4] / 255 + d[i * 4 + 1] / 65025
+      const value = (encoded - 0.5) / scale
+      if (depth === null || value < depth) depth = value
+    }
+    return depth
+  }
+
+  /**
    * Screen X of the ear, in the capture's pixel space.
    *
    * This is the reference the arm's visible end is judged against. Landmarks 234
@@ -241,6 +373,21 @@ export class OcclusionProbe {
     const off = this._capture(w, h)
     this.faceOccluder.show()
 
+    // Where the arm ENDS, along the head's fore-aft axis, drawn and undrawn.
+    // Two numbers because they fail for different reasons and want different
+    // fixes: with the occluder off at 38 degrees the closed gripz arm already
+    // stops 42 px short of the ear, so a third of that shortfall is the frame's
+    // own reach and no amount of occluder work can recover it.
+    const frame = this._headFrame()
+    const arms = meshes.filter((m) => isTemple(m) && filter(m))
+    const drawnEnd = frame ? this._rearmostDrawn(arms, w, h, frame) : null
+    let geometryEnd = null
+    if (frame) {
+      this.faceOccluder.hide()
+      geometryEnd = this._rearmostDrawn(arms, w, h, frame)
+      this.faceOccluder.show()
+    }
+
     meshes.forEach((m, i) => {
       m.visible = saved[i]
     })
@@ -270,6 +417,8 @@ export class OcclusionProbe {
         ? armEndX - earX
         : earX - armEndX
 
+    const round = (value) => (value == null ? null : Math.round(value * 1000) / 1000)
+
     return {
       yaw: Math.round(headYaw * 10) / 10,
       templePixelsOn: on.count,
@@ -277,8 +426,23 @@ export class OcclusionProbe {
       armHolePx: OcclusionProbe._largestHole(on, off),
       hiddenPct: off.count ? Math.round((100 * (off.count - on.count)) / off.count) : 0,
       rearTrimPx,
-      // > 0: the arm stops SHORT of the ear (occluder eating it).
-      // < 0: the arm carries on PAST the ear (tip not hidden).
+      // THE number the verdict is keyed on, as a fraction of the tragion-to-
+      // tragion span so it is comparable across head sizes and does not depend
+      // on world units being metres (they are not -- about 1.16x here, which is
+      // how an earlier round "proved" the head 30% oversized).
+      //   > 0  the arm stops SHORT of the ear plane
+      //   < 0  it carries on PAST it, which is the hook
+      earGapRatio: frame && drawnEnd != null ? round(drawnEnd / frame.span) : null,
+      // The same thing before normalising, plus how much of the shortfall is the
+      // FRAME rather than the occluder. reachRatio is a property of the model on
+      // this head: no occluder change can move it.
+      earGapWorld: round(drawnEnd),
+      reachRatio: frame && geometryEnd != null ? round(geometryEnd / frame.span) : null,
+      occluderAteWorld: drawnEnd != null && geometryEnd != null ? round(drawnEnd - geometryEnd) : null,
+      // Kept, and deliberately NOT gated on: this is the screen-space figure the
+      // verdict used to key on, retained so a run can show the bias rather than
+      // just assert it -- it disagrees with earGapRatio exactly when the arm is
+      // held away from the head.
       earGapPx: earGapPx == null ? null : Math.round(earGapPx),
       earScreenX: earX == null ? null : Math.round(earX),
       // Raw extents, so the verdict above can be audited rather than trusted.
@@ -305,10 +469,18 @@ export class OcclusionProbe {
  * defect, and repeatedly overruled the picture.
  *
  * Two independent ways for an arm to look wrong, so both are gated: it can stop
- * in the wrong PLACE (earGapPx), and it can come apart in the MIDDLE
+ * in the wrong PLACE (earGapRatio), and it can come apart in the MIDDLE
  * (armHolePx). Checking only the end passes a fragmented arm, which is how "the
  * middle dissolves into the face" survived a metric rewrite that was itself
  * fixing a blind spot.
+ *
+ * earGapRatio replaced a screen-space version of the same idea for the same
+ * reason rearTrimPx was replaced before it: it could be satisfied without
+ * fixing anything. An arm held away from the head projects further back at a
+ * turned pose, so the screen measure paid for stand-off -- it scored the
+ * configuration that floated 20 px off the skull as reaching the ear, and the
+ * one lying against it as stopping short. Both are still reported, and they
+ * disagree exactly when the arm is standing off.
  *
  * Head-on, the arm is foreshortened and its rear extent is set by the hinge
  * rather than the tip, so only turned poses are judged.
@@ -317,25 +489,23 @@ export const MIN_REAR_TRIM_PX = 6
 export const JUDGED_ABOVE_YAW = 25
 
 /**
- * How far the arm's visible end may sit from the ear, in pixels.
+ * How far in FRONT of the ear plane the arm's drawn end may sit, as a fraction
+ * of the tragion-to-tragion span.
  *
- * Asymmetric on purpose. Stopping SHORT of the ear is the visible defect -- the
- * arm dies in mid-air over the cheek -- so it is held tight. Running a little
- * PAST the ear is what a real temple does before it hooks down behind the lobe,
- * so there is more room that way.
+ * Asymmetric on purpose. Stopping short of the ear is the visible defect -- the
+ * arm dies in mid-air over the cheek -- so it is held tight. Running PAST the
+ * ear is what a real temple does before it hooks down behind the lobe, so there
+ * is more room that way.
+ *
+ * Set from anatomy rather than from a sweep, deliberately: the previous bounds
+ * were fitted to whatever the then-current configuration produced, which is how
+ * a biased metric gets its thresholds blessed. A tragion span is ~145 mm on an
+ * adult, so 0.05 is ~7 mm of shortfall -- about the most that still reads as
+ * "ends at the ear" -- and 0.25 is ~36 mm behind the tragion, past the back of
+ * the ear and well before the occiput.
  */
-export const EAR_GAP_MAX_SHORT_PX = 10
-/**
- * 45 px was a guess made before the geometry was understood, and it was too
- * tight. Landmark 234 is the TRAGION -- the notch at the FRONT of the ear -- so
- * an arm that ends 40-50 px past it is ending within the ear, which is where a
- * temple is supposed to end. Measured across the three merchant models once the
- * mid-arm holes were gone, the correct endings land at -34 to -51 px, and the
- * old bound cut through the middle of that range. The failure this is meant to
- * catch -- the tip never hiding at all -- runs far past the back of the head and
- * is nowhere near this value.
- */
-export const EAR_GAP_MAX_PAST_PX = 60
+export const EAR_GAP_MAX_SHORT_RATIO = 0.05
+export const EAR_GAP_MAX_PAST_RATIO = 0.25
 
 /**
  * Widest hole allowed in the middle of a drawn arm, in pixels.
@@ -352,11 +522,11 @@ export function evaluate(rows) {
   // separately keeps a sweep that mostly failed to measure from looking like a
   // sweep that mostly passed.
   const skipped = rows.filter((r) => r.skipped)
-  const measured = rows.filter((r) => !r.skipped && Number.isFinite(r.earGapPx))
+  const measured = rows.filter((r) => !r.skipped && Number.isFinite(r.earGapRatio))
   const judged = measured.filter((r) => Math.abs(r.yaw) >= JUDGED_ABOVE_YAW)
   const failures = judged.filter(
-    (r) => r.earGapPx > EAR_GAP_MAX_SHORT_PX ||
-      r.earGapPx < -EAR_GAP_MAX_PAST_PX ||
+    (r) => r.earGapRatio > EAR_GAP_MAX_SHORT_RATIO ||
+      r.earGapRatio < -EAR_GAP_MAX_PAST_RATIO ||
       (Number.isFinite(r.armHolePx) && r.armHolePx > MAX_ARM_HOLE_PX)
   )
   return {
@@ -366,7 +536,10 @@ export function evaluate(rows) {
     skipped: skipped.length,
     pass: judged.length > 0 && failures.length === 0,
     failingYaws: failures.map((r) => r.yaw),
-    earGaps: judged.map((r) => r.earGapPx),
+    earGaps: judged.map((r) => r.earGapRatio),
+    // The reach the FRAME has on this head, occluder aside. A sweep that fails
+    // with reachRatio already past the short bound is not an occlusion bug.
+    reaches: judged.map((r) => r.reachRatio ?? null),
     armHoles: judged.map((r) => r.armHolePx ?? null),
   }
 }

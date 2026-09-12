@@ -2,7 +2,7 @@
  * Main AR render loop that fuses face tracking, pose filtering, occlusion, and Three.js rendering.
  */
 import * as THREE from 'three'
-import { HINGE_SPREAD_RATIO, applyOffset, applySplay, buildHeadProfile, buildHinges, solveSplay } from '../models/templeHinge.js'
+import { TEMPLE_OPEN_RAD, applyOffset, applySplay, buildHinges } from '../models/templeHinge.js'
 import { scaleMultiplier, xOffset, yOffset, zOffset, rotOffsetX, rotOffsetY, rotOffsetZ, trackingSmoothness } from '../config/poseConfig.js'
 import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
@@ -30,21 +30,6 @@ const LOW_QUALITY_THRESHOLD = 0.42
 // How many frontal samples the running size estimate averages over. Capped so it
 // remains a long moving average and can still follow a genuine change of face.
 const FRONTAL_SCALE_SAMPLES = 120
-// Beyond this yaw the face mesh is too foreshortened to measure head width from.
-const SPLAY_MEASURE_YAW_DEG = 12
-// Sanity bounds on the measured head half-width, guarding against acting on an
-// occluder that has not been populated yet.
-const MIN_PLAUSIBLE_HEAD_HALF_M = 0.05
-const MAX_PLAUSIBLE_HEAD_HALF_M = 0.13
-// Vertex stride when sampling an arm. The solve needs the arm's silhouette, not
-// every vertex of it; one in twelve keeps a 27k-vertex arm cheap to measure.
-const ARM_SAMPLE_STRIDE = 12
-// MediaPipe's face mesh; the occluder's shell vertices follow these.
-const FACE_LANDMARK_COUNT = 468
-// Frontal samples the head-width estimate averages over before the arms are
-// opened, and how far that average must move to justify opening them again.
-const HEAD_WIDTH_SAMPLES = 90
-const HEAD_WIDTH_RESOLVE_M = 0.004
 
 export class RenderLoop {
   constructor(options = {}) {
@@ -205,7 +190,6 @@ export class RenderLoop {
     // Each arm gets a pivot at its own hinge so it can be opened rigidly. Built
     // per model: a new model needs new pivots, and the old ones went with it.
     this._hinges = glassesRoot ? buildHinges(glassesRoot) : null
-    this._splayForWidth = null
 
     if (this.glassesRoot && this.scene) {
       this.scene.add(this.glassesRoot)
@@ -826,131 +810,39 @@ export class RenderLoop {
       this.faceOccluder?.update(transform.occluderMatrix)
     }
 
-    this._openTemples(transform)
+    this._openTemples()
   }
 
   /**
-   * Opens the temple arms on their hinges until they clear the head.
+   * Opens both temples by a fixed angle once the occluder is live.
    *
-   * Measured NEAR-FRONTAL only and then held. Off-frontal the face mesh is
-   * foreshortened and half self-occluded, so its apparent width shrinks with
-   * yaw; re-measuring through a turn would make the frame open and close as the
-   * head moved. A head's width does not change, so measuring it once is right.
+   * Everything this used to do -- measure the head's half-width, average it over
+   * 90 frames, sample every arm vertex into the head's frame, build a depth
+   * profile of the occluder and search for the smallest angle that clears it --
+   * is gone, because the angle it produced was wrong by 3-5x on every model and
+   * sat pinned at its own cap. The requirement it modelled, lateral clearance,
+   * is not the one that governs; see TEMPLE_OPEN_RAD.
    *
-   * Both arms take the SAME angle -- the larger of the two solves. Letting each
-   * side pick its own would make an asymmetric measurement into a visibly
-   * crooked pair of glasses.
+   * Nothing is measured any more, so nothing can jitter, and the head-width
+   * averaging that existed to stop the solve breathing through a turn goes with
+   * it. The visibility gate stays, so the arms are not opened mid-scan while the
+   * shell is still collapsed onto a point.
    */
-  _openTemples(transform) {
+  _openTemples() {
     if (!this._hinges?.length || !this.faceOccluder?.occluderMesh) {
       return
     }
-    // Only once the occluder is actually driving a face; during the scan it is
-    // hidden and its shell vertices are collapsed onto a single point.
     if (!this.faceOccluder.occluderMesh.visible) {
       return
     }
-    if (Math.abs(THREE.MathUtils.radToDeg(this.headYaw ?? 0)) > SPLAY_MEASURE_YAW_DEG) {
+    if (this._splayAngle === TEMPLE_OPEN_RAD) {
       return
     }
 
-    const anchors = transform.anchorWorldPoints
-    const left = anchors?.leftTemple
-    const right = anchors?.rightTemple
-    if (!left || !right) {
-      return
-    }
-
-    const axX = (this._splayAxX ??= new THREE.Vector3()).set(1, 0, 0).applyQuaternion(transform.quaternion)
-    const axZ = (this._splayAxZ ??= new THREE.Vector3()).set(0, 0, 1).applyQuaternion(transform.quaternion)
-    const mid = (this._splayMid ??= new THREE.Vector3()).set(
-      (left.x + right.x) / 2,
-      (left.y + right.y) / 2,
-      (left.z + right.z) / 2
-    )
-
-    const position = this.faceOccluder.occluderMesh.geometry.attributes.position
-    let headHalfWidth = 0
-    for (let i = 0; i < position.count; i += 1) {
-      const d = Math.abs(
-        (position.getX(i) - mid.x) * axX.x +
-        (position.getY(i) - mid.y) * axX.y +
-        (position.getZ(i) - mid.z) * axX.z
-      )
-      if (d > headHalfWidth) headHalfWidth = d
-    }
-    // A plausible human half-head is ~0.05-0.13 m in this space. Outside that
-    // the occluder was not ready, and acting on it opens the arms to fit a head
-    // that does not exist.
-    if (!(headHalfWidth > MIN_PLAUSIBLE_HEAD_HALF_M && headHalfWidth < MAX_PLAUSIBLE_HEAD_HALF_M)) {
-      return
-    }
-    // Average the head width before acting on it. A head's width does not change,
-    // but the MEASURED width does: inside this same +/-12 deg gate it swings
-    // 110.6 to 128.9 mm on the mock purely from foreshortening. Re-solving on
-    // each reading would open and close the arms through every turn -- currently
-    // invisible only because the solve saturates at the cap, and a real jitter
-    // the moment it stops saturating.
-    this._headWidthCount = Math.min((this._headWidthCount ?? 0) + 1, HEAD_WIDTH_SAMPLES)
-    this._headWidthMean = this._headWidthMean == null
-      ? headHalfWidth
-      : this._headWidthMean + (headHalfWidth - this._headWidthMean) / this._headWidthCount
-    if (this._splayForWidth != null && Math.abs(this._headWidthMean - this._splayForWidth) < HEAD_WIDTH_RESOLVE_M) {
-      return
-    }
-
-    // Measure from CLOSED. Sampling while the arms are already open would read
-    // back the previous solve and compound it a little more every time the
-    // measured head twitched.
-    applySplay(this._hinges, 0)
     applyOffset(this._hinges, 0)
-    this.glassesRoot.updateWorldMatrix(true, true)
-
-    const tmp = (this._splayTmp ??= new THREE.Vector3())
-    let angle = 0
-    for (const hinge of this._hinges) {
-      tmp.copy(hinge.group.position)
-      this.glassesRoot.localToWorld(tmp)
-      const hingeFrame = {
-        lateral: Math.abs((tmp.x - mid.x) * axX.x + (tmp.y - mid.y) * axX.y + (tmp.z - mid.z) * axX.z),
-        depth: (tmp.x - mid.x) * axZ.x + (tmp.y - mid.y) * axZ.y + (tmp.z - mid.z) * axZ.z,
-      }
-
-      const samples = []
-      for (const mesh of hinge.meshes) {
-        const attribute = mesh.geometry?.attributes?.position
-        if (!attribute) continue
-        for (let i = 0; i < attribute.count; i += ARM_SAMPLE_STRIDE) {
-          tmp.fromBufferAttribute(attribute, i).applyMatrix4(mesh.matrixWorld)
-          const dx = tmp.x - mid.x
-          const dy = tmp.y - mid.y
-          const dz = tmp.z - mid.z
-          samples.push({
-            lateral: Math.abs(dx * axX.x + dy * axX.y + dz * axX.z),
-            depth: dx * axZ.x + dy * axZ.y + dz * axZ.z,
-          })
-        }
-      }
-      if (samples.length) {
-        const solved = solveSplay(samples, hingeFrame, buildHeadProfile(position, mid, axX, axZ))
-        if (solved > angle) angle = solved
-      }
-    }
-
-    applySplay(this._hinges, angle)
-    this.glassesRoot.updateWorldMatrix(true, true)
-
-    // Then the uniform part. Rotation moves the tip far more than the middle, so
-    // it cannot free the mid-run without throwing the tip past the ear; the rest
-    // is taken out with a shift, which moves the whole arm together. Scaled to
-    // the head so it does not assume this one -- see HINGE_SPREAD_RATIO for why
-    // this is measured against the render rather than solved.
-    const offset = headHalfWidth * HINGE_SPREAD_RATIO
-    applyOffset(this._hinges, offset / (this.glassesRoot.scale?.x || 1))
-
-    this._splayForWidth = this._headWidthMean
-    this._splayAngle = angle
-    this._splayOffset = offset
+    applySplay(this._hinges, TEMPLE_OPEN_RAD)
+    this.glassesRoot?.updateWorldMatrix(true, true)
+    this._splayAngle = TEMPLE_OPEN_RAD
   }
 
   _isPositionInCameraView(position) {

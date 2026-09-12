@@ -49,24 +49,6 @@ const FRONT_SLAB_RATIO = 0.25
  */
 export const ARM_LATERAL_MIN_RATIO = 0.3
 
-/** Depth bin size for the head profile, metres. */
-export const PROFILE_BIN_M = 0.01
-
-/** Gap left between arm and skin, metres. Landmark noise is a few mm. */
-export const SKIN_CLEARANCE_M = 0.004
-
-/**
- * Most a temple may be opened, radians (~14 deg).
- *
- * A real temple has some flex and then it is a lever on the wearer's head. An
- * angle beyond this means the measurement is wrong, not that the frame needs it,
- * so the cap is a guard rather than a preference.
- */
-export const MAX_SPLAY_RAD = 0.25
-
-/** Resolution of the angle search, radians (~0.29 deg). */
-const SPLAY_STEP_RAD = 0.005
-
 export function isTempleMesh(mesh) {
   return Boolean(mesh?.isMesh) && TEMPLE_NAME.test(`${mesh.name ?? ''} ${mesh.parent?.name ?? ''}`)
 }
@@ -102,113 +84,36 @@ export function selectArms(candidates, bounds) {
 }
 
 /**
- * Head half-width by depth, in the head's own frame.
+ * How far each temple is opened, radians.
  *
- * @returns {Map<number, number>} depth bin -> max |lateral|
+ * A measured constant, and deliberately not a solve. What it has to beat is not
+ * lateral penetration -- it is the GRAZING band where the arm runs nearly
+ * tangent to the occluder near the face's silhouette, where a millimetre of
+ * depth hides thirty pixels of arm. The geometric solve this replaced modelled
+ * the problem as lateral clearance against the head's width profile, asked for
+ * 14-25 degrees, and saturated its own cap on all three models. That is 3-5x
+ * the truth, and past about 8 degrees the arm stops being helped and starts
+ * coming apart -- the tip swings clear of the shell and is never hidden again.
+ *
+ * Swept on all three merchant models against the head-frame end metric (no
+ * outward shift anywhere in the sweep, 25-frame turn to +/-53 degrees):
+ *
+ *   angle      0      3      5      8     11    14.32
+ *   GRIPZ    7/8    8/8    8/8    8/8    7/8*   0/8
+ *   WILLOW   6/8    8/8    8/8    8/8    3/8*   0/8
+ *   LARSSON  7/7    8/8    8/8    7/8*   2/8*   0/8
+ *   (* failures at 8+ are 54-71 px holes: the arm coming apart)
+ *
+ * The three windows intersect at 3-5, so this sits in the middle of it. Being
+ * an ANGLE is also why it needs no head-size term: the band it clears subtends
+ * roughly the same angle on any head, where the outward SHIFT it replaced had
+ * to be scaled by head width and still only suited the head it was tuned on.
+ *
+ * Note what the numbers say about the OLD value, 14.32 degrees: 0/8 on every
+ * model. It was not a near miss. It was chosen against a screen-space metric
+ * that paid for stand-off -- see occlusionProbe's earGapRatio.
  */
-export function buildHeadProfile(position, mid, axX, axZ, bin = PROFILE_BIN_M) {
-  const profile = new Map()
-  for (let i = 0; i < position.count; i += 1) {
-    const dx = position.getX(i) - mid.x
-    const dy = position.getY(i) - mid.y
-    const dz = position.getZ(i) - mid.z
-    const depth = dx * axZ.x + dy * axZ.y + dz * axZ.z
-    const lateral = Math.abs(dx * axX.x + dy * axX.y + dz * axX.z)
-    const key = Math.round(depth / bin)
-    const current = profile.get(key)
-    if (current === undefined || lateral > current) profile.set(key, lateral)
-  }
-  return profile
-}
-
-/**
- * Head half-width at a depth, interpolated between bins.
- *
- * Returns 0 outside the measured range: no data means no constraint, which is
- * the safe direction -- inventing a width there would splay an arm against a
- * head that was never measured.
- */
-export function headWidthAt(profile, depth, bin = PROFILE_BIN_M) {
-  const exact = depth / bin
-  const lo = Math.floor(exact)
-  const hi = lo + 1
-  const a = profile.get(lo)
-  const b = profile.get(hi)
-  if (a === undefined && b === undefined) return 0
-  if (a === undefined) return b
-  if (b === undefined) return a
-  return a + (b - a) * (exact - lo)
-}
-
-
-
-/**
- * Depth at which the head is widest -- the ear line.
- *
- * Clearance is enforced only in front of this. Behind it the arm is tucking in
- * behind the ear and is meant to be inside the silhouette.
- */
-export function earLineDepth(profile, bin = PROFILE_BIN_M) {
-  let bestKey = null
-  let best = -Infinity
-  for (const [key, width] of profile) {
-    // Ties resolve to the DEEPEST bin. A real head has one clear widest slice,
-    // but a flat or noisy profile otherwise resolves to whichever bin Map
-    // iteration happened to yield first -- and if that is the frontmost, the
-    // enforced span collapses to nothing and the arm is never opened at all.
-    if (width > best || (width === best && key < bestKey)) { best = width; bestKey = key }
-  }
-  return bestKey === null ? null : bestKey * bin
-}
-
-/**
- * Smallest outward hinge angle that lifts an arm clear of the head.
- *
- * Rotation is about the vertical axis through the hinge, so a sample at
- * (lateral, depth) moves to
- *   lateral' = hingeLateral + dx*cos(a) + |dz|*sin(a)
- *   depth'   = hingeDepth   + dx*sin(a) + dz*cos(a)
- * with dx, dz measured from the hinge and dz <= 0 behind it. Depth moves too,
- * which is why this searches rather than solving in closed form -- the head is
- * wider further back, so the target moves as the arm swings.
- *
- * @param {Array<{lateral:number, depth:number}>} samples arm points, head frame, lateral >= 0
- * @param {{lateral:number, depth:number}} hinge
- * @param {Map<number,number>} profile head half-width by depth bin
- * @returns {number} radians, 0 when the arm already clears
- */
-export function solveSplay(samples, hinge, profile, {
-  clearance = SKIN_CLEARANCE_M,
-  maxAngle = MAX_SPLAY_RAD,
-  step = SPLAY_STEP_RAD,
-} = {}) {
-  const ear = earLineDepth(profile)
-  if (ear === null) return 0
-
-  // Only the run between hinge and ear line is load-bearing.
-  const enforced = samples.filter((s) => s.depth <= hinge.depth && s.depth >= ear)
-  if (!enforced.length) return 0
-
-  const clears = (angle) => {
-    const c = Math.cos(angle)
-    const s = Math.sin(angle)
-    for (const sample of enforced) {
-      const dx = sample.lateral - hinge.lateral
-      const dz = sample.depth - hinge.depth
-      const lateral = hinge.lateral + dx * c + Math.abs(dz) * s
-      const depth = hinge.depth + dx * s + dz * c
-      const required = headWidthAt(profile, depth)
-      if (required > 0 && lateral < required + clearance) return false
-    }
-    return true
-  }
-
-  if (clears(0)) return 0
-  for (let angle = step; angle <= maxAngle; angle += step) {
-    if (clears(angle)) return angle
-  }
-  return maxAngle
-}
+export const TEMPLE_OPEN_RAD = 0.07
 
 /**
  * Reparents each arm under a pivot at its own hinge so it can be rotated rigidly.
@@ -303,32 +208,6 @@ export function buildHinges(glassesRoot) {
 }
 
 
-/**
- * Outward shift applied to each arm, as a fraction of the measured head
- * half-width.
- *
- * Rotation alone cannot fix a mid-arm hole: a hinge rotation moves the tip far
- * more than the middle, so opening far enough to free the mid-run throws the tip
- * past the ear. Measured on one model, at 32 degrees of splay the hole was still
- * 30-57 px and the tip overshot by more than twice the allowed margin, while a
- * uniform 7 mm shift closed it outright and left the tip where it belongs.
- *
- * This is a tuned constant, not a solve, and it is worth being plain about why.
- * Solving it geometrically -- shift until the arm clears the head surface --
- * asks for 16-18 mm, because it treats the defect as lateral penetration. It is
- * not: the arm runs nearly TANGENT to the face near its silhouette, so a
- * millimetre of penetration hides a 30-50 px band, and the criterion a solve can
- * express overshoots by more than twice. Measured against the render instead:
- *
- *   shift     3 px   5 px    7 px    9 px   11 px
- *   holes    17..23  0..11   0000    0000    0000
- *   earGap   -32..-42 -34..-43 -37..-44 -39..-47 -42..-49
- *   verdict   0/4     3/4     4/4     2/4     2/4
- *
- * A narrow window, and 7 mm on a ~119 mm head half-width is the middle of it.
- * Expressed as a ratio so it tracks head size rather than assuming this one.
- */
-export const HINGE_SPREAD_RATIO = 0.059
 
 /** Sets each arm's opening angle. Sign is per side so both swing outward. */
 export function applySplay(hinges, angle) {
