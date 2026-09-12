@@ -3,6 +3,7 @@ import {
   EAR_GAP_MAX_PAST_PX,
   EAR_GAP_MAX_SHORT_PX,
   JUDGED_ABOVE_YAW,
+  MAX_ARM_HOLE_PX,
   evaluate,
 } from '../../src/debug/occlusionProbe.js'
 
@@ -95,5 +96,31 @@ describe('skipped measurements', () => {
     const result = evaluate([{ yaw: 45, earGapPx: null, rearTrimPx: 90 }])
     expect(result.judged).toBe(0)
     expect(result.pass).toBe(false)
+  })
+})
+
+describe('arm continuity', () => {
+  const hole = (yaw, armHolePx) => ({ yaw, earGapPx: -20, hiddenPct: 40, armHolePx })
+
+  it('fails an arm with a bite taken out of its middle', () => {
+    // The end can land perfectly while the arm is in two pieces. Judging only
+    // the end passes this, which is exactly how it reached a user.
+    const result = evaluate([hole(-45, 34), hole(45, 41)])
+    expect(result.pass).toBe(false)
+    expect(result.failed).toBe(2)
+  })
+
+  it('tolerates the small gaps an arm legitimately has', () => {
+    // Antialiasing, and the seams between an arm's own parts.
+    expect(evaluate([hole(45, MAX_ARM_HOLE_PX)]).pass).toBe(true)
+    expect(evaluate([hole(45, MAX_ARM_HOLE_PX + 1)]).pass).toBe(false)
+  })
+
+  it('still judges the end even when the arm is whole', () => {
+    expect(evaluate([{ yaw: 45, earGapPx: 60, armHolePx: 0 }]).pass).toBe(false)
+  })
+
+  it('does not require armHolePx, so older rows still evaluate', () => {
+    expect(evaluate([{ yaw: 45, earGapPx: -20 }]).pass).toBe(true)
   })
 })

@@ -77,17 +77,59 @@ export class OcclusionProbe {
     let count = 0
     let minX = w
     let maxX = -1
+    // Per-column occupancy, so a HOLE in the arm can be told from a shortened
+    // arm. Both reduce the pixel count; only one of them looks like the arm
+    // dissolving into the face.
+    const columns = new Uint32Array(w)
     for (let y = 0; y < h; y += 1) {
       const row = y * w
       for (let x = 0; x < w; x += 1) {
         if (d[(row + x) * 4 + 3] > 8) {
           count += 1
+          columns[x] += 1
           if (x < minX) minX = x
           if (x > maxX) maxX = x
         }
       }
     }
-    return { count, minX, maxX }
+    return { count, minX, maxX, columns }
+  }
+
+  /**
+   * Widest run of columns where the arm SHOULD be drawn and is not, with drawn
+   * columns on both sides of it.
+   *
+   * A hole in the middle of an arm and an arm cut short both remove pixels, so
+   * neither the pixel count nor the position of the arm's end can tell them
+   * apart -- and the end-position check passes a fragmented arm happily. This
+   * compares the occluded render against the unoccluded one column by column: a
+   * column is a hole when the arm occupies it with the occluder off, is absent
+   * with the occluder on, and has surviving arm on BOTH sides. That last clause
+   * is what keeps a legitimately shortened tail from counting.
+   */
+  static _largestHole(on, off) {
+    const w = off.columns.length
+    let first = -1
+    let last = -1
+    for (let x = 0; x < w; x += 1) {
+      if (on.columns[x] > 0) {
+        if (first < 0) first = x
+        last = x
+      }
+    }
+    if (first < 0 || last <= first) return 0
+
+    let worst = 0
+    let run = 0
+    for (let x = first; x <= last; x += 1) {
+      if (on.columns[x] === 0 && off.columns[x] > 0) {
+        run += 1
+        if (run > worst) worst = run
+      } else if (on.columns[x] > 0) {
+        run = 0
+      }
+    }
+    return worst
   }
 
   /**
@@ -149,6 +191,14 @@ export class OcclusionProbe {
       return { skipped: 'glasses hidden (tracking lost or calibrating)' }
     }
 
+    // ?occdbg=1 draws the occluder as wireframe, which fills nothing and so
+    // occludes nothing. Measuring there reports a flawless result no matter how
+    // broken the occluder is -- it cost a full round of analysis on a sweep that
+    // said 4/4 with zero holes while the bug was plainly on screen.
+    if (this.faceOccluder?.occluderMesh?.material?.wireframe) {
+      return { skipped: 'occluder is in wireframe debug mode and cannot occlude' }
+    }
+
     const saved = meshes.map((m) => m.visible)
     meshes.forEach((m) => {
       m.visible = isTemple(m)
@@ -192,6 +242,7 @@ export class OcclusionProbe {
       yaw: Math.round(headYaw * 10) / 10,
       templePixelsOn: on.count,
       templePixelsOff: off.count,
+      armHolePx: OcclusionProbe._largestHole(on, off),
       hiddenPct: off.count ? Math.round((100 * (off.count - on.count)) / off.count) : 0,
       rearTrimPx,
       // > 0: the arm stops SHORT of the ear (occluder eating it).
@@ -221,6 +272,12 @@ export class OcclusionProbe {
  * configuration that fixed the render scored 0/4. The metric was voting for the
  * defect, and repeatedly overruled the picture.
  *
+ * Two independent ways for an arm to look wrong, so both are gated: it can stop
+ * in the wrong PLACE (earGapPx), and it can come apart in the MIDDLE
+ * (armHolePx). Checking only the end passes a fragmented arm, which is how "the
+ * middle dissolves into the face" survived a metric rewrite that was itself
+ * fixing a blind spot.
+ *
  * Head-on, the arm is foreshortened and its rear extent is set by the hinge
  * rather than the tip, so only turned poses are judged.
  */
@@ -238,6 +295,16 @@ export const JUDGED_ABOVE_YAW = 25
 export const EAR_GAP_MAX_SHORT_PX = 10
 export const EAR_GAP_MAX_PAST_PX = 45
 
+/**
+ * Widest hole allowed in the middle of a drawn arm, in pixels.
+ *
+ * An arm is one object; it does not come apart. A gap with arm on both sides is
+ * the occluder cutting a bite out of it, which reads as the arm dissolving into
+ * the face. Small values are antialiasing and the gaps between an arm's own
+ * parts, so this is not zero.
+ */
+export const MAX_ARM_HOLE_PX = 8
+
 export function evaluate(rows) {
   // Skipped rows carry no measurement, so they cannot pass. Counting them
   // separately keeps a sweep that mostly failed to measure from looking like a
@@ -246,7 +313,9 @@ export function evaluate(rows) {
   const measured = rows.filter((r) => !r.skipped && Number.isFinite(r.earGapPx))
   const judged = measured.filter((r) => Math.abs(r.yaw) >= JUDGED_ABOVE_YAW)
   const failures = judged.filter(
-    (r) => r.earGapPx > EAR_GAP_MAX_SHORT_PX || r.earGapPx < -EAR_GAP_MAX_PAST_PX
+    (r) => r.earGapPx > EAR_GAP_MAX_SHORT_PX ||
+      r.earGapPx < -EAR_GAP_MAX_PAST_PX ||
+      (Number.isFinite(r.armHolePx) && r.armHolePx > MAX_ARM_HOLE_PX)
   )
   return {
     judged: judged.length,
@@ -256,6 +325,7 @@ export function evaluate(rows) {
     pass: judged.length > 0 && failures.length === 0,
     failingYaws: failures.map((r) => r.yaw),
     earGaps: judged.map((r) => r.earGapPx),
+    armHoles: judged.map((r) => r.armHolePx ?? null),
   }
 }
 
