@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import * as THREE from 'three'
 import {
+  TEMPLE_CURL_RAD,
+  TEMPLE_CUT_RATIO,
   TEMPLE_OPEN_RAD,
+  applyCurl,
   applySplay,
   buildHinges,
   isTempleMesh,
@@ -16,22 +19,27 @@ function attr(points) {
   return { count: points.length, getX: (i) => points[i][0], getY: (i) => points[i][1], getZ: (i) => points[i][2] }
 }
 
-describe('TEMPLE_OPEN_RAD', () => {
-  it('sits inside the window all three models passed', () => {
-    // Swept per model against the head-frame end metric; the passing ranges were
-    // GRIPZ 3-8, WILLOW 3-8, LARSSON 0-5, intersecting at 3-5 degrees. The
-    // bounds are what the constant means, so they are asserted rather than left
-    // to the comment.
-    const degrees = (TEMPLE_OPEN_RAD * 180) / Math.PI
-    expect(degrees).toBeGreaterThanOrEqual(3)
-    expect(degrees).toBeLessThanOrEqual(5)
+describe('the two articulation angles', () => {
+  const deg = (rad) => (rad * 180) / Math.PI
+
+  it('opens at the hinge and curls back in at the ear', () => {
+    // Signs matter more than magnitudes: the front segment must swing OUT and
+    // the rear must come back IN. Both positive, applied with opposite sign per
+    // side by applySplay/applyCurl.
+    expect(deg(TEMPLE_OPEN_RAD)).toBeCloseTo(20, 0)
+    expect(deg(TEMPLE_CURL_RAD)).toBeCloseTo(28, 0)
   })
 
-  it('is nowhere near the angle the lateral solve used to ask for', () => {
-    // The solve this replaced saturated at 0.25 rad (14.32 deg) on every model,
-    // which scored 0/8 on all three once the metric stopped paying for
-    // stand-off. Guarding the order of magnitude, not the exact value.
-    expect(TEMPLE_OPEN_RAD).toBeLessThan(0.25 / 2)
+  it('curls at least as far as it opens, or the tip never hides', () => {
+    // With the opening but no curl, GRIPZ draws its tip 0.18-0.37 spans behind
+    // the ear plane -- sailing past the head. The curl has to at least undo the
+    // opening for the tip to turn back toward the skull.
+    expect(TEMPLE_CURL_RAD).toBeGreaterThanOrEqual(TEMPLE_OPEN_RAD)
+  })
+
+  it('puts the joint between the hinge and the tip', () => {
+    expect(TEMPLE_CUT_RATIO).toBeGreaterThan(0)
+    expect(TEMPLE_CUT_RATIO).toBeLessThan(1)
   })
 })
 
@@ -51,7 +59,9 @@ function makeFrame(armName = 'Temple') {
   add('NosePad_L', [-0.006, -0.02, -0.004, -0.009, -0.03, -0.008, -0.005, -0.025, -0.006])
   for (const side of [-1, 1]) {
     const pts = []
-    for (let i = 0; i <= 10; i += 1) pts.push(side * 0.069, 0, -0.013 * i)
+    // A multiple of three, so every point belongs to a triangle and the split
+    // has nothing to drop.
+    for (let i = 0; i < 12; i += 1) pts.push(side * 0.069, 0, -0.013 * i)
     add(`${armName}_${side < 0 ? 'L' : 'R'}`, pts)
   }
   root.updateWorldMatrix(true, true)
@@ -72,24 +82,52 @@ describe('buildHinges', () => {
 
   it('never grabs the lenses, the front or the nose pads', () => {
     const names = buildHinges(makeFrame())
-      .flatMap((h) => h.meshes.map((m) => m.name)).sort()
-    expect(names).toEqual(['Temple_L', 'Temple_R'])
+      .flatMap((h) => h.meshes.map((m) => m.name.replace(/__(front|rear)$/, ''))).sort()
+    expect([...new Set(names)]).toEqual(['Temple_L', 'Temple_R'])
   })
 
   it('finds arms the name regex misses', () => {
     const names = buildHinges(makeFrame('Branche'))
-      .flatMap((h) => h.meshes.map((m) => m.name)).sort()
-    expect(names).toEqual(['Branche_L', 'Branche_R'])
+      .flatMap((h) => h.meshes.map((m) => m.name.replace(/__(front|rear)$/, ''))).sort()
+    expect([...new Set(names)]).toEqual(['Branche_L', 'Branche_R'])
   })
 
-  it('grouping alone moves nothing', () => {
+  it('cuts each arm in two and hangs the rear piece on its own pivot', () => {
+    const hinges = buildHinges(makeFrame())
+    for (const h of hinges) {
+      expect(h.frontMeshes).toHaveLength(1)
+      expect(h.rearMeshes).toHaveLength(1)
+      expect(h.rearMeshes[0].parent).toBe(h.curl)
+      expect(h.curl.parent).toBe(h.group)
+      // the joint sits between hinge and tip, at the documented fraction
+      expect(h.cutZ).toBeLessThan(h.hingeLocal.z)
+      expect(h.cutZ).toBeGreaterThan(-0.13)
+    }
+  })
+
+  it('grouping and cutting alone move nothing', () => {
+    // Every point of the original arm must still be exactly where it was once
+    // the arm has been split and reparented, before any angle is applied.
     const root = makeFrame()
     const arm = root.children.find((c) => c.name === 'Temple_R')
-    const before = new THREE.Vector3().fromBufferAttribute(arm.geometry.attributes.position, 5).applyMatrix4(arm.matrixWorld)
-    buildHinges(root)
+    const p = arm.geometry.attributes.position
+    const before = []
+    for (let i = 0; i < p.count; i += 1) {
+      before.push(new THREE.Vector3().fromBufferAttribute(p, i).applyMatrix4(arm.matrixWorld))
+    }
+    const hinges = buildHinges(root)
     root.updateMatrixWorld(true)
-    const after = new THREE.Vector3().fromBufferAttribute(arm.geometry.attributes.position, 5).applyMatrix4(arm.matrixWorld)
-    expect(after.distanceTo(before)).toBeLessThan(1e-9)
+
+    const after = []
+    for (const mesh of hinges.find((h) => h.side === 1).meshes) {
+      const q = mesh.geometry.attributes.position
+      for (let i = 0; i < q.count; i += 1) {
+        after.push(new THREE.Vector3().fromBufferAttribute(q, i).applyMatrix4(mesh.matrixWorld))
+      }
+    }
+    for (const point of before) {
+      expect(Math.min(...after.map((a) => a.distanceTo(point)))).toBeLessThan(1e-6)
+    }
   })
 })
 

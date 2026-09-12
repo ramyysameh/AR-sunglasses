@@ -2,7 +2,7 @@
  * Main AR render loop that fuses face tracking, pose filtering, occlusion, and Three.js rendering.
  */
 import * as THREE from 'three'
-import { TEMPLE_OPEN_RAD, applyOffset, applySplay, buildHinges } from '../models/templeHinge.js'
+import { TEMPLE_CURL_RAD, TEMPLE_OPEN_RAD, applyCurl, applyOffset, applySplay, buildHinges } from '../models/templeHinge.js'
 import { scaleMultiplier, xOffset, yOffset, zOffset, rotOffsetX, rotOffsetY, rotOffsetZ, trackingSmoothness } from '../config/poseConfig.js'
 import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
@@ -841,6 +841,7 @@ export class RenderLoop {
 
     applyOffset(this._hinges, 0)
     applySplay(this._hinges, TEMPLE_OPEN_RAD)
+    applyCurl(this._hinges, TEMPLE_CURL_RAD)
     this.glassesRoot?.updateWorldMatrix(true, true)
     this._splayAngle = TEMPLE_OPEN_RAD
   }

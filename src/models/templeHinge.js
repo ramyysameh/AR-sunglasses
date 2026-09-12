@@ -28,6 +28,7 @@
  */
 
 import * as THREE from 'three'
+import { splitAtPlane } from './templeSplit.js'
 
 const TEMPLE_NAME = /temple|hinge/i
 
@@ -84,36 +85,55 @@ export function selectArms(candidates, bounds) {
 }
 
 /**
- * How far each temple is opened, radians.
+ * How far each temple is opened at the HINGE, radians (~20 deg).
  *
- * A measured constant, and deliberately not a solve. What it has to beat is not
- * lateral penetration -- it is the GRAZING band where the arm runs nearly
- * tangent to the occluder near the face's silhouette, where a millimetre of
- * depth hides thirty pixels of arm. The geometric solve this replaced modelled
- * the problem as lateral clearance against the head's width profile, asked for
- * 14-25 degrees, and saturated its own cap on all three models. That is 3-5x
- * the truth, and past about 8 degrees the arm stops being helped and starts
- * coming apart -- the tip swings clear of the shell and is never hidden again.
+ * Half of a two-part articulation; read it with TEMPLE_CURL_RAD. The front
+ * segment swings out to carry the arm clear of the cheekbone, and the rear
+ * segment then curls back in so the tip hides behind the ear. Neither angle
+ * makes sense alone: at this opening with no curl the tip is drawn 0.18-0.37
+ * spans BEHIND the ear plane and never hides.
  *
- * Swept on all three merchant models against the head-frame end metric (no
- * outward shift anywhere in the sweep, 25-frame turn to +/-53 degrees):
+ * Why two angles rather than one. The arm has to move 13-17 mm outward over the
+ * cheek, and that requirement grows FASTER than the distance from the hinge, so
+ * a single rotation that satisfies the middle overshoots the tip badly. Swept on
+ * GRIPZ against the head-frame end metric, one transform never passed:
  *
- *   angle      0      3      5      8     11    14.32
- *   GRIPZ    7/8    8/8    8/8    8/8    7/8*   0/8
- *   WILLOW   6/8    8/8    8/8    8/8    3/8*   0/8
- *   LARSSON  7/7    8/8    8/8    7/8*   2/8*   0/8
- *   (* failures at 8+ are 54-71 px holes: the arm coming apart)
+ *   splay only        4     8    14.32   20     26 deg
+ *   judged ok       0/14  0/8    0/8    0/8    3/8
+ *   end             +0.25 +0.22  mixed  -0.31  -0.27
  *
- * The three windows intersect at 3-5, so this sits in the middle of it. Being
- * an ANGLE is also why it needs no head-size term: the band it clears subtends
- * roughly the same angle on any head, where the outward SHIFT it replaced had
- * to be scaled by head width and still only suited the head it was tuned on.
+ *   shift only        0    14     18     21     24 mm
+ *   judged ok       0/14  0/8    0/8    0/8    1/8
+ *   end             +0.25 +0.19  +0.16  +0.14  +0.08
  *
- * Note what the numbers say about the OLD value, 14.32 degrees: 0/8 on every
- * model. It was not a near miss. It was chosen against a screen-space metric
- * that paid for stand-off -- see occlusionProbe's earGapRatio.
+ * Two angles pass comfortably, and the curl is what does it:
+ *
+ *   splay/curl    16/0  16/12  16/20  16/28  18/22  20/20  20/24  24/20
+ *   judged ok     1/7    6/8    6/8    5/8    7/8    6/8    8/8    1/8
+ *   hole           14     22      2     13      0      2      0      0
+ *
+ * 20/24 is the only 8/8, with the arm's end landing -0.138..-0.006 -- just
+ * inside the ear plane, where a temple belongs.
  */
-export const TEMPLE_OPEN_RAD = 0.07
+export const TEMPLE_OPEN_RAD = 0.349
+
+/**
+ * How far the rear segment curls back IN from the front segment, radians (~28).
+ *
+ * This is the angle that makes the arm hide at the ear instead of sailing past
+ * the head. See TEMPLE_OPEN_RAD for the sweep the pair was chosen from.
+ */
+export const TEMPLE_CURL_RAD = 0.489
+
+/**
+ * Where along the arm the second pivot sits, as a fraction of hinge-to-tip.
+ *
+ * Placed near the ear, because that is where a temple stops running back and
+ * starts curving in. Cutting further forward makes the front piece too short to
+ * carry the arm clear of the cheek; further back leaves too little behind the
+ * joint to tuck away.
+ */
+export const TEMPLE_CUT_RATIO = 0.62
 
 /**
  * Reparents each arm under a pivot at its own hinge so it can be rotated rigidly.
@@ -195,11 +215,37 @@ export function buildHinges(glassesRoot) {
     glassesRoot.add(group)
     for (const c of mine) group.attach(c.mesh)
 
+    // Second pivot, at the ear end of the arm. Everything behind the cut is
+    // reparented under it so it can curl back in independently -- see
+    // TEMPLE_CURL_RAD for why one pivot is not enough.
+    let zBack = Infinity
+    for (const c of mine) if (c.zBack < zBack) zBack = c.zBack
+    const cutZ = hingeZ - (hingeZ - zBack) * TEMPLE_CUT_RATIO
+
+    const curl = new THREE.Group()
+    curl.name = `templeCurl${side < 0 ? 'Left' : 'Right'}`
+    group.add(curl)
+    curl.position.set(0, 0, cutZ - hingeZ)
+
+    const frontMeshes = []
+    const rearMeshes = []
+    for (const c of mine) {
+      const pieces = splitArm(c.mesh, group, cutZ)
+      if (!pieces) { frontMeshes.push(c.mesh); continue }
+      frontMeshes.push(pieces.front)
+      rearMeshes.push(pieces.rear)
+      curl.attach(pieces.rear)
+    }
+
     hinges.push({
       side,
       group,
-      meshes: mine.map((c) => c.mesh),
+      curl,
+      meshes: [...frontMeshes, ...rearMeshes],
+      frontMeshes,
+      rearMeshes,
       hingeLocal: { x: hx / n, y: hy / n, z: hingeZ },
+      cutZ,
       baseX: group.position.x,
     })
   }
@@ -207,7 +253,57 @@ export function buildHinges(glassesRoot) {
   return hinges
 }
 
+/**
+ * Cuts one arm mesh at `cutZ` (measured in the hinge group's space) and leaves
+ * the two halves in the scene in its place.
+ *
+ * Returns null when the cut lands off the end of this mesh, which is normal: an
+ * arm is often several parts, and a hinge screw sitting entirely in front of the
+ * cut simply stays whole and rides with the front piece.
+ */
+function splitArm(mesh, group, cutZ) {
+  const geometry = mesh.geometry
+  if (!geometry?.attributes?.position) return null
 
+  // The cut is a plane of constant z in the GROUP's space; express it as a
+  // signed distance over the mesh's own vertices so the split needs no transform.
+  const toGroup = new THREE.Matrix4().copy(group.matrixWorld).invert().multiply(mesh.matrixWorld)
+  const e = toGroup.elements
+  const distance = (x, y, z) => (e[2] * x + e[6] * y + e[10] * z + e[14]) - cutZ
+
+  const position = geometry.attributes.position
+  let front = false, rear = false
+  for (let i = 0; i < position.count && !(front && rear); i += 1) {
+    if (distance(position.getX(i), position.getY(i), position.getZ(i)) >= 0) front = true
+    else rear = true
+  }
+  if (!front || !rear) return null
+
+  const pieces = splitAtPlane(geometry, distance)
+  const parent = mesh.parent
+  const made = {}
+  for (const side of ['front', 'rear']) {
+    const part = new THREE.Mesh(pieces[side], mesh.material)
+    part.name = `${mesh.name}__${side}`
+    part.applyMatrix4(mesh.matrix)
+    part.castShadow = mesh.castShadow
+    part.receiveShadow = mesh.receiveShadow
+    part.renderOrder = mesh.renderOrder
+    parent.add(part)
+    made[side] = part
+  }
+  parent.remove(mesh)
+  return made
+}
+
+
+
+/** Sets the rear segment's inward angle, relative to the front segment. */
+export function applyCurl(hinges, angle) {
+  for (const hinge of hinges) {
+    if (hinge.curl) hinge.curl.rotation.y = hinge.side * angle
+  }
+}
 
 /** Sets each arm's opening angle. Sign is per side so both swing outward. */
 export function applySplay(hinges, angle) {
