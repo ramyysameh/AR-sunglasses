@@ -54,22 +54,24 @@ describe('tessellationTriangles', () => {
 })
 
 describe('shellTriangles', () => {
-  it('emits a wall quad and a cap triangle per ring segment', () => {
+  it('emits two wall quads and a cap triangle per ring segment', () => {
+    // Two walls, not one: face oval -> ear plane -> back of the skull. A single
+    // wall cannot be both wide at the ear and narrow at the occiput.
     const ring = FACE_OVAL_RING
-    expect(shellTriangles(ring, 500, 600)).toHaveLength(RING_LENGTH * 9)
+    expect(shellTriangles(ring, 500, 600, 700)).toHaveLength(RING_LENGTH * 15)
   })
 
   it('stitches the ring vertices it is given, not a contiguous range', () => {
     // The ring vertices are face-mesh landmarks scattered through the buffer.
-    const indices = shellTriangles([10, 20, 30], 100, 200)
+    const indices = shellTriangles([10, 20, 30], 100, 200, 300)
     expect(indices).toContain(10)
     expect(indices).toContain(20)
     expect(indices).toContain(30)
-    expect(indices).toContain(200)
+    expect(indices).toContain(300)
   })
 
   it('closes the loop, so the last segment wraps to the first vertex', () => {
-    const tail = shellTriangles([10, 20, 30], 100, 200).slice(-9)
+    const tail = shellTriangles([10, 20, 30], 100, 200, 300).slice(-15)
     expect(tail).toContain(30)
     expect(tail).toContain(10)
   })
@@ -104,8 +106,10 @@ async function makeOccluder(options) {
   return new FaceOccluder(options).init(new THREE.Scene())
 }
 
-const CAP = FACE_VERTEX_COUNT + RING_LENGTH
-const EXTRUDED_START = FACE_VERTEX_COUNT
+const EAR_START = FACE_VERTEX_COUNT
+const BACK_START = EAR_START + RING_LENGTH
+const CAP = BACK_START + RING_LENGTH
+const EXTRUDED_START = EAR_START
 
 describe('FaceOccluder head shell', () => {
   it('builds the face surface from the real tessellation, not a stand-in', async () => {
@@ -121,20 +125,51 @@ describe('FaceOccluder head shell', () => {
   })
 
   it('extrudes each face-oval landmark backwards along the head axis', async () => {
-    const occluder = await makeOccluder({ shellDepthRatio: 0.5, shellLateralRatio: 0 })
+    const occluder = await makeOccluder({
+      shellDepthRatio: 0.5, shellLateralRatio: 0, shellTaper: 1, shellEarDepth: 0.33,
+    })
     occluder.updateFromFaceMesh(makeFaceWorldPoints(), {}, 1, null, new THREE.Quaternion())
 
     const position = occluder.occluderMesh.geometry.attributes.position
     for (let k = 0; k < RING_LENGTH; k += 1) {
       const ring = FACE_OVAL_RING[k]
-      expect(position.getX(EXTRUDED_START + k)).toBeCloseTo(position.getX(ring))
-      // Temple span 0.2 * 0.5 = 0.1, backwards along -Z for an unrotated head.
-      expect(position.getZ(EXTRUDED_START + k)).toBeCloseTo(position.getZ(ring) - 0.1)
+      // Temple span 0.2 * 0.5 = 0.1 of total depth, backwards along -Z.
+      expect(position.getX(EAR_START + k)).toBeCloseTo(position.getX(ring))
+      expect(position.getZ(EAR_START + k)).toBeCloseTo(position.getZ(ring) - 0.1 * 0.33)
+      expect(position.getZ(BACK_START + k)).toBeCloseTo(position.getZ(ring) - 0.1)
     }
   })
 
+  it('narrows toward the back of the head instead of sweeping a cylinder', async () => {
+    // A constant-section tube is what this used to build, and at 28 degrees of
+    // yaw its silhouette reached past the head entirely and swallowed the temple
+    // arm from the cheekbone backwards -- the arm stopped in mid-air short of
+    // the ear. Collapsing the shell made the whole arm reappear, which is what
+    // identified it.
+    const taper = 0.7
+    const occluder = await makeOccluder({ shellDepthRatio: 0.5, shellLateralRatio: 0, shellTaper: taper })
+    const points = makeFaceWorldPoints()
+    occluder.updateFromFaceMesh(points, {}, 1, null, new THREE.Quaternion())
+
+    const position = occluder.occluderMesh.geometry.attributes.position
+
+    // Every widest ring point must have a NARROWER extruded partner. Compared as
+    // an aggregate half-width rather than per vertex: the taper scales about the
+    // head origin, which these fixture landmarks do not centre on, so a per-
+    // vertex equality would be asserting the fixture's own geometry.
+    let faceHalf = 0
+    let shellHalf = 0
+    for (let k = 0; k < RING_LENGTH; k += 1) {
+      faceHalf = Math.max(faceHalf, Math.abs(position.getX(FACE_OVAL_RING[k])))
+      shellHalf = Math.max(shellHalf, Math.abs(position.getX(BACK_START + k)))
+    }
+    expect(shellHalf).toBeLessThan(faceHalf)
+    expect(shellHalf / faceHalf).toBeGreaterThan(taper * 0.85)
+    expect(shellHalf / faceHalf).toBeLessThan(1)
+  })
+
   it('bulges only the extruded wall, leaving the shared face vertices untouched', async () => {
-    const occluder = await makeOccluder({ shellDepthRatio: 0.5, shellLateralRatio: 0.25 })
+    const occluder = await makeOccluder({ shellDepthRatio: 0.5, shellLateralRatio: 0.25, shellTaper: 1 })
     const points = makeFaceWorldPoints()
     occluder.updateFromFaceMesh(points, {}, 1, null, new THREE.Quaternion())
 
@@ -154,30 +189,33 @@ describe('FaceOccluder head shell', () => {
   })
 
   it('seals the back with a cap at the mean of the extruded ring', async () => {
-    const occluder = await makeOccluder({ shellDepthRatio: 0.5, shellLateralRatio: 0 })
+    const occluder = await makeOccluder({ shellDepthRatio: 0.5, shellLateralRatio: 0, shellTaper: 1 })
     occluder.updateFromFaceMesh(makeFaceWorldPoints(), {}, 1, null, new THREE.Quaternion())
 
     const position = occluder.occluderMesh.geometry.attributes.position
     let sx = 0
     let sz = 0
     for (let k = 0; k < RING_LENGTH; k += 1) {
-      sx += position.getX(EXTRUDED_START + k)
-      sz += position.getZ(EXTRUDED_START + k)
+      sx += position.getX(BACK_START + k)
+      sz += position.getZ(BACK_START + k)
     }
     expect(position.getX(CAP)).toBeCloseTo(sx / RING_LENGTH)
     expect(position.getZ(CAP)).toBeCloseTo(sz / RING_LENGTH)
   })
 
   it('follows the head rotation it is handed', async () => {
-    const occluder = await makeOccluder({ shellDepthRatio: 0.5, shellLateralRatio: 0 })
+    const occluder = await makeOccluder({
+      shellDepthRatio: 0.5, shellLateralRatio: 0, shellTaper: 1, shellEarDepth: 0.33,
+    })
     const yawed = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 2, 0))
     occluder.updateFromFaceMesh(makeFaceWorldPoints(), {}, 1, null, yawed)
 
     const position = occluder.occluderMesh.geometry.attributes.position
     const ring = FACE_OVAL_RING[0]
-    // Yawed 90 degrees: "backwards" is now -X, not -Z.
-    expect(position.getX(EXTRUDED_START)).toBeCloseTo(position.getX(ring) - 0.1)
-    expect(position.getZ(EXTRUDED_START)).toBeCloseTo(position.getZ(ring))
+    // Yawed 90 degrees: "backwards" is now -X, not -Z. Both rings follow it.
+    expect(position.getX(EAR_START)).toBeCloseTo(position.getX(ring) - 0.1 * 0.33)
+    expect(position.getX(BACK_START)).toBeCloseTo(position.getX(ring) - 0.1)
+    expect(position.getZ(BACK_START)).toBeCloseTo(position.getZ(ring))
   })
 
   it('collapses the shell, but not the face, when no head rotation is available', async () => {

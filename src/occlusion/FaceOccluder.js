@@ -9,6 +9,8 @@ import {
   TEMPLE_SPAN_LANDMARKS,
   resolveShellDepthRatio,
   resolveShellLateralRatio,
+  resolveShellTaper,
+  resolveShellEarDepth,
   shellTriangles,
   tessellationTriangles,
   templeSpan,
@@ -32,9 +34,12 @@ const OCCLUDER_POINTS = Array.from({ length: FACE_VERTEX_COUNT }, (_, index) => 
 // since the full mesh already contains them. The wall is stitched from those
 // vertices to their extruded partners, which keeps the shell welded to the face
 // surface instead of meeting it at a seam.
-const EXTRUDED_START = FACE_VERTEX_COUNT
-const CAP_VERTEX = EXTRUDED_START + RING_LENGTH
+const EAR_RING_START = FACE_VERTEX_COUNT
+const BACK_RING_START = EAR_RING_START + RING_LENGTH
+const CAP_VERTEX = BACK_RING_START + RING_LENGTH
 const VERTEX_COUNT = CAP_VERTEX + 1
+// Kept for the tests and the collapse loop, which only care where the shell starts.
+const EXTRUDED_START = EAR_RING_START
 
 const TEMPLE_SPAN_VERTEX = {
   left: TEMPLE_SPAN_LANDMARKS.left,
@@ -76,7 +81,7 @@ const SHELL_SHAPE_ALPHA = 0.08
 
 const OCCLUDER_INDICES = [
   ...tessellationTriangles(FaceLandmarker.FACE_LANDMARKS_TESSELATION),
-  ...shellTriangles(FACE_OVAL_RING, EXTRUDED_START, CAP_VERTEX),
+  ...shellTriangles(FACE_OVAL_RING, EAR_RING_START, BACK_RING_START, CAP_VERTEX),
 ]
 
 /** Reads one vertex out of the flat smoothed-position array. */
@@ -106,6 +111,12 @@ export class FaceOccluder {
     this.shellLateralRatio = Number.isFinite(options.shellLateralRatio)
       ? options.shellLateralRatio
       : resolveShellLateralRatio(typeof window !== 'undefined' ? window.location.search : '')
+    this.shellTaper = Number.isFinite(options.shellTaper)
+      ? options.shellTaper
+      : resolveShellTaper(typeof window !== 'undefined' ? window.location.search : '')
+    this.shellEarDepth = Number.isFinite(options.shellEarDepth)
+      ? options.shellEarDepth
+      : resolveShellEarDepth(typeof window !== 'undefined' ? window.location.search : '')
     this.debugVisible = options.debugVisible ?? (
       typeof window !== 'undefined' &&
       new URLSearchParams(window.location.search).get('occdbg') === '1'
@@ -287,16 +298,24 @@ export class FaceOccluder {
         ? widen * Math.max(Math.min(lx / halfSpan, 1), -1)
         : 0
 
-      v.set(lx + w, this._ringLocal[j + 1], this._ringLocal[j + 2] - depth)
+      // Ear ring: bulged outward, a third of the way back, where a head is
+      // widest and where the temple tip has to disappear.
+      v.set(lx + w, this._ringLocal[j + 1], this._ringLocal[j + 2] - depth * this.shellEarDepth)
+        .applyQuaternion(headQuaternion)
+      // Only the EXTRUDED copies are written. The ring vertex itself is a shared
+      // face-mesh vertex; moving it would tear a hole in the face surface.
+      position.setXYZ(EAR_RING_START + k, ox + v.x + cx, oy + v.y + cy, oz + v.z + cz)
+
+      // Back ring: tapered in toward the occiput. A cylinder here is what
+      // swallowed the arm from the cheekbone backwards.
+      const taper = this.shellTaper
+      v.set(lx * taper, this._ringLocal[j + 1] * taper, this._ringLocal[j + 2] - depth)
         .applyQuaternion(headQuaternion)
 
       const ex = ox + v.x + cx
       const ey = oy + v.y + cy
       const ez = oz + v.z + cz
-
-      // Only the EXTRUDED copy is written. The ring vertex itself is a shared
-      // face-mesh vertex; moving it would tear a hole in the face surface.
-      position.setXYZ(EXTRUDED_START + k, ex, ey, ez)
+      position.setXYZ(BACK_RING_START + k, ex, ey, ez)
 
       capX += ex
       capY += ey

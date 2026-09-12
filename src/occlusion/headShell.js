@@ -87,6 +87,50 @@ export function resolveShellLateralRatio(search) {
 }
 
 /**
+ * How much narrower the shell is at the BACK than at the face.
+ *
+ * The shell used to be a constant-section tube: the face oval swept ~150 mm
+ * straight back at full width, plus the ear bulge. A head is not that shape --
+ * it is widest around the ears and narrows to the occiput -- and the difference
+ * is not cosmetic. At 28 degrees of yaw that tube's silhouette reached past the
+ * head entirely, over the background, and swallowed the temple arm from about
+ * the cheekbone backwards: the arm stopped dead in mid-air with a visible gap
+ * before the ear. Collapsing the shell made the whole arm reappear and hook
+ * correctly behind the ear, which is what identified it.
+ *
+ * Applied to the extruded ring's lateral and vertical offsets, so the shell
+ * becomes a tapered cone rather than a cylinder. The tip still hides: it hooks
+ * inward to ~55 mm while the tapered wall is still out at ~80 mm there.
+ */
+export const DEFAULT_SHELL_TAPER = 0.55
+
+/**
+ * Where the ear ring sits, as a fraction of the full extrusion depth.
+ *
+ * A head's widest point is around the ears, roughly a third of the way from the
+ * face plane to the occiput, and it narrows from there back. One extruded ring
+ * cannot express that: put the bulge on it and the whole tube is fat enough to
+ * swallow the temple arm from the cheekbone backwards; taper it instead and the
+ * wall is too narrow at the ear to hide the tip, which is what the shell exists
+ * for. Measured both ways -- fat tube: arm cut in mid-air short of the ear;
+ * tapered single ring: arm correct but occlusion 0/4 with zero rear trim.
+ *
+ * So the shell carries two rings: this one bulges outward to cover the ear, and
+ * the back one tapers in behind it.
+ */
+export const DEFAULT_SHELL_EAR_DEPTH = 0.33
+
+/** ?shellear=<0..1> */
+export function resolveShellEarDepth(search) {
+  return resolve(search, 'shellear', DEFAULT_SHELL_EAR_DEPTH, 1)
+}
+
+/** ?shelltaper=<0..1>; 1 restores the old constant-section tube. */
+export function resolveShellTaper(search) {
+  return resolve(search, 'shelltaper', DEFAULT_SHELL_TAPER, 1)
+}
+
+/**
  * Wall + back cap for the extruded ring.
  *
  * The occluder material is DoubleSide and only ever writes depth, so winding is
@@ -99,7 +143,7 @@ export function resolveShellLateralRatio(search) {
  * @param {number} length ring vertex count
  * @returns {number[]} flat triangle index list
  */
-export function shellTriangles(ringVertices, extrudedStart, capCenter) {
+export function shellTriangles(ringVertices, earStart, backStart, capCenter) {
   const indices = []
   const length = ringVertices.length
 
@@ -107,13 +151,16 @@ export function shellTriangles(ringVertices, extrudedStart, capCenter) {
     const next = (i + 1) % length // wraps: the ring is a closed loop
     const r0 = ringVertices[i]
     const r1 = ringVertices[next]
-    const e0 = extrudedStart + i
-    const e1 = extrudedStart + next
+    const a0 = earStart + i
+    const a1 = earStart + next
+    const b0 = backStart + i
+    const b1 = backStart + next
 
-    // Side wall
-    indices.push(r0, r1, e1, r0, e1, e0)
+    // Face oval -> ear plane, then ear plane -> back of the skull.
+    indices.push(r0, r1, a1, r0, a1, a0)
+    indices.push(a0, a1, b1, a0, b1, b0)
     // Back cap, as a fan around a single centre vertex
-    indices.push(e0, e1, capCenter)
+    indices.push(b0, b1, capCenter)
   }
 
   return indices
