@@ -937,25 +937,9 @@ export class RenderLoop {
     }
 
     const scale = this.glassesRoot?.scale?.x || 1
-    // The width above was measured against the SHELL, which is built
-    // shellLateralRatio x span proud of the skin so it can cover the ear.
-    // Subtracting it here is what makes the clearance a skin gap.
-    const earA = (this._splayEarA ??= new THREE.Vector3())
-      .fromBufferAttribute(position, EAR_LANDMARKS[0])
-      .applyMatrix4(this.faceOccluder.occluderMesh.matrixWorld)
-    const earB = (this._splayEarB ??= new THREE.Vector3())
-      .fromBufferAttribute(position, EAR_LANDMARKS[1])
-      .applyMatrix4(this.faceOccluder.occluderMesh.matrixWorld)
-    const span = earA.distanceTo(earB)
-    const inflation = span * (this.faceOccluder.shellLateralRatio ?? 0)
     let angle = 0
     for (const hinge of this._hinges) {
-      const solved = solveSplay(
-        this._headWidthMean,
-        hinge.armLateral * scale,
-        hinge.jointDepth * scale,
-        inflation,
-      )
+      const solved = solveSplay(this._headWidthMean, hinge.armLateral * scale, hinge.jointDepth * scale)
       if (solved > angle) angle = solved
     }
 

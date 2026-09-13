@@ -6,7 +6,7 @@ import {
   MAX_SPLAY_RAD,
   TEMPLE_CURL_RAD,
   TEMPLE_CUT_RATIO,
-  TEMPLE_SKIN_CLEARANCE,
+  TEMPLE_SHELL_CLEARANCE,
   applyCurl,
   applyNearArmClip,
   solveSplay,
@@ -31,46 +31,36 @@ describe('solveSplay', () => {
   const HEAD = 0.0841      // ray-cast half-width of the shell
   const ARM = 0.0772       // where the arm sits at the joint
   const JOINT = 0.1241     // how far back the joint is
-  const INFLATION = 0.0087 // shell lateral ratio 0.05 x span 0.174
 
-  it('aims the arm at the SKIN, not at the shell that stands proud of it', () => {
-    // The shell is fatter than the head by design. Aiming at its wall put the
-    // arm ~9 mm off the face before the clearance was even added.
-    const withInflation = solveSplay(HEAD, ARM, JOINT, INFLATION)
-    const withoutInflation = solveSplay(HEAD, ARM, JOINT, 0)
-    expect(withInflation).toBeLessThan(withoutInflation)
-  })
-
-  it('leaves a few millimetres of skin gap, not a percentage of the head', () => {
-    // A ratio makes the gap scale with head size: 16% was 11.6 mm on one
-    // reading and 15.1 mm on another, and the temples visibly splayed wider on
-    // the frame whose arms happened to ride where the shell measured widest.
-    const target = HEAD - INFLATION + TEMPLE_SKIN_CLEARANCE
-    const expected = Math.asin((target - ARM) / JOINT)
-    expect(solveSplay(HEAD, ARM, JOINT, INFLATION)).toBeCloseTo(expected, 9)
+  it('places the arm outside the SHELL, which is what culls it', () => {
+    // Aiming at the skin instead put the arm inside the shell, and the shell ate
+    // it: Willow at -39 deg yaw measured earGapRatio +0.122 with 41% of the
+    // temple hidden, against -0.030 and 27% at the clearance used here.
+    const target = HEAD + TEMPLE_SHELL_CLEARANCE
+    expect(solveSplay(HEAD, ARM, JOINT)).toBeCloseTo(Math.asin((target - ARM) / JOINT), 9)
   })
 
   it('gives two frames on the same head nearly the same opening', () => {
     // The whole point. Two frames differing only in where their arms sit
     // should differ in splay by a few degrees, not by fifteen.
-    const gripz = deg(solveSplay(HEAD, 0.0772, 0.1241, INFLATION))
-    const willow = deg(solveSplay(HEAD, 0.0753, 0.1339, INFLATION))
+    const gripz = deg(solveSplay(HEAD, 0.0772, 0.1241))
+    const willow = deg(solveSplay(HEAD, 0.0753, 0.1339))
     expect(Math.abs(gripz - willow)).toBeLessThan(6)
   })
 
   it('never opens past the ceiling, however bad the measurement', () => {
-    expect(solveSplay(0.13, 0.02, 0.05, 0)).toBeLessThanOrEqual(MAX_SPLAY_RAD)
+    expect(solveSplay(0.13, 0.02, 0.05)).toBeLessThanOrEqual(MAX_SPLAY_RAD)
   })
 
   it('stays shut on a measurement it cannot use', () => {
-    expect(solveSplay(HEAD, ARM, 0, INFLATION)).toBe(0)
-    expect(solveSplay(0, ARM, JOINT, INFLATION)).toBe(0)
+    expect(solveSplay(HEAD, ARM, 0)).toBe(0)
+    expect(solveSplay(0, ARM, JOINT)).toBe(0)
   })
 
   it('never folds the arm inward when the frame is already wider than the head', () => {
     // A frame wider than the face asks for a NEGATIVE reach. Bending the arm in
     // to meet the skin would clamp it through the cheek.
-    expect(solveSplay(0.06, 0.09, JOINT, INFLATION)).toBe(0)
+    expect(solveSplay(0.06, 0.09, JOINT)).toBe(0)
   })
 })
 

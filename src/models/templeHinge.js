@@ -85,19 +85,36 @@ export function selectArms(candidates, bounds) {
 }
 
 /**
- * How far outside the head's SKIN the arm is placed, in world units (~3 mm).
+ * How far outside the occluder SHELL WALL the arm is placed, in world units
+ * (~12.8 mm).
  *
- * Absolute, not a fraction of the head. A ratio makes the skin gap scale with
- * head size, which is wrong on its face -- a temple grazes a large head by the
- * same few millimetres as a small one -- and it amplifies any error in the
- * width measurement. At 16% the same face got an 11.6 mm gap under one frame
- * and 15.1 mm under another, and the wider one visibly splayed.
+ * Absolute, not a fraction of the head. A ratio makes the gap scale with head
+ * size, which is wrong on its face -- a temple grazes a large head by the same
+ * few millimetres as a small one -- and it amplifies any error in the width
+ * measurement. At 16% the same face got an 11.6 mm gap under one frame and
+ * 15.1 mm under another, and the wider one visibly splayed.
  *
- * The caller passes the shell's own lateral inflation separately, because the
- * width this is added to is measured against the SHELL, which is built proud of
- * the skin on purpose.
+ * Measured from the SHELL, not the skin, because the shell is what culls the
+ * arm. An earlier version subtracted the shell's own lateral inflation to aim
+ * at the skin instead -- geometrically the "true" gap, but operationally
+ * backwards: an arm placed at the skin sits INSIDE the shell, and the shell
+ * eats it. Driving the splay by hand at one pinned pose (Willow, yaw -39 deg)
+ * and reading the occlusion probe showed exactly that:
+ *
+ *   splay   earGapRatio   occluderAteWorld   hiddenPct
+ *    5.1        +0.122         0.034            41%     <- aimed at the skin
+ *    8          +0.094         0.029            38%
+ *   11          +0.051         0.021            33%
+ *   14          -0.030         0.006            27%
+ *   17          -0.064         0.000            22%
+ *   20          -0.065         0.000            22%
+ *
+ * +0.05 is the fail threshold for "stops short of the ear" on earGapRatio, so
+ * the skin-aimed version badly failed it while also having the shell eat 41%
+ * of the temple. This constant is measured straight off the shell instead, and
+ * the caller no longer subtracts any inflation term.
  */
-export const TEMPLE_SKIN_CLEARANCE = 0.0035
+export const TEMPLE_SHELL_CLEARANCE = 0.0148
 
 
 
@@ -468,17 +485,13 @@ function splitArm(mesh, group, cutZ) {
  * @param {number} headHalf measured head half-width, world units
  * @param {number} armLateral where the arm sits at the joint, world units
  * @param {number} jointDepth how far back the joint is, world units
- * @param {number} [shellInflation] how far the measured shell stands proud of
- *   the skin, world units -- see TEMPLE_SKIN_CLEARANCE for why this is
- *   subtracted rather than folded into the clearance itself.
  * @returns {number} radians
  */
-export function solveSplay(headHalf, armLateral, jointDepth, shellInflation = 0) {
+export function solveSplay(headHalf, armLateral, jointDepth) {
   if (!(jointDepth > 0) || !(headHalf > 0)) return 0
-  const skin = headHalf - shellInflation
-  const reach = skin + TEMPLE_SKIN_CLEARANCE - armLateral
+  const reach = headHalf + TEMPLE_SHELL_CLEARANCE - armLateral
   // Clamped at zero, not allowed to go negative: a frame already wider than the
-  // face asks for a negative reach, and honouring it would rotate the arm
+  // head asks for a negative reach, and honouring it would rotate the arm
   // inward until it clamped through the cheek.
   const sine = Math.min(Math.max(reach / jointDepth, 0), 1)
   return Math.min(Math.asin(sine), MAX_SPLAY_RAD)
