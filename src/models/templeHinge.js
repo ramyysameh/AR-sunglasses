@@ -85,21 +85,19 @@ export function selectArms(candidates, bounds) {
 }
 
 /**
- * How far outside the head's surface the arm is placed, as a fraction of the
- * head's half-width AT THE TEMPLE'S HEIGHT.
+ * How far outside the head's SKIN the arm is placed, in world units (~3 mm).
  *
- * This is now only about where the temple should LOOK like it sits -- resting on
- * the head rather than cutting through the cheek. It used to carry a much larger
- * grazing allowance, plus a term in the arm's own thickness, because the arm had
- * to stand clear of the occluder to survive at all: a thin arm loses more of
- * itself to a near-tangent occluder, so WILLOW's 1.65 mm wire needed MORE
- * opening than GRIPZ's 4.85 mm acetate. That was real and it was measured, but
- * it is obsolete -- applyNearArmClip draws the near arm in front of the occluder,
- * so nothing shaves it and none of that margin is needed.
+ * Absolute, not a fraction of the head. A ratio makes the skin gap scale with
+ * head size, which is wrong on its face -- a temple grazes a large head by the
+ * same few millimetres as a small one -- and it amplifies any error in the
+ * width measurement. At 16% the same face got an 11.6 mm gap under one frame
+ * and 15.1 mm under another, and the wider one visibly splayed.
  *
- * What is left is the skin gap, and it is small.
+ * The caller passes the shell's own lateral inflation separately, because the
+ * width this is added to is measured against the SHELL, which is built proud of
+ * the skin on purpose.
  */
-export const TEMPLE_GRAZE_HEAD_RATIO = 0.16
+export const TEMPLE_SKIN_CLEARANCE = 0.0035
 
 
 
@@ -470,11 +468,18 @@ function splitArm(mesh, group, cutZ) {
  * @param {number} headHalf measured head half-width, world units
  * @param {number} armLateral where the arm sits at the joint, world units
  * @param {number} jointDepth how far back the joint is, world units
+ * @param {number} [shellInflation] how far the measured shell stands proud of
+ *   the skin, world units -- see TEMPLE_SKIN_CLEARANCE for why this is
+ *   subtracted rather than folded into the clearance itself.
  * @returns {number} radians
  */
-export function solveSplay(headHalf, armLateral, jointDepth) {
+export function solveSplay(headHalf, armLateral, jointDepth, shellInflation = 0) {
   if (!(jointDepth > 0) || !(headHalf > 0)) return 0
-  const reach = headHalf * (1 + TEMPLE_GRAZE_HEAD_RATIO) - armLateral
+  const skin = headHalf - shellInflation
+  const reach = skin + TEMPLE_SKIN_CLEARANCE - armLateral
+  // Clamped at zero, not allowed to go negative: a frame already wider than the
+  // face asks for a negative reach, and honouring it would rotate the arm
+  // inward until it clamped through the cheek.
   const sine = Math.min(Math.max(reach / jointDepth, 0), 1)
   return Math.min(Math.asin(sine), MAX_SPLAY_RAD)
 }

@@ -6,7 +6,7 @@ import {
   MAX_SPLAY_RAD,
   TEMPLE_CURL_RAD,
   TEMPLE_CUT_RATIO,
-  TEMPLE_GRAZE_HEAD_RATIO,
+  TEMPLE_SKIN_CLEARANCE,
   applyCurl,
   applyNearArmClip,
   solveSplay,
@@ -27,39 +27,50 @@ function attr(points) {
 
 describe('solveSplay', () => {
   const deg = (rad) => (rad * 180) / Math.PI
-  // Head half-width AT THE TEMPLE'S HEIGHT, then where the arm sits and how far
-  // back the joint is -- the engine's own measurements on the mock head.
-  const HEAD = 83.3, ARM = 75.6, JOINT = 121.7
+  // The engine's own measurements on the mock head, in world units.
+  const HEAD = 0.0841      // ray-cast half-width of the shell
+  const ARM = 0.0772       // where the arm sits at the joint
+  const JOINT = 0.1241     // how far back the joint is
+  const INFLATION = 0.0087 // shell lateral ratio 0.05 x span 0.174
 
-  it('rests the arm on the head rather than standing it off', () => {
-    // Small now. The arm no longer has to clear the occluder -- applyNearArmClip
-    // draws it in front -- so this is a skin gap, not a grazing allowance.
-    expect(deg(solveSplay(HEAD, ARM, JOINT))).toBeGreaterThan(5)
-    expect(deg(solveSplay(HEAD, ARM, JOINT))).toBeLessThan(14)
+  it('aims the arm at the SKIN, not at the shell that stands proud of it', () => {
+    // The shell is fatter than the head by design. Aiming at its wall put the
+    // arm ~9 mm off the face before the clearance was even added.
+    const withInflation = solveSplay(HEAD, ARM, JOINT, INFLATION)
+    const withoutInflation = solveSplay(HEAD, ARM, JOINT, 0)
+    expect(withInflation).toBeLessThan(withoutInflation)
   })
 
-  it('opens FURTHER on a wider head and less on a narrower one', () => {
-    expect(solveSplay(HEAD * 1.1, ARM, JOINT)).toBeGreaterThan(solveSplay(HEAD, ARM, JOINT))
-    expect(solveSplay(HEAD * 0.9, ARM, JOINT)).toBeLessThan(solveSplay(HEAD, ARM, JOINT))
+  it('leaves a few millimetres of skin gap, not a percentage of the head', () => {
+    // A ratio makes the gap scale with head size: 16% was 11.6 mm on one
+    // reading and 15.1 mm on another, and the temples visibly splayed wider on
+    // the frame whose arms happened to ride where the shell measured widest.
+    const target = HEAD - INFLATION + TEMPLE_SKIN_CLEARANCE
+    const expected = Math.asin((target - ARM) / JOINT)
+    expect(solveSplay(HEAD, ARM, JOINT, INFLATION)).toBeCloseTo(expected, 9)
   })
 
-  it('tracks the frame-to-head ratio, which is how the head term was validated', () => {
-    // Scaling the frame is equivalent to changing the head's relative width.
-    expect(solveSplay(HEAD, ARM * 0.9, JOINT * 0.9)).toBeGreaterThan(solveSplay(HEAD, ARM, JOINT))
-    expect(solveSplay(HEAD, ARM * 1.12, JOINT * 1.12)).toBeLessThan(solveSplay(HEAD, ARM, JOINT))
+  it('gives two frames on the same head nearly the same opening', () => {
+    // The whole point. Two frames differing only in where their arms sit
+    // should differ in splay by a few degrees, not by fifteen.
+    const gripz = deg(solveSplay(HEAD, 0.0772, 0.1241, INFLATION))
+    const willow = deg(solveSplay(HEAD, 0.0753, 0.1339, INFLATION))
+    expect(Math.abs(gripz - willow)).toBeLessThan(6)
   })
 
-  it('needs no splay at all once the arm already clears the head', () => {
-    expect(solveSplay(HEAD, HEAD * (1 + TEMPLE_GRAZE_HEAD_RATIO) + 1, JOINT)).toBe(0)
+  it('never opens past the ceiling, however bad the measurement', () => {
+    expect(solveSplay(0.13, 0.02, 0.05, 0)).toBeLessThanOrEqual(MAX_SPLAY_RAD)
   })
 
-  it('caps instead of asking for an impossible angle', () => {
-    expect(solveSplay(HEAD * 5, ARM, JOINT)).toBe(MAX_SPLAY_RAD)
+  it('stays shut on a measurement it cannot use', () => {
+    expect(solveSplay(HEAD, ARM, 0, INFLATION)).toBe(0)
+    expect(solveSplay(0, ARM, JOINT, INFLATION)).toBe(0)
   })
 
-  it('returns 0 rather than NaN when the arm was never measured', () => {
-    expect(solveSplay(HEAD, ARM, 0)).toBe(0)
-    expect(solveSplay(0, ARM, JOINT)).toBe(0)
+  it('never folds the arm inward when the frame is already wider than the head', () => {
+    // A frame wider than the face asks for a NEGATIVE reach. Bending the arm in
+    // to meet the skin would clamp it through the cheek.
+    expect(solveSplay(0.06, 0.09, JOINT, INFLATION)).toBe(0)
   })
 })
 
