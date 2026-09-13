@@ -80,10 +80,20 @@ const HEAD_ORIGIN_VERTICES = [1, 4, 10, 168]
  */
 const SHELL_SHAPE_ALPHA = 0.08
 
-const OCCLUDER_INDICES = [
-  ...tessellationTriangles(FaceLandmarker.FACE_LANDMARKS_TESSELATION),
-  ...shellTriangles(FACE_OVAL_RING, EAR_RING_START, BACK_RING_START, CAP_VERTEX),
-]
+const TESSELLATION_INDICES = tessellationTriangles(FaceLandmarker.FACE_LANDMARKS_TESSELATION)
+const SHELL_INDICES = shellTriangles(FACE_OVAL_RING, EAR_RING_START, BACK_RING_START, CAP_VERTEX)
+const OCCLUDER_INDICES = [...TESSELLATION_INDICES, ...SHELL_INDICES]
+
+/**
+ * Where the shell's own triangles start in the index buffer.
+ *
+ * The buffer is the face tessellation followed by the shell. A head-width ray
+ * cast wants the SHELL wall -- the face mesh sits inboard of it, so casting
+ * against the whole buffer measures the skin and, on the collapsed-shell path
+ * where every shell triangle is zero-area, silently returns a plausible width
+ * instead of nothing.
+ */
+export const SHELL_INDEX_START = TESSELLATION_INDICES.length
 
 /** Reads one vertex out of the flat smoothed-position array. */
 function readPoint(positions, vertex) {

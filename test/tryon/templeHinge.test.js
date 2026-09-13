@@ -49,12 +49,15 @@ describe('solveSplay', () => {
   })
 
   it('never opens past the ceiling, however bad the measurement', () => {
-    expect(solveSplay(0.13, 0.02, 0.05)).toBeLessThanOrEqual(MAX_SPLAY_RAD)
+    // toBe, not toBeLessThanOrEqual: this also catches a clamp applied too
+    // early, which would silently pass a looser bound.
+    expect(solveSplay(0.13, 0.02, 0.05)).toBe(MAX_SPLAY_RAD)
   })
 
   it('stays shut on a measurement it cannot use', () => {
     expect(solveSplay(HEAD, ARM, 0)).toBe(0)
     expect(solveSplay(0, ARM, JOINT)).toBe(0)
+    expect(solveSplay(HEAD, Number.NaN, JOINT)).toBe(0)
   })
 
   it('never folds the arm inward when the frame is already wider than the head', () => {
@@ -454,12 +457,15 @@ describe('solveSplay across the plausible range of merchant frames', () => {
   ]
 
   it('keeps every plausible frame inside a usable opening', () => {
-    // An upload that lands outside this band renders visibly wrong, and until
-    // now nothing would have caught it before a merchant saw it on a customer.
+    // A real band, not the trivial bounds the implementation already
+    // guarantees on its own (>= 0 from the reach clamp, < MAX_SPLAY_RAD's ~34
+    // deg ceiling from the asin clamp) -- either of those would pass an
+    // implementation that just returned a constant 5 degrees. 5..30 deg is the
+    // range an upload in this band actually has to land in to look right.
     for (const frame of FRAMES) {
       const angle = deg(solveSplay(HEAD, frame.armLateral, frame.jointDepth))
-      expect(angle, frame.name).toBeGreaterThanOrEqual(0)
-      expect(angle, frame.name).toBeLessThan(deg(MAX_SPLAY_RAD))
+      expect(angle, frame.name).toBeGreaterThan(5)
+      expect(angle, frame.name).toBeLessThan(30)
     }
   })
 

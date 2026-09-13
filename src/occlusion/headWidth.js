@@ -72,8 +72,13 @@ export function castDistance(world, indices, origin, direction) {
     const v = (direction[0] * qx + direction[1] * qy + direction[2] * qz) * inv
     if (v < 0 || u + v > 1) continue
 
+    // Self-hit epsilon. Positions arrive in a Float32Array at roughly half a
+    // metre from the origin, where float32 quantisation is ~3e-8 m -- a
+    // one-nanometre (1e-9) epsilon sits ~30x below that noise floor, so a ray
+    // starting ON a surface (as both casts here do, from a point derived from
+    // the same mesh) can register a spurious near-zero self-hit.
     const distance = (e2x * qx + e2y * qy + e2z * qz) * inv
-    if (distance > 1e-9 && distance < nearest) nearest = distance
+    if (distance > 1e-6 && distance < nearest) nearest = distance
   }
   return nearest
 }
@@ -88,11 +93,12 @@ export function castDistance(world, indices, origin, direction) {
  * @param {Float64Array} world positions already in the same space as origin
  * @param {ArrayLike<number>} indices triangle indices
  * @param {number[]} origin a point near the mid-sagittal plane
- * @param {number[]} lateral unit, side to side
+ * @param {number[]} lateral side to side; need not be unit length
  * @param {number[]} up unit, perpendicular to lateral
  * @param {number} height how far above origin to measure
- * @returns {number | null} null if either cast misses -- a half-measurement is
- *   worse than none, because the solve cannot tell the two apart
+ * @returns {number | null} null if either cast misses, or if `lateral` has no
+ *   length to normalise -- a half-measurement is worse than none, because the
+ *   solve cannot tell the two apart
  */
 export function halfWidthAt(world, indices, origin, lateral, up, height) {
   const from = [
@@ -100,8 +106,15 @@ export function halfWidthAt(world, indices, origin, lateral, up, height) {
     origin[1] + up[1] * height,
     origin[2] + up[2] * height,
   ]
-  const right = castDistance(world, indices, from, lateral)
-  const left = castDistance(world, indices, from, [-lateral[0], -lateral[1], -lateral[2]])
+  // castDistance returns distance in units of |direction|. The caller's axis
+  // comes off a filtered head quaternion, and a 2% norm drift there would be a
+  // 1.6 mm error against a 4 mm resolve threshold -- normalise here so the
+  // measurement cannot inherit the filter's own drift.
+  const len = Math.hypot(lateral[0], lateral[1], lateral[2])
+  if (!(len > 0)) return null
+  const unitLateral = [lateral[0] / len, lateral[1] / len, lateral[2] / len]
+  const right = castDistance(world, indices, from, unitLateral)
+  const left = castDistance(world, indices, from, [-unitLateral[0], -unitLateral[1], -unitLateral[2]])
   if (!Number.isFinite(right) || !Number.isFinite(left)) return null
   return (right + left) / 2
 }

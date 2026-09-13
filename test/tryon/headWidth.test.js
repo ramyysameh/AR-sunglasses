@@ -101,12 +101,33 @@ describe('halfWidthAt', () => {
     const lateral = [Math.cos(angle), 0, -Math.sin(angle)]
     expect(halfWidthAt(world, indices, [0, 0, 0], lateral, Y, 0)).toBeCloseTo(0.075, 4)
   })
+
+  it('normalises the axis, so a drifting quaternion cannot scale the width', () => {
+    // castDistance returns distance in units of |direction|, and the caller's
+    // lateral axis comes from a filtered quaternion. A 2% norm drift would be a
+    // 1.6 mm error against a 4 mm resolve threshold.
+    const { positions, indices } = frustum()
+    const world = toWorldPositions(positions, IDENTITY)
+    const unit = halfWidthAt(world, indices, [0, 0, 0], X, Y, 0)
+    expect(halfWidthAt(world, indices, [0, 0, 0], [3, 0, 0], Y, 0)).toBeCloseTo(unit, 9)
+  })
+
+  it('returns null rather than dividing by zero on a degenerate axis', () => {
+    const { positions, indices } = frustum()
+    const world = toWorldPositions(positions, IDENTITY)
+    expect(halfWidthAt(world, indices, [0, 0, 0], [0, 0, 0], Y, 0)).toBeNull()
+  })
 })
 
 describe('toWorldPositions', () => {
   it('reuses the caller\'s buffer, so a per-frame call does not allocate', () => {
     const { positions } = frustum()
     const buffer = new Float64Array(positions.length)
-    expect(toWorldPositions(positions, IDENTITY, buffer)).toBe(buffer)
+    const result = toWorldPositions(positions, IDENTITY, buffer)
+    expect(result).toBe(buffer)
+    // Identity should carry each source coordinate straight into the buffer --
+    // an implementation that returns `out` without writing to it would pass
+    // the identity check above while leaving this all zero.
+    expect(Array.from(buffer)).toEqual(Array.from(positions))
   })
 })

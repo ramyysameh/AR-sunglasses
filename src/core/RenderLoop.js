@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { NEAR_ARM_YAW_DEG, TEMPLE_CURL_RAD, TEMPLE_CUT_BEHIND_EAR_M, applyCurl, applyNearArmClip, applyOffset, applySplay, buildHinges, solveSplay } from '../models/templeHinge.js'
 import { EAR_LANDMARKS, EYE_LANDMARKS, NOSE_LANDMARK, headFrame } from '../occlusion/headFrame.js'
 import { halfWidthAt, toWorldPositions } from '../occlusion/headWidth.js'
+import { SHELL_INDEX_START } from '../occlusion/FaceOccluder.js'
 import { scaleMultiplier, xOffset, yOffset, zOffset, rotOffsetX, rotOffsetY, rotOffsetZ, trackingSmoothness } from '../config/poseConfig.js'
 import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
@@ -42,6 +43,8 @@ const MAX_PLAUSIBLE_HEAD_HALF_M = 0.13
 // opened, and how far that average must move to justify re-solving.
 const HEAD_WIDTH_SAMPLES = 90
 const HEAD_WIDTH_RESOLVE_M = 0.004
+/** Samples required before the first solve, so the arms do not snap on frame one. */
+const HEAD_WIDTH_MIN_SAMPLES = 10
 export class RenderLoop {
   constructor(options = {}) {
     this.canvas = options.canvas ?? null
@@ -205,6 +208,13 @@ export class RenderLoop {
     // Each arm gets a pivot at its own hinge so it can be opened rigidly. Built
     // per model: a new model needs new pivots, and the old ones went with it.
     this._hinges = glassesRoot ? buildHinges(glassesRoot) : null
+
+    // The head's width survives a frame swap; the SOLVE does not. Without this
+    // the resolve latch below never releases -- it used to release by accident,
+    // because the old vertex measurement moved 22 mm between models and always
+    // blew past HEAD_WIDTH_RESOLVE_M. At 0.8 mm of spread it no longer does, and
+    // the new frame would keep its authored, unopened, uncurled arms all session.
+    this._splayForWidth = null
 
     if (this.glassesRoot && this.scene) {
       this.scene.add(this.glassesRoot)
@@ -892,11 +902,9 @@ export class RenderLoop {
     }
     armHeight /= this._hinges.length
 
-    // The head's half-width WHERE THE TEMPLE RUNS. Taking the whole occluder's
-    // maximum instead aims the arm at a shell vertex 25.6 mm above the ear plane
-    // reading 101.9 mm, while the temple rides 38.8 mm up where the face is
-    // 90.0 -- 12 mm of reach the arm does not need, which is what put it around
-    // the outside of the ear instead of along the head.
+    // The head's half-width WHERE THE TEMPLE RUNS, not at the head's widest
+    // point -- measuring anywhere else aims the arm at a different height than
+    // the one it actually needs to clear.
     // Cast, do not scan vertices. The shell is a few sparse rings, so the widest
     // vertex within a slab steps by ~5 mm as the slab catches a ring or falls
     // between two -- which put this same head at 72.5, 84.9 and 94.4 mm on three
@@ -907,9 +915,14 @@ export class RenderLoop {
       mesh.matrixWorld.elements,
       (this._shellWorld ??= new Float64Array(position.array.length)),
     )
+    // Only the SHELL's own triangles: the index buffer is the face tessellation
+    // followed by the shell (see SHELL_INDEX_START), and a cast against the whole
+    // thing hits the face mesh first -- it sits inboard of the shell wall, so the
+    // nearest-hit cast would measure the skin instead of the wall the temple
+    // actually has to clear.
     const headHalfWidth = halfWidthAt(
       world,
-      mesh.geometry.index.array,
+      mesh.geometry.index.array.subarray(SHELL_INDEX_START),
       [mid.x, mid.y, mid.z],
       [axX.x, axX.y, axX.z],
       [axY.x, axY.y, axY.z],
@@ -925,13 +938,17 @@ export class RenderLoop {
       return
     }
     // Average before acting. A head's width does not change but the MEASURED
-    // width does: inside this same gate it swings 110.6 to 128.9 mm on the mock
-    // purely from foreshortening, and the solve is no longer saturated, so that
-    // would now be visible movement rather than a number nobody sees.
+    // width does: inside this same gate the ray-cast reads 78.9 / 78.7 / 79.5 mm
+    // on the mock across the three known-good frames, and the solve is no longer
+    // saturated, so that would now be visible movement rather than a number
+    // nobody sees.
     this._headWidthCount = Math.min((this._headWidthCount ?? 0) + 1, HEAD_WIDTH_SAMPLES)
     this._headWidthMean = this._headWidthMean == null
       ? headHalfWidth
       : this._headWidthMean + (headHalfWidth - this._headWidthMean) / this._headWidthCount
+    if (this._headWidthCount < HEAD_WIDTH_MIN_SAMPLES) {
+      return
+    }
     if (this._splayForWidth != null && Math.abs(this._headWidthMean - this._splayForWidth) < HEAD_WIDTH_RESOLVE_M) {
       return
     }

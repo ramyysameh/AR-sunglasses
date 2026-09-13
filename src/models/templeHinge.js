@@ -86,7 +86,7 @@ export function selectArms(candidates, bounds) {
 
 /**
  * How far outside the occluder SHELL WALL the arm is placed, in world units
- * (~12.8 mm).
+ * (~14.8 mm).
  *
  * Absolute, not a fraction of the head. A ratio makes the gap scale with head
  * size, which is wrong on its face -- a temple grazes a large head by the same
@@ -121,9 +121,9 @@ export const TEMPLE_SHELL_CLEARANCE = 0.0148
 /**
  * Ceiling on the opening, radians (~34 deg).
  *
- * A guard on a bad head measurement, not a target. The solve asks for 28 degrees
- * at the widest frame-to-head ratio tested, so this sits clear of the working
- * range.
+ * A guard on a bad head measurement, not a target. The solve asks for 24.65
+ * degrees at the widest frame-to-head ratio in the current merchant band, so
+ * this sits clear of the working range.
  */
 export const MAX_SPLAY_RAD = 0.6
 
@@ -285,7 +285,6 @@ export function buildHinges(glassesRoot) {
       // frame and the head -- see solveSplay.
       armLateral: armLateralAt(rearMeshes.concat(frontMeshes), glassesRoot, cutZ),
       jointDepth: Math.abs(cutZ),
-      armThickness: armThicknessOf(rearMeshes.concat(frontMeshes), glassesRoot, hingeZ, cutZ),
       // The lean the rear segment ALREADY has, as the model was authored. This
       // is what lets one target angle suit every frame: a temple that already
       // hooks hard inward needs little curl added, one that runs straight back
@@ -309,41 +308,6 @@ const CUT_PLANE_EPSILON_M = 1e-4
 
 /** Half-thickness of the slice averaged to locate the arm at the joint. */
 const JOINT_SLICE_M = 0.004
-
-/**
- * How thick the arm is side-to-side, in the frame's own space.
- *
- * Sampled at three points along the run and taken as the median, so a chunky
- * hinge boss or a decorative flare does not stand in for the arm.
- *
- * This is what decides how much clearance the arm needs, which is not obvious
- * and is the opposite of what shape alone suggests -- see TEMPLE_GRAZE_*.
- */
-function armThicknessOf(meshes, glassesRoot, hingeZ, cutZ) {
-  const v = new THREE.Vector3()
-  const span = (hingeZ - cutZ) / TEMPLE_CUT_RATIO
-  const widths = []
-  for (const frac of [0.3, 0.5, 0.7]) {
-    const z = hingeZ - span * frac
-    let lo = Infinity, hi = -Infinity
-    for (const mesh of meshes) {
-      const attribute = mesh.geometry?.attributes?.position
-      if (!attribute) continue
-      for (let i = 0; i < attribute.count; i += 1) {
-        v.fromBufferAttribute(attribute, i)
-        mesh.localToWorld(v)
-        glassesRoot.worldToLocal(v)
-        if (Math.abs(v.z - z) > JOINT_SLICE_M / 2) continue
-        if (v.x < lo) lo = v.x
-        if (v.x > hi) hi = v.x
-      }
-    }
-    if (hi > lo) widths.push(hi - lo)
-  }
-  if (!widths.length) return 0
-  widths.sort((a, b) => a - b)
-  return widths[Math.floor(widths.length / 2)]
-}
 
 /**
  * Mean |lateral| of the arm where the joint cuts it, in the frame's own space.
@@ -475,12 +439,18 @@ function splitArm(mesh, group, cutZ) {
  *
  * What has to happen is a REACH: the arm starts at `armLateral` and must arrive
  * at the head's half-width plus a grazing margin, and the angle is whatever
- * delivers that at the joint. Validated by predicting before measuring --
+ * delivers that at the joint. Validated by predicting before measuring, under
+ * the formula in place at the time (headHalf x 1.16, since superseded by the
+ * ray-cast head-width measurement) --
  *
  *   frame scale     0.90    1.00    1.12
- *   predicted       28.6    20.0    14.5 deg
+ *   predicted       28.6    20.0    14.5 deg   <- headHalf x 1.16 (superseded)
  *   measured        28      18-20   12-16
  *   (at 0.90, 24 scores 2/7 and 28 scores 8/8; at 1.12, 20 scores 0/8)
+ *
+ * This table is historical evidence for that superseded formula, not a current
+ * prediction: under the shipped formula (TEMPLE_SHELL_CLEARANCE, ray-cast
+ * headHalf) the same three frame-scale cases solve to 19.3 / 13.6 / 8.3 deg.
  *
  * @param {number} headHalf measured head half-width, world units
  * @param {number} armLateral where the arm sits at the joint, world units
@@ -488,7 +458,7 @@ function splitArm(mesh, group, cutZ) {
  * @returns {number} radians
  */
 export function solveSplay(headHalf, armLateral, jointDepth) {
-  if (!(jointDepth > 0) || !(headHalf > 0)) return 0
+  if (!(jointDepth > 0) || !(headHalf > 0) || !Number.isFinite(armLateral)) return 0
   const reach = headHalf + TEMPLE_SHELL_CLEARANCE - armLateral
   // Clamped at zero, not allowed to go negative: a frame already wider than the
   // head asks for a negative reach, and honouring it would rotate the arm
