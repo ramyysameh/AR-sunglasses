@@ -43,7 +43,13 @@ const MAX_PLAUSIBLE_HEAD_HALF_M = 0.13
 // opened, and how far that average must move to justify re-solving.
 const HEAD_WIDTH_SAMPLES = 90
 const HEAD_WIDTH_RESOLVE_M = 0.004
-/** Samples required before the first solve, so the arms do not snap on frame one. */
+/**
+ * Samples required before the resolve latch is set, so the mean has settled
+ * before the solve stops being revisited. The SOLVE itself runs on every
+ * qualifying frame regardless -- gating the solve on this count instead meant
+ * a head that was near-frontal for only a few frames before turning away
+ * never got splay or curl at all.
+ */
 const HEAD_WIDTH_MIN_SAMPLES = 10
 export class RenderLoop {
   constructor(options = {}) {
@@ -946,9 +952,6 @@ export class RenderLoop {
     this._headWidthMean = this._headWidthMean == null
       ? headHalfWidth
       : this._headWidthMean + (headHalfWidth - this._headWidthMean) / this._headWidthCount
-    if (this._headWidthCount < HEAD_WIDTH_MIN_SAMPLES) {
-      return
-    }
     if (this._splayForWidth != null && Math.abs(this._headWidthMean - this._splayForWidth) < HEAD_WIDTH_RESOLVE_M) {
       return
     }
@@ -964,7 +967,15 @@ export class RenderLoop {
     applySplay(this._hinges, angle)
     applyCurl(this._hinges, TEMPLE_CURL_RAD)
     this.glassesRoot?.updateWorldMatrix(true, true)
-    this._splayForWidth = this._headWidthMean
+    // Latch only once the mean has samples behind it, so the first solve is not
+    // frozen in on a single measurement -- but SOLVE every qualifying frame
+    // regardless. Gating the solve itself on the count meant a head that turned
+    // away after five frames never got splay or curl at all: measured on WILLOW,
+    // headWidthCount 5, splay null, both hinge and curl rotations 0, and 44% of
+    // the temple hidden with earGapRatio +0.145.
+    if (this._headWidthCount >= HEAD_WIDTH_MIN_SAMPLES) {
+      this._splayForWidth = this._headWidthMean
+    }
     this._splayAngle = angle
   }
 
