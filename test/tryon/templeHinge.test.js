@@ -429,3 +429,65 @@ describe('occluder contract: a temple can never draw through the head', () => {
     }
   })
 })
+
+/**
+ * The gate for a newly uploaded merchant frame: nothing checks a new upload
+ * beyond this, so this is the last line of defense before a customer sees it.
+ */
+describe('solveSplay across the plausible range of merchant frames', () => {
+  const deg = (rad) => (rad * 180) / Math.PI
+  const HEAD = 0.0915   // ray-cast half-width of the shell, world units
+
+  /**
+   * The three known-good frames, plus the extremes a merchant could upload:
+   * every model is normalised to a 0.145 m frame width, so armLateral cannot
+   * stray far, but jointDepth follows the temple's own length.
+   */
+  const FRAMES = [
+    { name: 'gripz', armLateral: 0.0771, jointDepth: 0.1241 },
+    { name: 'larsson', armLateral: 0.0799, jointDepth: 0.1225 },
+    { name: 'willow', armLateral: 0.0753, jointDepth: 0.1339 },
+    { name: 'stub temple', armLateral: 0.0771, jointDepth: 0.0700 },
+    { name: 'long temple', armLateral: 0.0771, jointDepth: 0.1700 },
+    { name: 'narrow arms', armLateral: 0.0650, jointDepth: 0.1241 },
+    { name: 'wide arms', armLateral: 0.0900, jointDepth: 0.1241 },
+  ]
+
+  it('keeps every plausible frame inside a usable opening', () => {
+    // An upload that lands outside this band renders visibly wrong, and until
+    // now nothing would have caught it before a merchant saw it on a customer.
+    for (const frame of FRAMES) {
+      const angle = deg(solveSplay(HEAD, frame.armLateral, frame.jointDepth))
+      expect(angle, frame.name).toBeGreaterThanOrEqual(0)
+      expect(angle, frame.name).toBeLessThan(deg(MAX_SPLAY_RAD))
+    }
+  })
+
+  it('lands the three known-good frames within a few degrees of each other', () => {
+    const solved = FRAMES.slice(0, 3)
+      .map((f) => deg(solveSplay(HEAD, f.armLateral, f.jointDepth)))
+    expect(Math.max(...solved) - Math.min(...solved)).toBeLessThan(6)
+  })
+
+  it('opens a stubby temple more than a long one, never the reverse', () => {
+    // A short temple reaches the head at a steeper angle. If this inverts, the
+    // solve is keying on the wrong side of the triangle.
+    const stub = solveSplay(HEAD, 0.0771, 0.0700)
+    const long = solveSplay(HEAD, 0.0771, 0.1700)
+    expect(stub).toBeGreaterThan(long)
+  })
+
+  it('asks for nothing when the arms already sit outside the shell', () => {
+    // 0.1100 is genuinely wider than HEAD + TEMPLE_SHELL_CLEARANCE (0.1063), so
+    // the reach the solve computes is negative and clamps to zero.
+    expect(solveSplay(HEAD, 0.1100, 0.1241)).toBe(0)
+  })
+
+  it('pins the clearance to the value that was measured, not a derived one', () => {
+    // Every other test derives its expectation FROM this constant, so they all
+    // move together if it is fat-fingered. This is the only assertion that would
+    // catch 0.148 for 0.0148. The value comes from a harness sweep on three
+    // frames -- see the constant's own doc comment for the table.
+    expect(TEMPLE_SHELL_CLEARANCE).toBe(0.0148)
+  })
+})
