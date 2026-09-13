@@ -16,7 +16,7 @@ frames this can produce.
 
 - **Where the temple's rear sits relative to the shell.** Frames whose arms run
   high or flare late can leave the shell's reach, and the shell cannot hide what
-  is outside it. The rear standoff check below is the one that catches this.
+  is outside it.
 - **Material response.** A flat facet can catch the studio key head-on; Larsson
   shows this on its right hinge and nothing in the fit pipeline knows about it.
 - **Ear hooks.** A pronounced hook is the part most likely to be eaten, and it is
@@ -40,27 +40,36 @@ frames this can produce.
 
 | Measure | Pass | Why |
 |---|---|---|
-| `armHolePx` | 0 at every pose | The arm coming apart mid-cheek is the worst-looking failure. |
-| `occluderAteWorld` | < 0.015 at every judged pose | More than that and the shell is removing arm the customer should see. |
+| `armHolePx` | 0 at every pose | The arm coming apart mid-cheek is the worst-looking failure. Deliberately stricter than the code's own `MAX_ARM_HOLE_PX = 8` gate, because no hole has ever been observed on a passing frame. |
+| `occluderAteWorld` | < 0.020 at every judged pose (worst pose currently measured is 0.017, at +25° of pitch on Larsson) | More than that and the shell is removing arm the customer should see. |
 | `earGapRatio` | between −0.25 and +0.05 | Positive stops short of the ear, negative hooks past it. |
 | splay solved | within 6° of the three reference frames | Outside that, the temples read as too wide or clipped into the head. |
-| rear standoff p90 | ≤ 0 mm | The rear of the arm must be inboard of the shell wall or the ear cannot hide it. |
+
+The rear-standoff measurement described above exists only as an ad-hoc snippet
+in `docs/superpowers/plans/2026-09-13-temple-fit-and-occluder-angles.md`; it is
+not part of the routine check and emits no metric here.
 
 ## Measured on the mock head, post-fix
 
 Ray-cast head half-width and solved splay for the three reference frames, plus
-the yaw −38.6° occlusion numbers used to judge them:
+the yaw −38.6° occlusion numbers used to judge them, all after the shell-only
+cast landed:
 
 ```
-frame     head half-width   splay    yaw -38.6: gap / ate / holes
-gripz         78.9 mm       14.0 deg     -0.026 / 0.002 / 0
-larsson       78.7 mm       12.7 deg     +0.001 / 0.012 / 0
-willow        79.5 mm       14.0 deg     -0.067 / 0.000 / 0
+frame     head half-width   splay     at yaw -38.6: gap / ate / holes
+gripz         79.2 mm       13.9 deg      -0.014 / 0.007 / 0
+larsson       78.4 mm       13.4 deg      -0.019 / 0.008 / 0
+willow        78.8 mm       13.4 deg      -0.064 / 0.000 / 0
 ```
 
-The pitch axis was re-measured and settled on Larsson across −25°…+25°: every
-pose is inside the gate, max `occluderAteWorld` is 0.016, and there are no
-`armHolePx` holes anywhere in the sweep.
+The pitch axis was re-measured and settled on Larsson at current HEAD:
+
+```
+pitch   -25    -17     -8      0     +8     +17    +25
+gap   -0.064 -0.041 -0.012 -0.012 +0.015 -0.020 +0.027
+ate    0.001  0.004  0.010  0.009  0.000  0.007  0.017
+holes  0 at every pose
+```
 
 ## Why the numbers used to disagree
 

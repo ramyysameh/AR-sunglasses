@@ -94,22 +94,28 @@ export function castDistance(world, indices, origin, direction) {
  * @param {ArrayLike<number>} indices triangle indices
  * @param {number[]} origin a point near the mid-sagittal plane
  * @param {number[]} lateral side to side; need not be unit length
- * @param {number[]} up unit, perpendicular to lateral
+ * @param {number[]} up perpendicular to lateral; need not be unit length
  * @param {number} height how far above origin to measure
- * @returns {number | null} null if either cast misses, or if `lateral` has no
- *   length to normalise -- a half-measurement is worse than none, because the
- *   solve cannot tell the two apart
+ * @returns {number | null} null if either cast misses, or if `lateral` or `up`
+ *   has no length to normalise -- a half-measurement is worse than none,
+ *   because the solve cannot tell the two apart
  */
 export function halfWidthAt(world, indices, origin, lateral, up, height) {
+  // castDistance returns distance in units of |direction|. Both axes come off
+  // a filtered head quaternion, and a 2% norm drift there would be a 1.6 mm
+  // error against a 4 mm resolve threshold -- normalise here so the
+  // measurement cannot inherit the filter's own drift. `up` only scales the
+  // sampling origin's height rather than a cast direction, but the same drift
+  // still lands there: applyQuaternion does not renormalise, so `up` and
+  // `lateral` drift together with |q|^2.
+  const upLen = Math.hypot(up[0], up[1], up[2])
+  if (!(upLen > 0)) return null
+  const unitUp = [up[0] / upLen, up[1] / upLen, up[2] / upLen]
   const from = [
-    origin[0] + up[0] * height,
-    origin[1] + up[1] * height,
-    origin[2] + up[2] * height,
+    origin[0] + unitUp[0] * height,
+    origin[1] + unitUp[1] * height,
+    origin[2] + unitUp[2] * height,
   ]
-  // castDistance returns distance in units of |direction|. The caller's axis
-  // comes off a filtered head quaternion, and a 2% norm drift there would be a
-  // 1.6 mm error against a 4 mm resolve threshold -- normalise here so the
-  // measurement cannot inherit the filter's own drift.
   const len = Math.hypot(lateral[0], lateral[1], lateral[2])
   if (!(len > 0)) return null
   const unitLateral = [lateral[0] / len, lateral[1] / len, lateral[2] / len]

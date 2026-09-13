@@ -316,7 +316,7 @@ const JOINT_SLICE_M = 0.004
  * from. The two are not the same and only one of them is a property of the arm:
  * normalizeModel forces every model to the same 0.145 m front, so GRIPZ and
  * WILLOW both measure 85 mm across and tell you nothing, while their arms sit at
- * 78.6 mm and 78.9 mm -- which is the number the geometry actually turns on.
+ * 77.2 mm and 75.3 mm -- which is the number the geometry actually turns on.
  */
 function armLateralAt(meshes, glassesRoot, cutZ) {
   const v = new THREE.Vector3()

@@ -112,6 +112,16 @@ describe('halfWidthAt', () => {
     expect(halfWidthAt(world, indices, [0, 0, 0], [3, 0, 0], Y, 0)).toBeCloseTo(unit, 9)
   })
 
+  it('normalises the height axis too, not just the width axis', () => {
+    // `up` scales the sampling height, and it comes off the same filtered
+    // quaternion as `lateral` -- applyQuaternion does not renormalise, so both
+    // drift together with |q|^2.
+    const { positions, indices } = frustum()
+    const world = toWorldPositions(positions, IDENTITY)
+    const unit = halfWidthAt(world, indices, [0, 0, 0], X, Y, 0.02)
+    expect(halfWidthAt(world, indices, [0, 0, 0], X, [0, 4, 0], 0.02)).toBeCloseTo(unit, 9)
+  })
+
   it('returns null rather than dividing by zero on a degenerate axis', () => {
     const { positions, indices } = frustum()
     const world = toWorldPositions(positions, IDENTITY)

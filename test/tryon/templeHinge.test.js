@@ -27,10 +27,11 @@ function attr(points) {
 
 describe('solveSplay', () => {
   const deg = (rad) => (rad * 180) / Math.PI
-  // The engine's own measurements on the mock head, in world units.
-  const HEAD = 0.0841      // ray-cast half-width of the shell
-  const ARM = 0.0772       // where the arm sits at the joint
-  const JOINT = 0.1241     // how far back the joint is
+  // Measured in the harness on the mock head, `?probe=1&mock=turn`, after the
+  // shell-only cast landed.
+  const HEAD = 0.0919   // ray-cast shell half-width on the mock head, world units
+  const ARM = 0.0772    // gripz, at the joint, after model scale
+  const JOINT = 0.1243  // gripz
 
   it('places the arm outside the SHELL, which is what culls it', () => {
     // Aiming at the skin instead put the arm inside the shell, and the shell ate
@@ -43,7 +44,7 @@ describe('solveSplay', () => {
   it('gives two frames on the same head nearly the same opening', () => {
     // The whole point. Two frames differing only in where their arms sit
     // should differ in splay by a few degrees, not by fifteen.
-    const gripz = deg(solveSplay(HEAD, 0.0772, 0.1241))
+    const gripz = deg(solveSplay(HEAD, 0.0772, 0.1243))
     const willow = deg(solveSplay(HEAD, 0.0753, 0.1339))
     expect(Math.abs(gripz - willow)).toBeLessThan(6)
   })
@@ -439,7 +440,9 @@ describe('occluder contract: a temple can never draw through the head', () => {
  */
 describe('solveSplay across the plausible range of merchant frames', () => {
   const deg = (rad) => (rad * 180) / Math.PI
-  const HEAD = 0.0915   // ray-cast half-width of the shell, world units
+  // Measured in the harness on the mock head, `?probe=1&mock=turn`, after the
+  // shell-only cast landed.
+  const HEAD = 0.0919   // ray-cast shell half-width on the mock head, world units
 
   /**
    * The three known-good frames, plus the extremes a merchant could upload:
@@ -447,11 +450,11 @@ describe('solveSplay across the plausible range of merchant frames', () => {
    * stray far, but jointDepth follows the temple's own length.
    */
   const FRAMES = [
-    { name: 'gripz', armLateral: 0.0771, jointDepth: 0.1241 },
+    { name: 'gripz', armLateral: 0.0772, jointDepth: 0.1243 },
     { name: 'larsson', armLateral: 0.0799, jointDepth: 0.1225 },
     { name: 'willow', armLateral: 0.0753, jointDepth: 0.1339 },
-    { name: 'stub temple', armLateral: 0.0771, jointDepth: 0.0700 },
-    { name: 'long temple', armLateral: 0.0771, jointDepth: 0.1700 },
+    { name: 'stub temple', armLateral: 0.0772, jointDepth: 0.0700 },
+    { name: 'long temple', armLateral: 0.0772, jointDepth: 0.1700 },
     { name: 'narrow arms', armLateral: 0.0650, jointDepth: 0.1241 },
     { name: 'wide arms', armLateral: 0.0900, jointDepth: 0.1241 },
   ]
@@ -478,13 +481,13 @@ describe('solveSplay across the plausible range of merchant frames', () => {
   it('opens a stubby temple more than a long one, never the reverse', () => {
     // A short temple reaches the head at a steeper angle. If this inverts, the
     // solve is keying on the wrong side of the triangle.
-    const stub = solveSplay(HEAD, 0.0771, 0.0700)
-    const long = solveSplay(HEAD, 0.0771, 0.1700)
+    const stub = solveSplay(HEAD, 0.0772, 0.0700)
+    const long = solveSplay(HEAD, 0.0772, 0.1700)
     expect(stub).toBeGreaterThan(long)
   })
 
   it('asks for nothing when the arms already sit outside the shell', () => {
-    // 0.1100 is genuinely wider than HEAD + TEMPLE_SHELL_CLEARANCE (0.1063), so
+    // 0.1100 is genuinely wider than HEAD + TEMPLE_SHELL_CLEARANCE (0.1067), so
     // the reach the solve computes is negative and clamps to zero.
     expect(solveSplay(HEAD, 0.1100, 0.1241)).toBe(0)
   })
