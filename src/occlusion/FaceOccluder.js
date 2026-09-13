@@ -2,6 +2,7 @@
  * Landmark-derived invisible face shell that writes depth for glasses occlusion.
  */
 import * as THREE from 'three'
+import { TEMPLE_FLOOR_DEPTH, templeFloorMatrix } from './templeFloor.js'
 import { FaceLandmarker } from '@mediapipe/tasks-vision'
 import {
   FACE_OVAL_RING,
@@ -114,10 +115,27 @@ function createOcclusionGeometry() {
  */
 export const OCCLUDER_RENDER_ORDER = -1
 
+/**
+ * The FLOOR under the lifted temple: a second depth-only copy of the shell,
+ * pushed away from the camera, drawn before everything.
+ *
+ * The near temple is lifted ahead of the shell so the shell cannot eat an arm
+ * resting on the head -- and nothing then bounded how DEEP that arm could be. In
+ * front of the ear it drew whatever its geometry did, skull or no skull. This
+ * draws first, so a lifted arm survives only in the band between the two
+ * surfaces and is occluded once it passes below the floor.
+ *
+ * See templeFloor.js for how deep temples actually go, and why the band cannot
+ * simply be closed to zero.
+ */
+export const INNER_OCCLUDER_RENDER_ORDER = -3
+
+
 export class FaceOccluder {
   constructor(options = {}) {
     this.scene = null
     this.occluderMesh = null
+    this.innerOccluderMesh = null
     this.shellDepthRatio = Number.isFinite(options.shellDepthRatio)
       ? options.shellDepthRatio
       : resolveShellDepthRatio(typeof window !== 'undefined' ? window.location.search : '')
@@ -167,7 +185,22 @@ export class FaceOccluder {
       material.color.setHex(0xff2266)
     }
 
+    // Shares the geometry, so it tracks every landmark update for free. Only
+    // the matrix differs, and it is depth-only like its outer twin.
+    this.innerOccluderMesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+      colorWrite: false,
+      depthWrite: true,
+      depthTest: true,
+      side: THREE.DoubleSide,
+    }))
+    this.innerOccluderMesh.renderOrder = INNER_OCCLUDER_RENDER_ORDER
+    this.innerOccluderMesh.matrixAutoUpdate = false
+    this.innerOccluderMesh.frustumCulled = false
+    this.innerOccluderMesh.visible = false
+    this.innerOccluderMesh.matrix.identity()
+
     this.scene.add(this.occluderMesh)
+    this.scene.add(this.innerOccluderMesh)
 
     return this
   }
@@ -419,11 +452,51 @@ export class FaceOccluder {
     if (this.occluderMesh) {
       this.occluderMesh.visible = false
     }
+    if (this.innerOccluderMesh) {
+      this.innerOccluderMesh.visible = false
+    }
   }
 
   show() {
     if (this.occluderMesh) {
       this.occluderMesh.visible = true
     }
+    // Comes back WITH the shell. hide()/show() around a measurement pass would
+    // otherwise leave the floor off until the next aim, and a frame with the
+    // shell up and its floor down is a frame where a temple may draw through
+    // the head -- precisely the state the floor exists to rule out.
+    if (this.innerOccluderMesh) {
+      this.innerOccluderMesh.visible = this._floorAimed === true
+    }
   }
+
+  /**
+   * Aims the floor down the camera axis, and turns it on.
+   *
+   * Left OFF until aimed. The floor draws before everything else, so one still
+   * carrying the previous frame's matrix writes depth in the wrong place and
+   * punches a hole through whatever now occupies it.
+   *
+   * @param {{x:number,y:number,z:number}|null} viewDirection unit vector from
+   *   the camera into the scene; null turns the floor off
+   * @param {number} [bound] how far behind the head surface the floor sits
+   */
+  aimTempleFloor(viewDirection, bound = TEMPLE_FLOOR_DEPTH) {
+    const mesh = this.innerOccluderMesh
+    if (!mesh) return
+    if (!viewDirection || !(bound > 0)) {
+      this._floorAimed = false
+      mesh.visible = false
+      return
+    }
+    mesh.matrix.fromArray(templeFloorMatrix(
+      [viewDirection.x, viewDirection.y, viewDirection.z],
+      bound,
+      this._floorElements ??= new Array(16),
+    ))
+    mesh.matrixWorldNeedsUpdate = true
+    this._floorAimed = true
+    mesh.visible = Boolean(this.occluderMesh?.visible)
+  }
+
 }

@@ -959,6 +959,7 @@ export class RenderLoop {
     }
     const position = this.faceOccluder.occluderMesh.geometry.attributes.position
     if (!this.faceOccluder.occluderMesh.visible || position.count <= Math.max(...EAR_LANDMARKS)) {
+      this.faceOccluder.aimTempleFloor(null)
       applyNearArmClip(this._hinges, 0, null, null)
       return
     }
@@ -966,6 +967,7 @@ export class RenderLoop {
     const yaw = THREE.MathUtils.radToDeg(this.headYaw ?? 0)
     const nearSide = Math.abs(yaw) < NEAR_ARM_YAW_DEG ? 0 : (yaw >= 0 ? -1 : 1)
     if (nearSide === 0) {
+      this.faceOccluder.aimTempleFloor(null)
       applyNearArmClip(this._hinges, 0, null, null)
       return
     }
@@ -984,6 +986,7 @@ export class RenderLoop {
       { origin: (this._clipMid ??= new THREE.Vector3()), forward: (this._clipForward ??= new THREE.Vector3()) },
     )
     if (!frame) {
+      this.faceOccluder.aimTempleFloor(null)
       applyNearArmClip(this._hinges, 0, null, null)
       return
     }
@@ -1000,6 +1003,14 @@ export class RenderLoop {
       (this._clipBack ??= new THREE.Vector3()).copy(frame.forward).negate(),
       cutAt,
     )
+    // The floor under the lifted arm. Aimed here because this is where the head
+    // frame already exists, and only on the path that actually lifts something:
+    // an inner shell left on while nothing is lifted is pure cost, and one left
+    // aimed at a stale head punches a hole wherever that head used to be.
+    this.faceOccluder.aimTempleFloor(
+      this.camera.getWorldDirection((this._floorView ??= new THREE.Vector3())),
+    )
+
     applyNearArmClip(this._hinges, nearSide, plane, behind)
   }
 
