@@ -4,6 +4,7 @@
 import * as THREE from 'three'
 import { NEAR_ARM_YAW_DEG, TEMPLE_CURL_RAD, TEMPLE_CUT_BEHIND_EAR_M, applyCurl, applyNearArmClip, applyOffset, applySplay, buildHinges, solveSplay } from '../models/templeHinge.js'
 import { EAR_LANDMARKS, EYE_LANDMARKS, NOSE_LANDMARK, headFrame } from '../occlusion/headFrame.js'
+import { halfWidthAt, toWorldPositions } from '../occlusion/headWidth.js'
 import { scaleMultiplier, xOffset, yOffset, zOffset, rotOffsetX, rotOffsetY, rotOffsetZ, trackingSmoothness } from '../config/poseConfig.js'
 import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
@@ -41,11 +42,6 @@ const MAX_PLAUSIBLE_HEAD_HALF_M = 0.13
 // opened, and how far that average must move to justify re-solving.
 const HEAD_WIDTH_SAMPLES = 90
 const HEAD_WIDTH_RESOLVE_M = 0.004
-// Half-thickness of the horizontal slab the head is measured in, at the temple's
-// own height: wide enough to always catch face-mesh vertices, narrow enough not
-// to reach the shell's ear ring.
-const HEAD_SLAB_HALF_M = 0.008
-
 export class RenderLoop {
   constructor(options = {}) {
     this.canvas = options.canvas ?? null
@@ -901,14 +897,26 @@ export class RenderLoop {
     // reading 101.9 mm, while the temple rides 38.8 mm up where the face is
     // 90.0 -- 12 mm of reach the arm does not need, which is what put it around
     // the outside of the ear instead of along the head.
-    let headHalfWidth = 0
-    for (let i = 0; i < position.count; i += 1) {
-      const dx = position.getX(i) - mid.x
-      const dy = position.getY(i) - mid.y
-      const dz = position.getZ(i) - mid.z
-      if (Math.abs(dx * axY.x + dy * axY.y + dz * axY.z - armHeight) > HEAD_SLAB_HALF_M) continue
-      const d = Math.abs(dx * axX.x + dy * axX.y + dz * axX.z)
-      if (d > headHalfWidth) headHalfWidth = d
+    // Cast, do not scan vertices. The shell is a few sparse rings, so the widest
+    // vertex within a slab steps by ~5 mm as the slab catches a ring or falls
+    // between two -- which put this same head at 72.5, 84.9 and 94.4 mm on three
+    // different frames, purely because their temples ride at different heights.
+    const mesh = this.faceOccluder.occluderMesh
+    const world = toWorldPositions(
+      position.array,
+      mesh.matrixWorld.elements,
+      (this._shellWorld ??= new Float64Array(position.array.length)),
+    )
+    const headHalfWidth = halfWidthAt(
+      world,
+      mesh.geometry.index.array,
+      [mid.x, mid.y, mid.z],
+      [axX.x, axX.y, axX.z],
+      [axY.x, axY.y, axY.z],
+      armHeight,
+    )
+    if (headHalfWidth == null) {
+      return
     }
     // A plausible human half-head is ~0.05-0.13 m in this space. Outside that
     // the occluder was not ready, and acting on it opens the arms to fit a head
