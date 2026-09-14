@@ -10,26 +10,35 @@ import ModelViewer from './ModelViewer'
 // can be null here -- render the explanation without them rather than break.
 export default function PreviewPanel({ mapping }) {
   return (
-    <s-stack direction="block" gap="base" alignItems="center">
-      <ModelViewer
-        src={`/models/${mapping.modelAssetId}/fit-preview.glb`}
-        alt="Your frames on a reference head"
-      />
-      <s-paragraph tone="subdued">
-        If the frames look too small or too large here, adjust Glasses size in the
-        block settings in your theme editor.
-      </s-paragraph>
-      <s-paragraph>Scan to try it on your phone.</s-paragraph>
-      {mapping.qr ? (
-        <img src={mapping.qr} alt="QR code linking to the try-on preview" width="220" height="220" />
-      ) : (
-        <s-paragraph tone="subdued">Preview link unavailable right now. Try again shortly.</s-paragraph>
-      )}
-      {mapping.previewUrl && (
-        <s-paragraph>
-          <a href={mapping.previewUrl} target="_blank" rel="noreferrer">Open on this computer</a>
+    <s-stack direction="block" gap="large-100">
+      <s-stack direction="block" gap="base" alignItems="center">
+        <s-heading>Try it on your phone</s-heading>
+        <s-paragraph>Scan this code to open the camera try-on.</s-paragraph>
+        {mapping.qr ? (
+          <img src={mapping.qr} alt="QR code linking to the try-on preview" width="220" height="220" />
+        ) : (
+          <s-banner heading="Phone preview unavailable" tone="warning">
+            Refresh the page and try again.
+          </s-banner>
+        )}
+        {mapping.previewUrl && (
+          <s-button href={mapping.previewUrl} target="_blank" icon="external">
+            Open on this computer
+          </s-button>
+        )}
+      </s-stack>
+
+      <s-stack direction="block" gap="base">
+        <s-heading>Check the fit</s-heading>
+        <ModelViewer
+          src={`/models/${mapping.modelAssetId}/fit-preview.glb`}
+          alt="Your frames on a reference head"
+        />
+        <s-paragraph color="subdued">
+          If the frames look too small or too large here, adjust Glasses size in the
+          block settings in your theme editor.
         </s-paragraph>
-      )}
+      </s-stack>
     </s-stack>
   )
 }

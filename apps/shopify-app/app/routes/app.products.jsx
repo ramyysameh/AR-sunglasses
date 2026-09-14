@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+/* eslint-disable react/prop-types -- route-local modal components consume loader-shaped data */
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useFetcher, useLoaderData } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
@@ -142,7 +143,12 @@ export const action = async ({ request }) => {
       await publishMapping(admin, productId)
     } catch (e) {
       console.error('try-on metafield publish failed', e)
-      return { error: "Added, but try-on couldn't be turned on for your storefront. Try again." }
+      return {
+        error: "Added, but try-on couldn't be turned on for your storefront. Try again.",
+        retryable: true,
+        productId,
+        modelAssetId,
+      }
     }
     return { mapped: true }
   }
@@ -154,15 +160,15 @@ export const action = async ({ request }) => {
   if (!productId) {
     return { error: 'Missing product to remove.' }
   }
-  await prisma.productMapping.deleteMany({ where: { shop: session.shop, productId } })
-  // A metafield left behind keeps the block on the page, where it now opens to
-  // a 404 from /api/tryon-config -- worse than either end state.
+  // Unpublish first so a Shopify failure leaves the database mapping in place.
+  // The row and its modal then survive revalidation and the merchant can retry.
   try {
     await unpublishMapping(admin, productId)
   } catch (e) {
     console.error('try-on metafield unpublish failed', e)
-    return { error: "Try-on removed, but it may still show on your storefront. Try again." }
+    return { error: "Try-on couldn't be removed from your storefront. Nothing was changed; try again." }
   }
+  await prisma.productMapping.deleteMany({ where: { shop: session.shop, productId } })
   return { unmapped: true }
 }
 
@@ -170,24 +176,233 @@ function modelName(a) {
   return a.label || a.filename || `Model ${a.id.slice(0, 8)}`
 }
 
+function retryMatches(data, productId, modelAssetId) {
+  return Boolean(
+    data?.retryable
+    && data.productId === productId
+    && data.modelAssetId === modelAssetId,
+  )
+}
+
+export function mappingSubmitDisabled({
+  productId,
+  modelAssetId,
+  currentModelAssetId = null,
+  atLimit = false,
+  result = null,
+}) {
+  if (!productId || !modelAssetId) return true
+  const retryable = retryMatches(result, productId, modelAssetId)
+  if (retryable) return false
+  if (currentModelAssetId) return currentModelAssetId === modelAssetId
+  return atLimit
+}
+
+export function mappingModalReducer(state, action) {
+  if (action.type === 'open') {
+    return { mappingId: action.mappingId, session: state.session + 1 }
+  }
+  if (action.type === 'dismiss') {
+    return { mappingId: null, session: state.session + 1 }
+  }
+  return state
+}
+
+function useAfterHide(onAfterHide) {
+  const modalRef = useRef(null)
+
+  useEffect(() => {
+    const modal = modalRef.current
+    if (!modal) return undefined
+    modal.addEventListener('afterhide', onAfterHide)
+    return () => modal.removeEventListener('afterhide', onAfterHide)
+  }, [onAfterHide])
+
+  return modalRef
+}
+
+function ChangeModelModalContent({ mapping, assets }) {
+  const fetcher = useFetcher()
+  const shopify = useAppBridge()
+  const [modelAssetId, setModelAssetId] = useState(mapping?.modelAssetId ?? '')
+  const error = fetcher.data?.error
+  const retryable = retryMatches(fetcher.data, mapping?.productId, modelAssetId)
+  const disabled = mappingSubmitDisabled({
+    productId: mapping?.productId,
+    modelAssetId,
+    currentModelAssetId: mapping?.modelAssetId,
+    result: fetcher.data,
+  })
+
+  useEffect(() => {
+    if (!fetcher.data?.mapped) return
+    shopify.toast.show('Model changed')
+    shopify.modal.hide('change-model')
+  }, [fetcher.data, shopify])
+
+  const changeModel = () => {
+    if (disabled) return
+    fetcher.submit(
+      { intent: 'map', productId: mapping.productId, modelAssetId },
+      { method: 'POST' },
+    )
+  }
+
+  return (
+    <>
+      <s-stack direction="block" gap="base">
+        <s-paragraph>
+          Choose the frames that should appear when shoppers use try-on for this product.
+        </s-paragraph>
+        {mapping && (
+          <ModelPicker assets={assets} value={modelAssetId} onChange={setModelAssetId} />
+        )}
+        {error && <s-banner heading="Could not change model" tone="critical">{error}</s-banner>}
+      </s-stack>
+      <s-button
+        slot="secondary-actions"
+        commandFor="change-model"
+        command="--hide"
+      >
+        Cancel
+      </s-button>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        onClick={changeModel}
+        disabled={disabled}
+        {...(fetcher.state !== 'idle' ? { loading: true } : {})}
+      >
+        {retryable ? 'Try again' : 'Change model'}
+      </s-button>
+    </>
+  )
+}
+
+function ChangeModelModal({ mapping, assets, session, onDismiss }) {
+  const modalRef = useAfterHide(onDismiss)
+
+  return (
+    <s-modal
+      ref={modalRef}
+      id="change-model"
+      heading={`Change model for ${mapping?.product?.title ?? 'product'}`}
+    >
+      <ChangeModelModalContent key={session} mapping={mapping} assets={assets} />
+    </s-modal>
+  )
+}
+
+function RemoveTryOnModalContent({ mapping }) {
+  const fetcher = useFetcher()
+  const shopify = useAppBridge()
+  const error = fetcher.data?.error
+
+  useEffect(() => {
+    if (!fetcher.data?.unmapped) return
+    shopify.toast.show('Try-on removed')
+    shopify.modal.hide('remove-tryon')
+  }, [fetcher.data, shopify])
+
+  const removeTryOn = () => {
+    if (!mapping) return
+    fetcher.submit(
+      { intent: 'unmap', productId: mapping.productId },
+      { method: 'POST' },
+    )
+  }
+
+  return (
+    <>
+      <s-stack direction="block" gap="base">
+        <s-paragraph>
+          Shoppers will no longer be able to try these frames on from this product page.
+        </s-paragraph>
+        {error && <s-banner heading="Could not remove try-on" tone="critical">{error}</s-banner>}
+      </s-stack>
+      <s-button
+        slot="secondary-actions"
+        commandFor="remove-tryon"
+        command="--hide"
+      >
+        Cancel
+      </s-button>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        tone="critical"
+        onClick={removeTryOn}
+        disabled={!mapping}
+        {...(fetcher.state !== 'idle' ? { loading: true } : {})}
+      >
+        Remove try-on
+      </s-button>
+    </>
+  )
+}
+
+function RemoveTryOnModal({ mapping, session, onDismiss }) {
+  const modalRef = useAfterHide(onDismiss)
+
+  return (
+    <s-modal
+      ref={modalRef}
+      id="remove-tryon"
+      heading={`Remove try-on from ${mapping?.product?.title ?? 'this product'}?`}
+    >
+      <RemoveTryOnModalContent key={session} mapping={mapping} />
+    </s-modal>
+  )
+}
+
 export default function Products() {
   const { mappings, assets, usage, themeUrl } = useLoaderData()
-  const unmapFetcher = useFetcher()
   const shopify = useAppBridge()
 
   const mapFetcher = useFetcher()
   const [picked, setPicked] = useState(null)
   const [modelAssetId, setModelAssetId] = useState('')
+  const [changeModal, dispatchChangeModal] = useReducer(mappingModalReducer, {
+    mappingId: null,
+    session: 0,
+  })
+  const [removeModal, dispatchRemoveModal] = useReducer(mappingModalReducer, {
+    mappingId: null,
+    session: 0,
+  })
   const mapError = mapFetcher.data?.error
+  const mapRetryable = retryMatches(mapFetcher.data, picked?.id, modelAssetId)
+  const mapDisabled = mappingSubmitDisabled({
+    productId: picked?.id,
+    modelAssetId,
+    atLimit: usage.atLimit,
+    result: mapFetcher.data,
+  })
+  const changeMapping = mappings.find((mapping) => mapping.id === changeModal.mappingId) ?? null
+  const removeMapping = mappings.find((mapping) => mapping.id === removeModal.mappingId) ?? null
+  const dismissChangeModal = useCallback(() => {
+    dispatchChangeModal({ type: 'dismiss' })
+  }, [])
+  const dismissRemoveModal = useCallback(() => {
+    dispatchRemoveModal({ type: 'dismiss' })
+  }, [])
 
   useEffect(() => {
     if (mapFetcher.data?.mapped) {
       shopify.toast.show('Try-on added')
       setPicked(null)
       setModelAssetId('')
-      document.getElementById('add-tryon')?.hide()
+      shopify.modal.hide('add-tryon')
     }
   }, [mapFetcher.data, shopify])
+
+  useEffect(() => {
+    if (changeModal.mappingId) shopify.modal.show('change-model')
+  }, [changeModal.mappingId, changeModal.session, shopify])
+
+  useEffect(() => {
+    if (removeModal.mappingId) shopify.modal.show('remove-tryon')
+  }, [removeModal.mappingId, removeModal.session, shopify])
 
   const pickProduct = async () => {
     const selection = await shopify.resourcePicker({ type: 'product', action: 'select' })
@@ -198,22 +413,39 @@ export default function Products() {
   }
 
   const submitMapping = () => {
-    if (!picked?.id || !modelAssetId) return
+    if (mapDisabled) return
     mapFetcher.submit({ intent: 'map', productId: picked.id, modelAssetId }, { method: 'POST' })
   }
 
-  useEffect(() => {
-    if (unmapFetcher.data?.unmapped) shopify.toast.show('Try-on removed')
-    if (unmapFetcher.data?.error) shopify.toast.show(unmapFetcher.data.error, { isError: true })
-  }, [unmapFetcher.data, shopify])
-
-  const remove = (productId) => unmapFetcher.submit({ intent: 'unmap', productId }, { method: 'POST' })
+  const liveCount = mappings.filter((mapping) => mapping.status.id === 'live').length
+  const attentionCount = mappings.length - liveCount
+  const usageText = usage.unlimited
+    ? `${usage.used} product${usage.used === 1 ? '' : 's'} using try-on`
+    : `${usage.used} of ${usage.limit} products using try-on`
 
   return (
     <s-page heading="Products">
-      <s-button slot="primary-action" commandFor="add-tryon" command="show" disabled={usage.atLimit}>
+      <s-button slot="primary-action" commandFor="add-tryon" command="--show" disabled={usage.atLimit}>
         Add try-on
       </s-button>
+
+      <s-section>
+        <s-box padding="base" background="subdued" borderRadius="base">
+          <s-stack direction="inline" gap="base" alignItems="center">
+            <s-text type="strong">{usage.planName ?? 'No active plan'}</s-text>
+            <s-text>{usageText}</s-text>
+            {mappings.length > 0 && (
+              <s-text color="subdued">
+                {liveCount} live, {attentionCount} need{attentionCount === 1 ? 's' : ''} attention
+              </s-text>
+            )}
+            {usage.atLimit && <s-badge tone="warning">Limit reached</s-badge>}
+            {usage.pricingUrl && (
+              <a href={usage.pricingUrl} target="_top" rel="noreferrer">Upgrade</a>
+            )}
+          </s-stack>
+        </s-box>
+      </s-section>
 
       <s-modal id="add-tryon" heading="Add try-on to a product">
         <s-stack direction="block" gap="base">
@@ -237,13 +469,17 @@ export default function Products() {
           <ModelPicker assets={assets} value={modelAssetId} onChange={setModelAssetId} />
           {mapError && <s-banner heading="Could not add try-on" tone="critical">{mapError}</s-banner>}
         </s-stack>
+        <s-button slot="secondary-actions" commandFor="add-tryon" command="--hide">
+          Cancel
+        </s-button>
         <s-button
           slot="primary-action"
           variant="primary"
           onClick={submitMapping}
+          disabled={mapDisabled}
           {...(mapFetcher.state !== 'idle' ? { loading: true } : {})}
         >
-          Add try-on
+          {mapRetryable ? 'Try again' : 'Add try-on'}
         </s-button>
       </s-modal>
 
@@ -286,12 +522,30 @@ export default function Products() {
                   </s-table-cell>
                   <s-table-cell>
                     <s-stack direction="inline" gap="small-500">
-                      <s-button variant="tertiary" commandFor={`preview-${m.id}`} command="show">
+                      <s-button commandFor={`preview-${m.id}`} command="--show">
                         Preview
                       </s-button>
-                      <s-button variant="tertiary" tone="critical" icon="delete" onClick={() => remove(m.productId)}>
-                        Remove
-                      </s-button>
+                      <s-button
+                        variant="tertiary"
+                        icon="menu-vertical"
+                        accessibilityLabel={`Actions for ${m.product?.title ?? 'product'}`}
+                        commandFor={`actions-${m.id}`}
+                      ></s-button>
+                      <s-menu id={`actions-${m.id}`} accessibilityLabel={`Actions for ${m.product?.title ?? 'product'}`}>
+                        <s-button
+                          icon="edit"
+                          onClick={() => dispatchChangeModal({ type: 'open', mappingId: m.id })}
+                        >
+                          Change model
+                        </s-button>
+                        <s-button
+                          icon="delete"
+                          tone="critical"
+                          onClick={() => dispatchRemoveModal({ type: 'open', mappingId: m.id })}
+                        >
+                          Remove try-on
+                        </s-button>
+                      </s-menu>
                     </s-stack>
                   </s-table-cell>
                 </s-table-row>
@@ -304,6 +558,17 @@ export default function Products() {
             <PreviewPanel mapping={m} />
           </s-modal>
         ))}
+        <ChangeModelModal
+          mapping={changeMapping}
+          assets={assets}
+          session={changeModal.session}
+          onDismiss={dismissChangeModal}
+        />
+        <RemoveTryOnModal
+          mapping={removeMapping}
+          session={removeModal.session}
+          onDismiss={dismissRemoveModal}
+        />
       </s-section>
     </s-page>
   )

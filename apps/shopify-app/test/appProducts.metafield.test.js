@@ -115,6 +115,7 @@ describe('map action', () => {
     const res = await action({ request: form('map', { productId, modelAssetId }) })
 
     expect(res.mapped).toBeUndefined()
+    expect(res).toMatchObject({ retryable: true, productId, modelAssetId })
     expect(res.error).toMatch(/storefront/i)
     expect(await prisma.productMapping.count({ where: { shop, productId } })).toBe(1)
   })
