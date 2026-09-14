@@ -842,8 +842,10 @@ export default function Index() {
 
 - [ ] **Step 6: Run lint and the full suite**
 
-Run: `npm run lint && npm test`
-Expected: PASS.
+Run: `npx eslint <the files you changed>` then the test files this task names.
+Expected: eslint exits 0 on your files, tests PASS.
+
+Do NOT run `npm run lint` (931 pre-existing repo-wide errors from a vendored Draco decoder and missing globals config — it can never pass) or the full `npm test` (slow, and flaky from a concurrent session sharing the database).
 
 - [ ] **Step 7: Commit**
 
@@ -1141,8 +1143,10 @@ In `app/routes/app.jsx`, replace the `<s-app-nav>` block with:
 
 - [ ] **Step 7: Run lint and the full suite**
 
-Run: `npm run lint && npm test`
-Expected: PASS.
+Run: `npx eslint <the files you changed>` then the test files this task names.
+Expected: eslint exits 0 on your files, tests PASS.
+
+Do NOT run `npm run lint` (931 pre-existing repo-wide errors from a vendored Draco decoder and missing globals config — it can never pass) or the full `npm test` (slow, and flaky from a concurrent session sharing the database).
 
 - [ ] **Step 8: Commit**
 
@@ -1472,8 +1476,10 @@ and add `assets` and `usage` to the `useLoaderData()` destructure.
 
 - [ ] **Step 8: Run lint and the full suite**
 
-Run: `npm run lint && npm test`
-Expected: PASS.
+Run: `npx eslint <the files you changed>` then the test files this task names.
+Expected: eslint exits 0 on your files, tests PASS.
+
+Do NOT run `npm run lint` (931 pre-existing repo-wide errors from a vendored Draco decoder and missing globals config — it can never pass) or the full `npm test` (slow, and flaky from a concurrent session sharing the database).
 
 - [ ] **Step 9: Manual check**
 
@@ -1797,8 +1803,10 @@ Also delete the now-unused `Map a product to a model` and `Product mappings` sec
 
 - [ ] **Step 4: Run lint and the full suite**
 
-Run: `npm run lint && npm test`
-Expected: PASS.
+Run: `npx eslint <the files you changed>` then the test files this task names.
+Expected: eslint exits 0 on your files, tests PASS.
+
+Do NOT run `npm run lint` (931 pre-existing repo-wide errors from a vendored Draco decoder and missing globals config — it can never pass) or the full `npm test` (slow, and flaky from a concurrent session sharing the database).
 
 - [ ] **Step 5: Commit**
 
@@ -1974,8 +1982,10 @@ and immediately after the `</s-table-row>`'s closing, outside the table, render 
 
 - [ ] **Step 8: Run lint and the full suite**
 
-Run: `npm run lint && npm test`
-Expected: PASS.
+Run: `npx eslint <the files you changed>` then the test files this task names.
+Expected: eslint exits 0 on your files, tests PASS.
+
+Do NOT run `npm run lint` (931 pre-existing repo-wide errors from a vendored Draco decoder and missing globals config — it can never pass) or the full `npm test` (slow, and flaky from a concurrent session sharing the database).
 
 - [ ] **Step 9: Manual check**
 
@@ -2167,8 +2177,10 @@ and inside the returned stack, before the QR paragraph:
 
 - [ ] **Step 8: Run lint and the full suite**
 
-Run: `npm run lint && npm test`
-Expected: PASS.
+Run: `npx eslint <the files you changed>` then the test files this task names.
+Expected: eslint exits 0 on your files, tests PASS.
+
+Do NOT run `npm run lint` (931 pre-existing repo-wide errors from a vendored Draco decoder and missing globals config — it can never pass) or the full `npm test` (slow, and flaky from a concurrent session sharing the database).
 
 - [ ] **Step 9: Manual check**
 
@@ -2254,8 +2266,8 @@ export default function HelpPage() {
 
 - [ ] **Step 2: Run lint**
 
-Run: `npm run lint`
-Expected: PASS.
+Run: `npx eslint app/routes/app.additional.jsx`
+Expected: exits 0. Do NOT run `npm run lint` — 931 pre-existing repo-wide errors make it unpassable.
 
 - [ ] **Step 3: Commit**
 
@@ -2289,8 +2301,10 @@ Expected: every remaining call is a success message or an error with no matching
 
 - [ ] **Step 3: Run lint and the full suite**
 
-Run: `npm run lint && npm test`
-Expected: PASS.
+Run: `npx eslint <the files you changed>` then the test files this task names.
+Expected: eslint exits 0 on your files, tests PASS.
+
+Do NOT run `npm run lint` (931 pre-existing repo-wide errors from a vendored Draco decoder and missing globals config — it can never pass) or the full `npm test` (slow, and flaky from a concurrent session sharing the database).
 
 - [ ] **Step 4: Commit**
 
