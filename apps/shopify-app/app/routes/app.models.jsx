@@ -175,7 +175,6 @@ export default function Models() {
       revalidator.revalidate() // refresh the model list (no fetcher to auto-revalidate now)
     } catch (e) {
       setUploadErr(e.message)
-      shopify.toast.show(e.message, { isError: true })
     } finally {
       setProgress(null)
     }
