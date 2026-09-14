@@ -2063,9 +2063,19 @@ import { composeFitPreview } from '../app/fitPreview.server.js'
 const head = await readFile(new URL('../public/mock-head.glb', import.meta.url))
 const frames = await readFile(new URL('../test-fixtures/tagged-sample.glb', import.meta.url))
 
+// The real shape stored in ModelAsset.fitMetadata, read from a live row.
+const fitMetadata = {
+  version: 'eyewear-v1',
+  bridgeAnchor: { x: 0, y: 0, z: 0.005297675263136625 },
+  leftHinge: { x: -0.0725, y: -0.007025, z: 0.000036 },
+  rightHinge: { x: 0.0725, y: -0.007025, z: 0.000036 },
+  frameWidthMeters: 0.1450000107288361,
+  frontFramePlaneZ: 0.005297675263136625,
+}
+
 describe('composeFitPreview', () => {
   it('returns a valid GLB containing both meshes', async () => {
-    const out = await composeFitPreview(head, frames, { anchor: { position: [0, 0, 0], scale: 1 } })
+    const out = await composeFitPreview(head, frames, fitMetadata)
     // glTF binary magic
     expect(Buffer.from(out.slice(0, 4)).toString()).toBe('glTF')
     expect(out.byteLength).toBeGreaterThan(head.byteLength)
@@ -2074,7 +2084,11 @@ describe('composeFitPreview', () => {
 })
 ```
 
-`test-fixtures/tagged-sample.glb` is the repo's existing calibration fixture and is already tracked. Note that `apps/shopify-app/public/models/` does not exist -- the bundled engine models live under `public/tryon/models/`.
+`test-fixtures/tagged-sample.glb` is the repo's existing calibration fixture and is already tracked.
+
+**The metadata describes the glasses, not the head.** An earlier draft of this plan assumed `fitMetadata.anchor = { position, scale }`. No such key exists -- the keys above were read from a live row, and every one is a measurement of the FRAMES: where their hinges are, how wide they are, where their front plane sits. Nothing stored knows where a head's nose bridge is, because on the storefront the engine gets that from live face tracking -- the one thing this preview cannot use.
+
+So head placement is a measured constant, not a derivation. The frames arrive already normalized (`frameWidthMeters` = 0.145, front plane at z = 0.0053), so leave the frames at identity and move the HEAD to meet them. Define the offset as one named constant in `fitPreview.server.js` with a comment saying it was tuned by eye against the rendered preview, and use `bridgeAnchor` only as the z nudge. Getting this visually right is step 9's job, not step 5's -- do not block on it. Note that `apps/shopify-app/public/models/` does not exist -- the bundled engine models live under `public/tryon/models/`.
 
 - [ ] **Step 3: Run it to make sure it fails**
 
