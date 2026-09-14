@@ -1619,13 +1619,31 @@ import { deleteModelGlb } from '../storage.server'
 Run: `npx vitest run test/appModels.loader.test.js`
 Expected: PASS.
 
-- [ ] **Step 6: Delete the moved tests**
+- [ ] **Step 6: Retarget the moved tests at the Products route**
 
-`test/appModels.unmap.test.js`, `test/appModels.metafield.test.js` and `test/appModels.limit.test.js` cover behaviour that now lives on the Products route and is covered by `test/appProducts.map.test.js`. Delete them:
+**Correction to an earlier draft of this plan, which said to delete these files.** That was wrong: their coverage did NOT move to `test/appProducts.map.test.js`. Only two cap assertions did. Deleting them would silently drop:
+
+- all eight metafield tests — publish, unpublish, backfill, and the three failure paths. The metafield is the storefront's gate; without it the theme block renders nothing, so this is the most consequential coverage in the suite.
+- `does NOT redirect and returns empty data when there is no active subscription` — the regression guard for App Store rejection Ref 127328.
+- `is blocked without an active subscription` on unmap — the billing gate on the delete path.
+
+The behaviour did move routes, so the tests move with it. For each of `test/appModels.unmap.test.js`, `test/appModels.metafield.test.js` and `test/appModels.limit.test.js`:
 
 ```bash
-git rm test/appModels.unmap.test.js test/appModels.metafield.test.js test/appModels.limit.test.js
+git mv test/appModels.unmap.test.js test/appProducts.unmap.test.js
+git mv test/appModels.metafield.test.js test/appProducts.metafield.test.js
+git mv test/appModels.limit.test.js test/appProducts.limit.test.js
 ```
+
+Then in each renamed file, change the route under test from the Models route to the Products route:
+
+```js
+const { action, loader } = await import('../app/routes/app.products.jsx')
+```
+
+Delete only the assertions that `test/appProducts.map.test.js` now duplicates exactly — the Starter-cap block and the re-map-at-cap allowance in `appProducts.limit.test.js`. Keep everything else, including `allows a new product on Pro (unlimited)`, which has no duplicate.
+
+The shop-tag prefixes inside each file (`unmap-`, `mf-`, etc.) must stay distinct from one another so the DB-backed tests do not collide.
 
 - [ ] **Step 7: Run the full suite**
 
