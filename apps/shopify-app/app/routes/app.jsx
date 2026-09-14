@@ -3,7 +3,7 @@ import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { authenticate } from "../shopify.server";
-import { getActivePlanName } from "../billing.server";
+import { getActivePlanName, pricingUrlFor } from "../billing.server";
 
 export const loader = async ({ request }) => {
   const { admin, session } = await authenticate.admin(request);
@@ -13,10 +13,7 @@ export const loader = async ({ request }) => {
   // storefront, not the merchant's own admin). Send them to Managed Pricing.
   let pricingUrl = null;
   if (!activePlan) {
-    const store = session.shop.replace(/\.myshopify\.com$/, "");
-    // eslint-disable-next-line no-undef
-    const handle = process.env.SHOPIFY_APP_HANDLE || "";
-    pricingUrl = `https://admin.shopify.com/store/${store}/charges/${handle}/pricing_plans`;
+    pricingUrl = pricingUrlFor(session.shop);
   }
 
   // eslint-disable-next-line no-undef

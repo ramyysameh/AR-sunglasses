@@ -160,3 +160,16 @@ export async function requireActivePlanForAction(admin, shop = null) {
   }
   return null
 }
+
+/**
+ * Managed Pricing page for a shop. Not embeddable -- callers must open it
+ * top-level (target="_top"), never inside the app iframe.
+ * @param {string} shop myshopify domain
+ * @returns {string}
+ */
+export function pricingUrlFor(shop) {
+  const store = String(shop).replace(/\.myshopify\.com$/, '')
+  // eslint-disable-next-line no-undef
+  const handle = process.env.SHOPIFY_APP_HANDLE || ''
+  return `https://admin.shopify.com/store/${store}/charges/${handle}/pricing_plans`
+}
