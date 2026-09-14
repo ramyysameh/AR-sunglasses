@@ -98,3 +98,44 @@ of which frame is loaded or how its temple sits.
   figures are a coin flip. Ignore them.
 - All of this runs against one synthetic head. It catches frames that are wrong
   everywhere; it does not tell you how the frame sits on a narrow face.
+
+## Checking against a narrower or wider head
+
+`harness/headrender.html` takes `?headwide=<factor>`, which scales the skull
+laterally in the GEOMETRY before the neck rig and the camera framing read it —
+so a sweep rendered at two widths differs in exactly one variable. Human head
+breadth runs roughly 135–165 mm about a ~150 mm mean, so 0.88 and 1.12 bracket
+the population:
+
+```
+/render?axis=yaw&count=25&range=60&dist=1.45&heady=0.3&neck=1&headwide=0.88&save=1&dir=turn-narrow
+/render?axis=yaw&count=25&range=60&dist=1.45&heady=0.3&neck=1&headwide=1.12&save=1&dir=turn-wide
+```
+
+then load with `?mock=turn-narrow` or `?mock=turn-wide`.
+
+**A caveat that matters more than the sweep does.** Rendering a narrower head
+does not test what you would expect. The pipeline estimates depth monocularly
+from apparent face size, so a narrower head largely reads as a head further
+away: across a 27% geometry change from narrow to wide, the measured half-width
+moved 2.7% (77.9 → 80.0 mm) and the glasses scale moved 1.3%. The fit stays
+self-consistent, which is why it still looks right — but head width and camera
+distance are close to degenerate here, and a mock sweep cannot separate them.
+
+**What does stress the solve is the frame-to-head RATIO**, and `?gscale=<n>`
+varies that directly. On GRIPZ, at yaw −39:
+
+| head | gscale | splay | earGapRatio | ate | holes |
+|---|---|---|---|---|---|
+| narrow | 1.15 | 8.0° | −0.041 | 0.004 | 0 |
+| narrow | 1.00 | 14.7° | **+0.050** | 0.021 | 0 |
+| wide | 1.00 | 15.0° | −0.005 | 0.000 | 0 |
+| wide | 0.85 | 24.6° | −0.019 | 0.009 | 0 |
+
+The solve spans 8° to 25° across that range and every case stays inside the
+gate — a wide frame on a narrow head barely opens, a narrow frame on a wide head
+opens right up. The one marginal case is GRIPZ at its natural size on the narrow
+head: `earGapRatio` +0.050 sits exactly on the "stops short of the ear"
+threshold, stable across repeated reads (0.050, 0.051), with a visible strip of
+skin between the arm's end and the ear. It is the worst case found and it is
+still passing; treat it as the value to watch if the clearance is ever retuned.

@@ -55,6 +55,11 @@ const NECK = q.get('neck') !== '0'
 // AT the held yaw -- so frame index no longer maps to pitch, and a per-frame
 // readout mislabels everything after it.
 const ANCHOR = q.get('anchor') === '1'
+// Lateral scale on the head, for testing the fit against a narrower or wider
+// skull. Human head breadth runs roughly 135-165 mm about a ~150 mm mean, so
+// 0.88 and 1.12 bracket the population. Everything else about the render is
+// held fixed, so a sweep rendered at two widths differs in exactly one variable.
+const HEAD_WIDE = parseFloat(q.get('headwide') ?? '1')
 const out = document.getElementById('out')
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
@@ -77,6 +82,39 @@ scene.add(pivot)
 const gltf = await new GLTFLoader().loadAsync(q.get('glb') || '/mockhead/head.glb')
 const model = gltf.scene
 pivot.add(model)
+
+/**
+ * Widen or narrow the skull, in the GEOMETRY rather than the transform.
+ *
+ * A non-uniform scale on the object would be applied AFTER the neck rig's
+ * rotation, which turns a rigid yaw into a shear -- the head would distort as
+ * it turned, and MediaPipe would be reading a face that no head has. Baking it
+ * into the vertices means the rig, the silhouette-based neck detection and the
+ * camera framing all see one consistent head.
+ *
+ * Normals take the inverse transpose, so x is DIVIDED by the same factor.
+ */
+if (HEAD_WIDE !== 1) {
+  model.updateMatrixWorld(true)
+  for (const child of [...model.children.flatMap((c) => [c, ...c.children]), model]) {
+    const geometry = child.isMesh ? child.geometry : null
+    if (!geometry) continue
+    const position = geometry.getAttribute('position')
+    for (let i = 0; i < position.count; i += 1) position.setX(i, position.getX(i) * HEAD_WIDE)
+    position.needsUpdate = true
+    const normal = geometry.getAttribute('normal')
+    if (normal) {
+      for (let i = 0; i < normal.count; i += 1) {
+        const x = normal.getX(i) / HEAD_WIDE, y = normal.getY(i), z = normal.getZ(i)
+        const n = Math.hypot(x, y, z) || 1
+        normal.setXYZ(i, x / n, y / n, z / n)
+      }
+      normal.needsUpdate = true
+    }
+    geometry.computeBoundingBox()
+    geometry.computeBoundingSphere()
+  }
+}
 
 // The GLB is a head-and-shoulders bust, so centring on the whole bounding box
 // frames the chest. Aim at a point near the top instead and size the view to
@@ -239,7 +277,7 @@ if (q.get('save') === '1') {
       // Stored beside the frames so a later sweep can be rendered to MATCH.
       // Apparent face size drives the IPD depth estimate, so comparing two
       // sweeps rendered at different `dist` silently compares two cameras.
-      params: { axis: AXIS, count: COUNT, range: RANGE, yawoffset: YAW_OFFSET, dist: DIST, heady: HEAD_Y, size: SIZE, neck: NECK, glb: q.get('glb') || '/mockhead/head.glb', anchor: ANCHOR, anchorFrame: ANCHOR ? ANGLES.length : null },
+      params: { axis: AXIS, count: COUNT, range: RANGE, yawoffset: YAW_OFFSET, dist: DIST, heady: HEAD_Y, size: SIZE, neck: NECK, glb: q.get('glb') || '/mockhead/head.glb', anchor: ANCHOR, headwide: HEAD_WIDE, anchorFrame: ANCHOR ? ANGLES.length : null },
     }),
   })
   saved = JSON.stringify(await r.json())
