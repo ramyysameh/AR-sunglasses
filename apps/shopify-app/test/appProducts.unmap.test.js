@@ -19,13 +19,13 @@ vi.mock('../app/shopify.server.js', () => ({
 }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { action } = await import('../app/routes/app.models.jsx')
+const { action } = await import('../app/routes/app.products.jsx')
 
 function unmapForm(productId) {
   const fd = new FormData()
   fd.set('intent', 'unmap')
   fd.set('productId', productId)
-  return new Request('https://x/app/models', { method: 'POST', body: fd })
+  return new Request('https://x/app/products', { method: 'POST', body: fd })
 }
 
 beforeEach(async () => { await prisma.productMapping.deleteMany({ where: { shop } }) })

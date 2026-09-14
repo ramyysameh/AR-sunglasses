@@ -41,7 +41,7 @@ vi.mock('../app/shopify.server.js', () => {
 })
 
 const prisma = (await import('../app/db.server.js')).default
-const { loader } = await import('../app/routes/app.models.jsx')
+const { loader } = await import('../app/routes/app.products.jsx')
 const shopifyServer = await import('../app/shopify.server.js')
 const state = shopifyServer.__testState
 
@@ -58,7 +58,7 @@ afterAll(async () => {
   await prisma.shopSubscription.deleteMany({ where: { shop } })
 })
 
-describe('app.models loader resilience (fallback and error handling)', () => {
+describe('app.products loader resilience (fallback and error handling)', () => {
   it('sets product to null when product lookup returns empty (deleted product)', async () => {
     state.includeProduct = false
     const asset = await prisma.modelAsset.create({
@@ -66,7 +66,7 @@ describe('app.models loader resilience (fallback and error handling)', () => {
     })
     await prisma.productMapping.create({ data: { shop, productId: productGid, modelAssetId: asset.id } })
 
-    const result = await loader({ request: new Request('https://x/app/models') })
+    const result = await loader({ request: new Request('https://x/app/products') })
     const mapping = result.mappings.find((m) => m.productId === productGid)
     expect(mapping.product).toBeNull()
   })
@@ -78,7 +78,7 @@ describe('app.models loader resilience (fallback and error handling)', () => {
     })
     await prisma.productMapping.create({ data: { shop, productId: productGid, modelAssetId: asset.id } })
 
-    const result = await loader({ request: new Request('https://x/app/models') })
+    const result = await loader({ request: new Request('https://x/app/products') })
     // Loader does not throw; it gracefully degrades
     expect(result).toHaveProperty('assets')
     expect(result).toHaveProperty('mappings')

@@ -50,7 +50,7 @@ vi.mock('../app/shopify.server.js', () => ({
 }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { action, loader } = await import('../app/routes/app.models.jsx')
+const { action, loader } = await import('../app/routes/app.products.jsx')
 
 const productId = `gid://shopify/Product/${tag}`
 
@@ -58,7 +58,7 @@ function form(intent, fields) {
   const fd = new FormData()
   fd.set('intent', intent)
   for (const [k, v] of Object.entries(fields)) fd.set(k, v)
-  return new Request('https://x/app/models', { method: 'POST', body: fd })
+  return new Request('https://x/app/products', { method: 'POST', body: fd })
 }
 
 async function seedAsset() {
@@ -158,13 +158,13 @@ describe('unmap action', () => {
 
 describe('loader backfill', () => {
   // Mappings made before this gate existed have no metafield and would go dark
-  // on deploy. The Models page republishes them.
+  // on deploy. The Products page republishes them.
   it('republishes the metafield for every existing mapping', async () => {
     const modelAssetId = await seedAsset()
     await prisma.productMapping.create({ data: { shop, productId, modelAssetId } })
     hoisted.calls = []
 
-    await loader({ request: new Request('https://x/app/models') })
+    await loader({ request: new Request('https://x/app/products') })
 
     const sets = metafieldCalls('metafieldsSet')
     expect(sets).toHaveLength(1)
@@ -176,12 +176,12 @@ describe('loader backfill', () => {
     await prisma.productMapping.create({ data: { shop, productId, modelAssetId } })
     hoisted.setErrors = [{ message: 'Throttled' }]
 
-    const data = await loader({ request: new Request('https://x/app/models') })
+    const data = await loader({ request: new Request('https://x/app/products') })
     expect(data.mappings).toHaveLength(1)
   })
 
   it('makes no metafield call for a shop with no mappings', async () => {
-    await loader({ request: new Request('https://x/app/models') })
+    await loader({ request: new Request('https://x/app/products') })
     expect(metafieldCalls('metafieldsSet')).toHaveLength(0)
   })
 })

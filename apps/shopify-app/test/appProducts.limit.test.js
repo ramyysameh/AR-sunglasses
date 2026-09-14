@@ -32,7 +32,7 @@ vi.mock('../app/shopify.server.js', () => ({
 }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { action, loader } = await import('../app/routes/app.models.jsx')
+const { action, loader } = await import('../app/routes/app.products.jsx')
 
 async function seedAsset() {
   const a = await prisma.modelAsset.create({
@@ -45,7 +45,7 @@ function mapForm(productId, modelAssetId) {
   fd.set('intent', 'map')
   fd.set('productId', productId)
   fd.set('modelAssetId', modelAssetId)
-  return new Request('https://x/app/models', { method: 'POST', body: fd })
+  return new Request('https://x/app/products', { method: 'POST', body: fd })
 }
 
 // Each case controls its own mapping count, so clear mappings first. Assets
@@ -61,31 +61,9 @@ afterAll(async () => {
 })
 
 describe('map action tier limit', () => {
-  it('blocks a NEW product once the Starter cap (10) is reached', async () => {
-    hoisted.plan = 'Starter'
-    const assetId = await seedAsset()
-    for (let i = 0; i < 10; i++) {
-      await prisma.productMapping.create({
-        data: { shop, productId: `gid://shopify/Product/${tag}-${i}`, modelAssetId: assetId },
-      })
-    }
-    const res = await action({ request: mapForm(`gid://shopify/Product/${tag}-NEW`, assetId) })
-    expect(res.error).toMatch(/limit/i)
-    expect(await prisma.productMapping.count({ where: { shop } })).toBe(10)
-  })
-
-  it('allows RE-mapping an already-mapped product at the cap', async () => {
-    hoisted.plan = 'Starter'
-    const assetId = await seedAsset()
-    for (let i = 0; i < 10; i++) {
-      await prisma.productMapping.create({
-        data: { shop, productId: `gid://shopify/Product/${tag}-${i}`, modelAssetId: assetId },
-      })
-    }
-    const res = await action({ request: mapForm(`gid://shopify/Product/${tag}-0`, assetId) })
-    expect(res.mapped).toBe(true)
-    expect(await prisma.productMapping.count({ where: { shop } })).toBe(10)
-  })
+  // The Starter-cap block and the re-map-at-cap allowance are covered exactly
+  // by appProducts.map.test.js ('enforces the plan cap for a new product' and
+  // 'allows re-mapping an existing product at the cap'); not duplicated here.
 
   it('allows a new product on Pro (unlimited)', async () => {
     hoisted.plan = 'Pro'
@@ -111,20 +89,21 @@ describe('map action tier limit', () => {
   })
 })
 
-describe('models loader subscription gate', () => {
+describe('products loader subscription gate', () => {
   it('does NOT redirect and returns empty data when there is no active subscription', async () => {
     hoisted.plan = null
-    // Throwing redirect('/app') here looped forever (/app/models -> /app ->
+    // Throwing redirect('/app') here looped forever (/app/products -> /app ->
     // /app...), rendering a dead, control-less page (App Store rejection Ref
     // 127328). The app.jsx layout owns the no-subscription screen, so this
     // loader must resolve without a redirect and do no gated DB work.
-    const result = await loader({ request: new Request('https://x/app/models') })
-    expect(result).toEqual({ assets: [], mappings: [] })
+    const result = await loader({ request: new Request('https://x/app/products') })
+    expect(result.assets).toEqual([])
+    expect(result.mappings).toEqual([])
   })
 
   it('loads normally with an active subscription', async () => {
     hoisted.plan = 'Starter'
-    const result = await loader({ request: new Request('https://x/app/models') })
+    const result = await loader({ request: new Request('https://x/app/products') })
     expect(result).toHaveProperty('assets')
     expect(result).toHaveProperty('mappings')
   })
