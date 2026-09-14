@@ -19,7 +19,14 @@ export const loader = async ({ params, request }) => {
     // not in Vite's default assetsInclude, so a filesystem read only works
     // locally by accident of build layout.
     const headRes = await fetch(new URL('/mock-head.glb', request.url))
-    const head = await headRes.arrayBuffer()
+    if (!headRes.ok) {
+      console.error(`mock-head.glb fetch failed with status ${headRes.status}`)
+      return new Response('not found', { status: 404 })
+    }
+    // readBinary requires an ArrayBufferView (it calls BufferUtils.assertView,
+    // which checks ArrayBuffer.isView()) -- a bare ArrayBuffer fails that
+    // check, so wrap it in a Uint8Array before handing it to composeFitPreview.
+    const head = new Uint8Array(await headRes.arrayBuffer())
     const glb = await composeFitPreview(head, frames, asset.fitMetadata)
     return new Response(glb, {
       headers: {
