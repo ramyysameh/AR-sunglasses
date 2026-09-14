@@ -1,12 +1,14 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useFetcher, useLoaderData } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
-import { listMappings } from '../models.server'
-import { publishMappings, unpublishMapping } from '../tryonMetafield.server'
-import { getActivePlanName } from '../billing.server'
+import { listMappings, mapProductToModel } from '../models.server'
+import { publishMapping, publishMappings, unpublishMapping } from '../tryonMetafield.server'
+import { getActivePlanName, planLimit } from '../billing.server'
+import { planUsage } from '../planUsage.server'
+import ModelPicker from '../components/ModelPicker'
 import { fetchProductsByIds } from '../products.server'
 import { productStatus } from '../tryonStatus.server'
 import { themeEditorUrl, previewUrl } from '../adminLinks.server'
@@ -24,9 +26,18 @@ export const loader = async ({ request }) => {
   // (App Store rejection Ref 127328). Return empty and do no gated work.
   const activePlan = await getActivePlanName(admin, session.shop)
   if (!activePlan) {
-    return { mappings: [], themeUrl, engineUrl: ENGINE_URL }
+    return {
+      mappings: [],
+      assets: [],
+      usage: planUsage({ planName: null, used: 0, shop: session.shop }),
+      themeUrl,
+      engineUrl: ENGINE_URL,
+    }
   }
-  const mappings = await listMappings(prisma, session.shop)
+  const [mappings, assets] = await Promise.all([
+    listMappings(prisma, session.shop),
+    prisma.modelAsset.findMany({ where: { shop: session.shop }, orderBy: { createdAt: 'desc' } }),
+  ])
   // Self-heal: mappings made before the storefront gate existed have no
   // metafield, so their block would go dark. Re-publishing is idempotent and
   // batched. Best-effort -- a Shopify failure must not take down the page.
@@ -47,6 +58,8 @@ export const loader = async ({ request }) => {
       product: products.get(m.productId) ?? null,
       status: productStatus(m),
     })),
+    assets,
+    usage: planUsage({ planName: activePlan, used: mappings.length, shop: session.shop }),
     themeUrl,
     engineUrl: ENGINE_URL,
   }
@@ -59,7 +72,40 @@ export const action = async ({ request }) => {
     return { error: 'No active subscription. Choose a plan to continue.' }
   }
   const form = await request.formData()
-  if (form.get('intent') !== 'unmap') {
+  const intent = form.get('intent')
+
+  if (intent === 'map') {
+    const productId = form.get('productId')?.toString().trim()
+    const modelAssetId = form.get('modelAssetId')?.toString()
+    if (!productId || !modelAssetId) {
+      return { error: 'Pick a product and a model.' }
+    }
+    // Grandfather existing: only a genuinely NEW product counts against the cap.
+    // mapProductToModel upserts on (shop, productId), so a re-map is not new.
+    const existing = await prisma.productMapping.findUnique({
+      where: { shop_productId: { shop: session.shop, productId } },
+    })
+    if (!existing) {
+      const limit = planLimit(activePlan)
+      const count = await prisma.productMapping.count({ where: { shop: session.shop } })
+      if (count >= limit) {
+        return { error: "You've reached your plan's product limit. Upgrade to add try-on to more products." }
+      }
+    }
+    await mapProductToModel(prisma, session.shop, productId, modelAssetId)
+    // The mapping is committed; now project it onto the storefront. The block
+    // renders only where this metafield exists, so a failure here means a
+    // mapping visible in the admin but not on the product page.
+    try {
+      await publishMapping(admin, productId)
+    } catch (e) {
+      console.error('try-on metafield publish failed', e)
+      return { error: "Added, but try-on couldn't be turned on for your storefront. Try again." }
+    }
+    return { mapped: true }
+  }
+
+  if (intent !== 'unmap') {
     return { error: 'Unknown action.' }
   }
   const productId = form.get('productId')?.toString().trim()
@@ -83,9 +129,36 @@ function modelName(a) {
 }
 
 export default function Products() {
-  const { mappings, themeUrl, engineUrl } = useLoaderData()
+  const { mappings, assets, usage, themeUrl, engineUrl } = useLoaderData()
   const unmapFetcher = useFetcher()
   const shopify = useAppBridge()
+
+  const mapFetcher = useFetcher()
+  const [picked, setPicked] = useState(null)
+  const [modelAssetId, setModelAssetId] = useState('')
+  const mapError = mapFetcher.data?.error
+
+  useEffect(() => {
+    if (mapFetcher.data?.mapped) {
+      shopify.toast.show('Try-on added')
+      setPicked(null)
+      setModelAssetId('')
+      document.getElementById('add-tryon')?.hide()
+    }
+  }, [mapFetcher.data, shopify])
+
+  const pickProduct = async () => {
+    const selection = await shopify.resourcePicker({ type: 'product', action: 'select' })
+    if (selection && selection[0]) {
+      const p = selection[0]
+      setPicked({ id: p.id, title: p.title, imageUrl: p.images?.[0]?.originalSrc ?? null })
+    }
+  }
+
+  const submitMapping = () => {
+    if (!picked?.id || !modelAssetId) return
+    mapFetcher.submit({ intent: 'map', productId: picked.id, modelAssetId }, { method: 'POST' })
+  }
 
   useEffect(() => {
     if (unmapFetcher.data?.unmapped) shopify.toast.show('Try-on removed')
@@ -96,7 +169,41 @@ export default function Products() {
 
   return (
     <s-page heading="Products">
-      <s-button slot="primary-action" href="/app/models">Add try-on</s-button>
+      <s-button slot="primary-action" commandFor="add-tryon" command="show" disabled={usage.atLimit}>
+        Add try-on
+      </s-button>
+
+      <s-modal id="add-tryon" heading="Add try-on to a product">
+        <s-stack direction="block" gap="base">
+          {usage.atLimit && (
+            <s-banner tone="warning">
+              You&apos;re using all {usage.limit} products on your plan.{' '}
+              {usage.pricingUrl && <a href={usage.pricingUrl} target="_top" rel="noreferrer">Upgrade</a>} to add more.
+            </s-banner>
+          )}
+          <s-stack direction="inline" gap="base" alignItems="center">
+            <s-button onClick={pickProduct} icon="product">
+              {picked ? 'Change product' : 'Select product'}
+            </s-button>
+            {picked && (
+              <s-stack direction="inline" gap="small-500" alignItems="center">
+                {picked.imageUrl && <s-thumbnail src={picked.imageUrl} alt={picked.title} size="small"></s-thumbnail>}
+                <s-text type="strong">{picked.title}</s-text>
+              </s-stack>
+            )}
+          </s-stack>
+          <ModelPicker assets={assets} value={modelAssetId} onChange={setModelAssetId} />
+          {mapError && <s-banner heading="Could not add try-on" tone="critical">{mapError}</s-banner>}
+        </s-stack>
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          onClick={submitMapping}
+          {...(mapFetcher.state !== 'idle' ? { loading: true } : {})}
+        >
+          Add try-on
+        </s-button>
+      </s-modal>
 
       <s-section heading="Products with try-on">
         {mappings.length === 0 ? (
