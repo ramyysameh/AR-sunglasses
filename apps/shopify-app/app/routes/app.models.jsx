@@ -4,54 +4,30 @@ import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
-import { mapProductToModel, listMappings } from '../models.server'
-import { publishMapping, publishMappings, unpublishMapping } from '../tryonMetafield.server'
-import { getActivePlanName, planLimit } from '../billing.server'
-import { fetchProductsByIds } from '../products.server'
+import { getActivePlanName } from '../billing.server'
+import { deleteModelGlb } from '../storage.server'
 import ModelViewer from '../components/ModelViewer'
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
-  // The app.jsx layout owns the no-subscription screen and hides this route's
-  // content, so an unsubscribed shop must not reach the DB here -- and this
-  // loader must NOT throw its own redirect (a /app/models -> /app -> /app loop
-  // that renders a dead, control-less page: App Store rejection Ref 127328).
-  // Return empty, do no gated work.
+  // app.jsx owns the no-subscription screen; this loader must NOT redirect
+  // (App Store rejection Ref 127328).
   const activePlan = await getActivePlanName(admin, session.shop)
   if (!activePlan) {
-    return { assets: [], mappings: [] }
+    return { assets: [] }
   }
-  const [assets, mappings] = await Promise.all([
-    prisma.modelAsset.findMany({ where: { shop: session.shop }, orderBy: { createdAt: 'desc' } }),
-    listMappings(prisma, session.shop),
-  ])
-  // Backfill / self-heal. Mappings made before the storefront gate existed have
-  // no metafield, so their block would go dark on this deploy; the same is true
-  // of one a merchant deleted by hand from the admin. Re-publishing is
-  // idempotent and batched (one mutation per 25 mappings) on a page the
-  // merchant already has to open. Best-effort for the same reason as the
-  // product enrichment below: a Shopify API failure must not take down the page.
-  try {
-    await publishMappings(admin, mappings.map((m) => m.productId))
-  } catch (e) {
-    console.error('try-on metafield sync failed', e)
+  const assets = await prisma.modelAsset.findMany({
+    where: { shop: session.shop },
+    orderBy: { createdAt: 'desc' },
+    include: { _count: { select: { mappings: true } } },
+  })
+  return {
+    assets: assets.map(({ _count, ...a }) => ({ ...a, mappingCount: _count.mappings })),
   }
-  let products = new Map()
-  try {
-    products = await fetchProductsByIds(admin, mappings.map((m) => m.productId))
-  } catch (e) {
-    // Enrichment only — a Shopify GraphQL failure must not take down the page.
-    console.error('product enrichment failed', e)
-  }
-  const mappingsWithProduct = mappings.map((m) => ({ ...m, product: products.get(m.productId) ?? null }))
-  return { assets, mappings: mappingsWithProduct }
 }
 
 export const action = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
-  // Checked once up front (not just for new mappings): without this, a shop
-  // with no subscription could still remap an already-mapped product, or
-  // upload models, since those paths have no other billing check.
   const activePlan = await getActivePlanName(admin, session.shop)
   if (!activePlan) {
     return { error: 'No active subscription. Choose a plan to continue.' }
@@ -59,63 +35,46 @@ export const action = async ({ request }) => {
   const form = await request.formData()
   const intent = form.get('intent')
 
-  if (intent === 'map') {
-    const productId = form.get('productId')?.toString().trim()
-    const modelAssetId = form.get('modelAssetId')?.toString()
-    if (!productId || !modelAssetId) {
-      return { error: 'Enter a product ID and pick a model.' }
-    }
-    // Grandfather existing: only a genuinely NEW product counts against the cap.
-    // mapProductToModel upserts on (shop, productId), so a re-map is not new.
-    const existing = await prisma.productMapping.findUnique({
-      where: { shop_productId: { shop: session.shop, productId } },
+  if (intent === 'rename') {
+    const id = form.get('modelAssetId')?.toString()
+    const label = form.get('label')?.toString().trim()
+    if (!id) return { error: 'Missing model.' }
+    // Scoped to the shop: an id from another shop must not be renamable.
+    const { count } = await prisma.modelAsset.updateMany({
+      where: { id, shop: session.shop },
+      data: { label: label || null },
     })
-    if (!existing) {
-      const limit = planLimit(activePlan)
-      const count = await prisma.productMapping.count({ where: { shop: session.shop } })
-      if (count >= limit) {
-        return {
-          error:
-            "You've reached your plan's product limit. Upgrade your plan to add try-on to more products.",
-        }
-      }
-    }
-    await mapProductToModel(prisma, session.shop, productId, modelAssetId)
-    // The mapping is committed; now project it onto the storefront. The theme
-    // block renders only where this metafield exists, so a failure here means a
-    // mapping the merchant can see in the admin but not on the product page --
-    // report it instead of a false success. The loader retries on next visit.
-    try {
-      await publishMapping(admin, productId)
-    } catch (e) {
-      console.error('try-on metafield publish failed', e)
-      return { error: "Mapped, but the try-on couldn't be turned on for your storefront. Try again." }
-    }
-    return { mapped: true }
+    if (count === 0) return { error: 'That model no longer exists.' }
+    return { renamed: true }
   }
 
-  if (intent === 'unmap') {
-    const productId = form.get('productId')?.toString().trim()
-    if (!productId) {
-      return { error: 'Missing product to remove.' }
+  if (intent === 'delete') {
+    const id = form.get('modelAssetId')?.toString()
+    if (!id) return { error: 'Missing model.' }
+    const asset = await prisma.modelAsset.findFirst({
+      where: { id, shop: session.shop },
+      include: { _count: { select: { mappings: true } } },
+    })
+    if (!asset) return { error: 'That model no longer exists.' }
+    // The FK is ON DELETE RESTRICT, so deleting a mapped model would throw a
+    // raw Prisma error. Refuse with something a merchant can act on instead.
+    if (asset._count.mappings > 0) {
+      return { error: `That model is used by ${asset._count.mappings} product(s). Remove try-on from them first.` }
     }
-    await prisma.productMapping.deleteMany({ where: { shop: session.shop, productId } })
-    // A metafield left behind keeps the block on the page, where it now opens
-    // to a 404 from /api/tryon-config -- worse than either end state, so the
-    // merchant has to hear about it.
+    await prisma.modelAsset.delete({ where: { id: asset.id } })
     try {
-      await unpublishMapping(admin, productId)
+      await deleteModelGlb(asset.storageRef)
     } catch (e) {
-      console.error('try-on metafield unpublish failed', e)
-      return { error: "Mapping removed, but the try-on may still show on your storefront. Try again." }
+      // The row is gone, which is what the merchant asked for. A stranded
+      // object is a storage cost, not a user-visible failure.
+      console.error('model GLB delete failed', e)
     }
-    return { unmapped: true }
+    return { deleted: true }
   }
 
   // Model upload (presign/finalize) lives in the api.model-upload resource
-  // route, not here: a raw fetch() POST to this UI route returns the rendered
-  // HTML document instead of JSON. See app/routes/api.model-upload.jsx.
-
+  // route: a raw fetch() POST here returns the rendered HTML document instead
+  // of JSON. See app/routes/api.model-upload.jsx.
   return { error: 'Unknown action.' }
 }
 

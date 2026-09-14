@@ -47,12 +47,8 @@ describe('app.models loader product enrichment', () => {
     await prisma.productMapping.create({ data: { shop, productId: productGid, modelAssetId: asset.id } })
 
     const result = await loader({ request: new Request('https://x/app/models') })
-    const mapping = result.mappings.find((m) => m.productId === productGid)
-    expect(mapping.product).toEqual({
-      id: productGid,
-      title: 'Wayfarer',
-      imageUrl: 'https://cdn/w.jpg',
-      imageAlt: 'Wayfarer',
-    })
+    expect(result.assets).toHaveLength(1)
+    expect(result.assets[0].mappingCount).toBe(1)
+    expect(result.mappings).toBeUndefined()
   })
 })
