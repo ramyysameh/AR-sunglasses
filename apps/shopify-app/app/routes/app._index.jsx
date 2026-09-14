@@ -63,13 +63,16 @@ export default function Index() {
             </s-stack>
           ))}
         </s-stack>
-        {liveCount === 0 && (
-          // Top-level: the theme editor is an admin URL and cannot be embedded
-          // in this app's iframe, the same reason app.jsx breaks out for pricing.
-          <s-paragraph>
-            <a href={themeUrl} target="_top" rel="noreferrer">Add to theme</a>
-          </s-paragraph>
-        )}
+        {/* Top-level: the theme editor is an admin URL and cannot be embedded
+            in this app's iframe, the same reason app.jsx breaks out for
+            pricing. Always rendered: liveCount is a lastSeenLiveAt signal, not
+            proof the block is absent, so hiding this on liveCount > 0 would
+            strand a low-traffic store whose block is installed but unseen. */}
+        <s-paragraph>
+          <a href={themeUrl} target="_top" rel="noreferrer">
+            {liveCount === 0 ? "Add to theme" : "Manage in theme editor"}
+          </a>
+        </s-paragraph>
       </s-section>
 
       <s-section heading="Your plan">
