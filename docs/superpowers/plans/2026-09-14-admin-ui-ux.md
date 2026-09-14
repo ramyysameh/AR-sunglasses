@@ -2105,8 +2105,9 @@ import { Document, NodeIO } from '@gltf-transform/core'
 const io = new NodeIO()
 
 /**
- * Merge the mock head and a merchant's frames into one GLB, with the frames
- * placed by the asset's calibrated anchor. This is the only preview that can
+ * Merge the mock head and a merchant's frames into one GLB. The frames are
+ * already normalized, so they stay where they are and the head is moved to meet
+ * them. This is the only preview that can
  * render inside the admin: camera access is impossible in Shopify's app iframe,
  * so the merchant checks scale and placement against a fixed head instead.
  *
@@ -2120,18 +2121,28 @@ export async function composeFitPreview(headGlb, framesGlb, fitMetadata) {
   const framesDoc = await io.readBinary(framesGlb)
 
   const merged = new Document()
+  // Order matters: the head is merged FIRST, so scenes[0] is the head's scene
+  // and everything merged after it belongs to the frames. The placement below
+  // depends on that, so do not reorder these two calls.
   merged.merge(headDoc)
   merged.merge(framesDoc)
 
-  // merge() concatenates scenes; collapse them into one so a viewer shows both.
   const root = merged.getRoot()
   const scenes = root.listScenes()
   const target = scenes[0]
+
+  // The head owns scenes[0]. Move its top-level nodes to meet the frames, which
+  // are already normalized and stay at identity.
+  for (const node of target.listChildren()) {
+    applyHeadPlacement(node, fitMetadata)
+  }
+
+  // merge() concatenates scenes; collapse the frames' scenes into the head's so
+  // a viewer shows both models together.
   for (const extra of scenes.slice(1)) {
     for (const node of extra.listChildren()) {
       extra.removeChild(node)
       target.addChild(node)
-      applyAnchor(node, fitMetadata)
     }
     extra.dispose()
   }
@@ -2139,11 +2150,23 @@ export async function composeFitPreview(headGlb, framesGlb, fitMetadata) {
   return io.writeBinary(merged)
 }
 
-function applyAnchor(node, fitMetadata) {
-  const anchor = fitMetadata?.anchor
-  if (!anchor) return
-  if (Array.isArray(anchor.position)) node.setTranslation(anchor.position)
-  if (typeof anchor.scale === 'number') node.setScale([anchor.scale, anchor.scale, anchor.scale])
+// Where the head sits relative to the frames, in metres. The frames are already
+// normalized (0.145 m wide, front plane at z = 0.0053), so they stay at identity
+// and the head moves to meet them. There is nothing to derive this from: every
+// field in fitMetadata measures the FRAMES, and on the storefront the engine gets
+// head position from live face tracking, which a static preview cannot use.
+// Tuned by eye against the rendered preview -- adjust here, not in the caller.
+const HEAD_OFFSET = { x: 0, y: 0.015, z: -0.085 }
+
+function applyHeadPlacement(node, fitMetadata) {
+  // bridgeAnchor.z is where the frames' bridge sits; nudge the head by it so a
+  // deeper or shallower frame front still rests on the nose.
+  const bridgeZ = fitMetadata?.bridgeAnchor?.z
+  node.setTranslation([
+    HEAD_OFFSET.x,
+    HEAD_OFFSET.y,
+    HEAD_OFFSET.z + (typeof bridgeZ === 'number' ? bridgeZ : 0),
+  ])
 }
 ```
 
@@ -2158,7 +2181,7 @@ If `anchor` is not the shape stored in `fitMetadata`, inspect a real row first:
 node -e "const p=require('@prisma/client');const c=new p.PrismaClient();c.modelAsset.findFirst().then(a=>{console.log(JSON.stringify(a.fitMetadata,null,2));return c.\$disconnect()})"
 ```
 
-and adjust `applyAnchor` plus the test fixtures to match. Do not guess the shape.
+and adjust `applyHeadPlacement` to match. Do not guess the shape.
 
 - [ ] **Step 6: Add the route**
 
@@ -2218,7 +2241,7 @@ Do NOT run `npm run lint` (931 pre-existing repo-wide errors from a vendored Dra
 
 - [ ] **Step 9: Manual check**
 
-Deploy and open a Preview modal. The frames should sit on the reference head at a plausible scale. If they float, are buried inside the head, or are wildly mis-scaled, the `applyAnchor` mapping is wrong — go back to step 5 and inspect the real `fitMetadata` shape rather than adjusting numbers by feel.
+Deploy and open a Preview modal. The frames should sit on the reference head at a plausible scale. If they float, are buried inside the head, or are wildly mis-scaled, tune `HEAD_OFFSET` in `app/fitPreview.server.js`. That constant exists to be adjusted by eye; this is the step where you do it.
 
 - [ ] **Step 10: Commit**
 
