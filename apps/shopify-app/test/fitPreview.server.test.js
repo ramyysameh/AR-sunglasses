@@ -1,9 +1,22 @@
 import { describe, it, expect } from 'vitest'
 import { readFile } from 'node:fs/promises'
+import { NodeIO } from '@gltf-transform/core'
+import { KHRONOS_EXTENSIONS } from '@gltf-transform/extensions'
+import { buildDoc } from '@artryon/calibration/test/helpers/buildDoc.js'
 import { composeFitPreview } from '../app/fitPreview.server.js'
+import { calibrateUpload } from '../app/calibration.server.js'
 
 const head = await readFile(new URL('../public/mock-head.glb', import.meta.url))
 const frames = await readFile(new URL('../test-fixtures/tagged-sample.glb', import.meta.url))
+
+async function glbBytes(doc) {
+  return new NodeIO().registerExtensions(KHRONOS_EXTENSIONS).writeBinary(doc)
+}
+
+const GOOD = [
+  -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.024, 0.02,
+  -0.069, 0, -0.13, 0.069, 0, -0.13, 0, -0.02, 0.02,
+]
 
 // The real shape stored in ModelAsset.fitMetadata, read from a live row.
 const fitMetadata = {
@@ -21,6 +34,17 @@ describe('composeFitPreview', () => {
     // glTF binary magic
     expect(Buffer.from(out.slice(0, 4)).toString()).toBe('glTF')
     expect(out.byteLength).toBeGreaterThan(head.byteLength)
+  })
+
+  it('round-trips a GLB written by the calibration pipeline IO without throwing', async () => {
+    const doc = buildDoc(GOOD, {
+      AR_bridge: { x: 0, y: 0.024, z: 0.02 },
+      AR_hinge_L: { x: -0.069, y: 0, z: -0.01 },
+      AR_hinge_R: { x: 0.069, y: 0, z: -0.01 },
+    })
+    const { normalizedGlb, fitMetadata: calibratedFitMetadata } = await calibrateUpload(await glbBytes(doc))
+
+    await expect(composeFitPreview(head, normalizedGlb, calibratedFitMetadata)).resolves.toBeInstanceOf(Uint8Array)
   })
 
 })

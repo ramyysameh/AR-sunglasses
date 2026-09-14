@@ -1,4 +1,5 @@
 import { Document, NodeIO } from '@gltf-transform/core'
+import { KHRONOS_EXTENSIONS } from '@gltf-transform/extensions'
 // Document#merge() is a removed/throwing stub in the installed core version
 // ("Use 'mergeDocuments(target, source)'..."); mergeDocuments(target, source)
 // is its direct, same-signature replacement. unpartition() collapses the
@@ -6,7 +7,10 @@ import { Document, NodeIO } from '@gltf-transform/core'
 // -- writeBinary otherwise rejects a document with more than one.
 import { mergeDocuments, unpartition } from '@gltf-transform/functions'
 
-const io = new NodeIO()
+// Must match calibration.server.js's IO: that is what wrote framesGlb's
+// bytes, so reading them back without the same extensions registered would
+// throw on a required Khronos extension or silently drop an optional one.
+const io = new NodeIO().registerExtensions(KHRONOS_EXTENSIONS)
 
 /**
  * Merge the mock head and a merchant's frames into one GLB. The frames are
