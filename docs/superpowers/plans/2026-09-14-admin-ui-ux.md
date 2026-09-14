@@ -2035,19 +2035,21 @@ Camera-free, renders inside the admin. The only preview that works in the iframe
 
 - [ ] **Step 1: Vendor a web-weight mock head**
 
-The source head is `D:/AR Sunglasses/test-mock-head/head.glb` at 3.9 MB — untracked, outside the repo, and far too heavy to serve per model card. Decimate it first:
+The source head is `D:/AR Sunglasses/test-mock-head/head.glb` at 3.9 MB — untracked, outside the repo, and far too heavy to serve on every model card.
 
-```bash
-node scripts/compress-models.mjs "D:/AR Sunglasses/test-mock-head/head.glb" apps/shopify-app/public/mock-head.glb
-```
+**Do not use `scripts/compress-models.mjs`.** An earlier draft of this plan said to; that was wrong. It takes no arguments, and it is a hardcoded eyewear pipeline that normalizes its input to `TARGET_FRAME_WIDTH = 0.145` — it would scale the head down to the width of a pair of glasses.
 
-Run from the repo root. Confirm the output is under 500 KB:
+Write a one-off `scripts/prepare-mock-head.mjs` instead. It compresses only; it must not scale, re-centre, or otherwise normalize the geometry, because the head's real-world size is what makes the fit preview meaningful. Model it on the `NodeIO` setup at the top of `compress-models.mjs` (same `ALL_EXTENSIONS` registration and the same `draco3dgltf` encoder/decoder wiring — `draco3dgltf` is already a dependency), then apply `dedup`, `weld` and `draco` from `@gltf-transform/functions` and write the result to `apps/shopify-app/public/mock-head.glb`.
+
+Note `meshoptimizer` is NOT installed, so `simplify` is unavailable — do not add it. Most of the 3.9 MB is likely texture, so if Draco alone does not reach budget, downscale the head's texture with `textureCompress` rather than reaching for new dependencies.
+
+Confirm the output is under 500 KB:
 
 ```bash
 ls -la apps/shopify-app/public/mock-head.glb
 ```
 
-If `scripts/compress-models.mjs` does not accept input/output arguments, read it and adapt the invocation — the requirement is a Draco- or meshopt-compressed head under 500 KB at `apps/shopify-app/public/mock-head.glb`, not a specific command.
+Commit both the script and the generated `mock-head.glb`, so the asset is reproducible rather than a mystery binary.
 
 - [ ] **Step 2: Write the failing test**
 
