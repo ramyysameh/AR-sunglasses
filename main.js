@@ -20,6 +20,7 @@ const shop = params.get('shop') || undefined
 const productId = params.get('productId') || undefined
 const modelUrl = params.get('model') || undefined
 const fitFile = params.get('fit') || undefined
+const src = params.get('src') || undefined
 
 let tryOnEngine = null
 
@@ -38,7 +39,8 @@ async function resolveRemoteSkuKey() {
   }
 
   try {
-    const response = await fetch(`/api/tryon-config?shop=${encodeURIComponent(shop)}&productId=${encodeURIComponent(productId)}`)
+    const srcParam = src ? `&src=${encodeURIComponent(src)}` : ''
+    const response = await fetch(`/api/tryon-config?shop=${encodeURIComponent(shop)}&productId=${encodeURIComponent(productId)}${srcParam}`)
     if (!response.ok) {
       throw new Error(`tryon-config request failed with status ${response.status}`)
     }
