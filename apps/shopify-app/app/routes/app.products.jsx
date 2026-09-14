@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useFetcher, useLoaderData } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
+import QRCode from 'qrcode'
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
 import { listMappings, mapProductToModel } from '../models.server'
@@ -9,6 +10,7 @@ import { publishMapping, publishMappings, unpublishMapping } from '../tryonMetaf
 import { getActivePlanName, planLimit } from '../billing.server'
 import { planUsage } from '../planUsage.server'
 import ModelPicker from '../components/ModelPicker'
+import PreviewPanel from '../components/PreviewPanel'
 import { fetchProductsByIds } from '../products.server'
 import { productStatus } from '../tryonStatus.server'
 import { themeEditorUrl, previewUrl } from '../adminLinks.server'
@@ -53,11 +55,20 @@ export const loader = async ({ request }) => {
     console.error('product enrichment failed', e)
   }
   return {
-    mappings: mappings.map((m) => ({
-      ...m,
-      product: products.get(m.productId) ?? null,
-      status: productStatus(m),
-    })),
+    mappings: await Promise.all(
+      mappings.map(async (m) => {
+        const url = previewUrl({ engineUrl: ENGINE_URL, shop: session.shop, productId: m.productId })
+        return {
+          ...m,
+          product: products.get(m.productId) ?? null,
+          status: productStatus(m),
+          previewUrl: url,
+          // Generated here, not in the browser: a client-side QR library would
+          // need a CDN script and the admin iframe's CSP is not ours to widen.
+          qr: await QRCode.toDataURL(url, { width: 220, margin: 1 }),
+        }
+      }),
+    ),
     assets,
     usage: planUsage({ planName: activePlan, used: mappings.length, shop: session.shop }),
     themeUrl,
@@ -129,7 +140,7 @@ function modelName(a) {
 }
 
 export default function Products() {
-  const { mappings, assets, usage, themeUrl, engineUrl } = useLoaderData()
+  const { mappings, assets, usage, themeUrl } = useLoaderData()
   const unmapFetcher = useFetcher()
   const shopify = useAppBridge()
 
@@ -244,11 +255,7 @@ export default function Products() {
                   </s-table-cell>
                   <s-table-cell>
                     <s-stack direction="inline" gap="small-500">
-                      <s-button
-                        variant="tertiary"
-                        href={previewUrl({ engineUrl, shop: m.shop, productId: m.productId })}
-                        target="_blank"
-                      >
+                      <s-button variant="tertiary" commandFor={`preview-${m.id}`} command="show">
                         Preview
                       </s-button>
                       <s-button variant="tertiary" tone="critical" icon="delete" onClick={() => remove(m.productId)}>
@@ -261,6 +268,11 @@ export default function Products() {
             </s-table-body>
           </s-table>
         )}
+        {mappings.map((m) => (
+          <s-modal key={m.id} id={`preview-${m.id}`} heading={`Preview ${m.product?.title ?? 'try-on'}`}>
+            <PreviewPanel mapping={m} />
+          </s-modal>
+        ))}
       </s-section>
     </s-page>
   )
