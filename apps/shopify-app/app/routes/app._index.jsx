@@ -102,7 +102,11 @@ export default function Index() {
                   <s-text tone="subdued">{usage.used} / {usage.limit} products</s-text>
                 </s-stack>
                 {usage.pricingUrl && (
-                  <s-button variant="secondary" onClick={openPricing}>
+                  <s-button
+                    variant="secondary"
+                    accessibilityLabel="Upgrade plan"
+                    onClick={openPricing}
+                  >
                     Upgrade plan
                   </s-button>
                 )}
