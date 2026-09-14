@@ -42,6 +42,18 @@ afterAll(async () => {
 })
 
 describe('app.products map action', () => {
+  // mapProductToModel throws on a cross-shop asset. Unhandled, that reaches the
+  // merchant as a raw framework error page instead of the modal's banner.
+  it('reports an error instead of throwing on a model from another shop', async () => {
+    const other = await prisma.modelAsset.create({
+      data: { shop: `other-${tag}.myshopify.com`, storageRef: `${tag}/o.glb`, fitMetadata: {} },
+    })
+    const res = await post({ intent: 'map', productId: `gid://shopify/Product/${tag}-x`, modelAssetId: other.id })
+    expect(res.error).toBeTruthy()
+    expect(res.error).not.toMatch(/belong/i)
+    await prisma.modelAsset.deleteMany({ where: { shop: `other-${tag}.myshopify.com` } })
+  })
+
   it('maps a product to a model', async () => {
     const res = await post({ intent: 'map', productId: `gid://shopify/Product/${tag}`, modelAssetId: assetId })
     expect(res).toMatchObject({ mapped: true })

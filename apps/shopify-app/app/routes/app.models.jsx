@@ -105,8 +105,11 @@ export default function Models() {
   const manageFetcher = useFetcher()
   const rename = (modelAssetId, label) =>
     manageFetcher.submit({ intent: 'rename', modelAssetId, label }, { method: 'POST' })
-  const remove = (modelAssetId) =>
+  const remove = (modelAssetId) => {
+    // Dismiss the confirmation before the row disappears under it.
+    document.getElementById(`delete-${modelAssetId}`)?.hide()
     manageFetcher.submit({ intent: 'delete', modelAssetId }, { method: 'POST' })
+  }
 
   useEffect(() => {
     if (manageFetcher.data?.renamed) shopify.toast.show('Name saved')
@@ -265,7 +268,13 @@ export default function Models() {
                       <s-link href="/app/products">view</s-link>
                     </s-text>
                   ) : (
-                    <s-button variant="tertiary" tone="critical" icon="delete" onClick={() => remove(a.id)}>
+                    <s-button
+                      variant="tertiary"
+                      tone="critical"
+                      icon="delete"
+                      commandFor={`delete-${a.id}`}
+                      command="show"
+                    >
                       Delete
                     </s-button>
                   )}
@@ -275,6 +284,29 @@ export default function Models() {
           </s-grid>
         )}
       </s-section>
+
+      {/* Deleting drops the row and its stored GLB with no undo, so it asks
+          first. Only unmapped models reach here -- the action refuses one a
+          product still uses -- but an unused model is still work the merchant
+          would have to redo. */}
+      {assets
+        .filter((a) => a.mappingCount === 0)
+        .map((a) => (
+          <s-modal key={a.id} id={`delete-${a.id}`} heading={`Delete ${modelName(a)}?`}>
+            <s-paragraph>
+              This removes the model and its 3D file. You can&apos;t undo it, and
+              you&apos;d need to upload the file again to use it.
+            </s-paragraph>
+            <s-button
+              slot="primary-action"
+              variant="primary"
+              tone="critical"
+              onClick={() => remove(a.id)}
+            >
+              Delete model
+            </s-button>
+          </s-modal>
+        ))}
     </s-page>
   )
 }

@@ -125,7 +125,16 @@ export const action = async ({ request }) => {
         return { error: "You've reached your plan's product limit. Upgrade to add try-on to more products." }
       }
     }
-    await mapProductToModel(prisma, session.shop, productId, modelAssetId)
+    // Throws when the asset is not this shop's -- a stale model id from a page
+    // open since another session deleted it, or a tampered form. Either way the
+    // merchant gets the modal's banner, not a raw framework error page, and the
+    // internal message stays in the log.
+    try {
+      await mapProductToModel(prisma, session.shop, productId, modelAssetId)
+    } catch (e) {
+      console.error('mapProductToModel failed', e)
+      return { error: "That model isn't available any more. Pick another one." }
+    }
     // The mapping is committed; now project it onto the storefront. The block
     // renders only where this metafield exists, so a failure here means a
     // mapping visible in the admin but not on the product page.
