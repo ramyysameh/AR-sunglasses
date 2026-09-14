@@ -2319,8 +2319,10 @@ git commit -m "fix(admin): report each failure once, not as both a toast and a b
 
 - [ ] **Step 1: Full suite and lint**
 
-Run: `npm run lint && npm test`
-Expected: PASS, no skipped suites.
+Run: `npx eslint app/ --ext .js,.jsx` and then `npm test`.
+Expected: eslint exits 0; the suite passes with no skipped suites.
+
+Two things not to misread here. `npm run lint` covers the whole repo and has 931 pre-existing errors (a vendored Draco decoder, missing node globals config) — it can never pass, so scope it to `app/`. And in `npm test`, a failure raised inside a `beforeEach` Prisma cleanup rather than on an assertion is the known shared-database contention flake from concurrent sessions: re-run that file on its own before treating it as a real failure.
 
 - [ ] **Step 2: Confirm no scope or camera regressions**
 
