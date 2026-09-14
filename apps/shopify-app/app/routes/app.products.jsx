@@ -16,12 +16,23 @@ import { productStatus } from '../tryonStatus.server'
 import { themeEditorUrl, previewUrl } from '../adminLinks.server'
 import StatusBadge from '../components/StatusBadge'
 
-// eslint-disable-next-line no-undef
-const ENGINE_URL = process.env.TRYON_ENGINE_URL
-  // eslint-disable-next-line no-undef
-  || `${process.env.SHOPIFY_APP_URL || ''}/tryon/index.html`
+// Resolved per-request, not at module load: the last resort must be an
+// absolute URL, and only the incoming request reliably gives us one. Neither
+// env var is guaranteed to be set (e.g. SHOPIFY_APP_URL is deliberately unset
+// for local `shopify app dev`), and a relative string here would make
+// previewUrl()'s `new URL(...)` throw and take the whole page down with it.
+function resolveEngineUrl(request) {
+  return (
+    // eslint-disable-next-line no-undef
+    process.env.TRYON_ENGINE_URL
+    // eslint-disable-next-line no-undef
+    || (process.env.SHOPIFY_APP_URL && `${process.env.SHOPIFY_APP_URL}/tryon/index.html`)
+    || new URL('/tryon/index.html', request.url).toString()
+  )
+}
 
 export const loader = async ({ request }) => {
+  const engineUrl = resolveEngineUrl(request)
   const { session, admin } = await authenticate.admin(request)
   const themeUrl = themeEditorUrl(session.shop)
   // app.jsx owns the no-subscription screen; this loader must NOT redirect
@@ -33,7 +44,7 @@ export const loader = async ({ request }) => {
       assets: [],
       usage: planUsage({ planName: null, used: 0, shop: session.shop }),
       themeUrl,
-      engineUrl: ENGINE_URL,
+      engineUrl,
     }
   }
   const [mappings, assets] = await Promise.all([
@@ -57,22 +68,33 @@ export const loader = async ({ request }) => {
   return {
     mappings: await Promise.all(
       mappings.map(async (m) => {
-        const url = previewUrl({ engineUrl: ENGINE_URL, shop: session.shop, productId: m.productId })
-        return {
+        const base = {
           ...m,
           product: products.get(m.productId) ?? null,
           status: productStatus(m),
-          previewUrl: url,
-          // Generated here, not in the browser: a client-side QR library would
-          // need a CDN script and the admin iframe's CSP is not ours to widen.
-          qr: await QRCode.toDataURL(url, { width: 220, margin: 1 }),
+        }
+        // Best-effort, like the metafield sync and product enrichment above: a
+        // preview convenience must never take down the primary page. A row
+        // that fails here just renders its modal without a QR (see PreviewPanel).
+        try {
+          const url = previewUrl({ engineUrl, shop: session.shop, productId: m.productId })
+          return {
+            ...base,
+            previewUrl: url,
+            // Generated here, not in the browser: a client-side QR library would
+            // need a CDN script and the admin iframe's CSP is not ours to widen.
+            qr: await QRCode.toDataURL(url, { width: 220, margin: 1 }),
+          }
+        } catch (e) {
+          console.error('preview URL/QR generation failed', e)
+          return { ...base, previewUrl: null, qr: null }
         }
       }),
     ),
     assets,
     usage: planUsage({ planName: activePlan, used: mappings.length, shop: session.shop }),
     themeUrl,
-    engineUrl: ENGINE_URL,
+    engineUrl,
   }
 }
 

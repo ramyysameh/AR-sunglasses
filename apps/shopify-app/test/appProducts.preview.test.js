@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
 
 const tag = randomUUID().slice(0, 8)
@@ -45,5 +45,22 @@ describe('products preview', () => {
     const url = new URL(mappings[0].previewUrl)
     expect(url.searchParams.get('productId')).toBe(`gid://shopify/Product/${tag}`)
     expect(url.searchParams.get('src')).toBe('preview')
+  })
+
+  // A preview convenience must never take down the primary page: with neither
+  // env var set, ENGINE_URL's last resort has to still be an absolute URL, and
+  // any failure to build one must be swallowed per-row, not thrown.
+  describe('with no engine URL configured', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs()
+    })
+
+    it('still returns mappings instead of throwing', async () => {
+      vi.stubEnv('TRYON_ENGINE_URL', '')
+      vi.stubEnv('SHOPIFY_APP_URL', '')
+      const { mappings } = await loader({ request: new Request('https://x/app/products') })
+      expect(mappings).toHaveLength(1)
+      expect(() => new URL(mappings[0].previewUrl)).not.toThrow()
+    })
   })
 })
