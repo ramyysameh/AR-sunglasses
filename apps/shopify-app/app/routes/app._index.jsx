@@ -2,6 +2,8 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import { getActivePlanName } from "../billing.server";
+import { planUsage } from "../planUsage.server";
+import { themeEditorUrl } from "../adminLinks.server";
 import prisma from "../db.server";
 
 export const loader = async ({ request }) => {
@@ -9,55 +11,84 @@ export const loader = async ({ request }) => {
   // The app.jsx layout owns the no-subscription screen and hides this route's
   // content, so this loader must NOT throw its own redirect: a /app -> /app
   // redirect loops forever and renders a dead, control-less page (App Store
-  // rejection Ref 127328). On no plan, do no gated DB work and return zeros;
-  // the checklist just shows "To do".
+  // rejection Ref 127328). On no plan, do no gated DB work and return zeros.
   const activePlan = await getActivePlanName(admin, session.shop);
+  const themeUrl = themeEditorUrl(session.shop);
   if (!activePlan) {
-    return { modelCount: 0, mappingCount: 0 };
+    return {
+      modelCount: 0,
+      mappingCount: 0,
+      liveCount: 0,
+      usage: planUsage({ planName: null, used: 0, shop: session.shop }),
+      themeUrl,
+    };
   }
-  const [modelCount, mappingCount] = await Promise.all([
+  const [modelCount, mappingCount, liveCount] = await Promise.all([
     prisma.modelAsset.count({ where: { shop: session.shop } }),
     prisma.productMapping.count({ where: { shop: session.shop } }),
+    prisma.productMapping.count({ where: { shop: session.shop, lastSeenLiveAt: { not: null } } }),
   ]);
-  return { modelCount, mappingCount };
+  return {
+    modelCount,
+    mappingCount,
+    liveCount,
+    usage: planUsage({ planName: activePlan, used: mappingCount, shop: session.shop }),
+    themeUrl,
+  };
 };
 
 export default function Index() {
-  const { modelCount, mappingCount } = useLoaderData();
-  const hasModels = modelCount > 0;
-  const hasMappings = mappingCount > 0;
+  const { modelCount, mappingCount, liveCount, usage, themeUrl } = useLoaderData();
+  const steps = [
+    { done: modelCount > 0, text: "Upload a model", note: modelCount > 0 ? `${modelCount} uploaded` : null },
+    { done: mappingCount > 0, text: "Add try-on to a product", note: mappingCount > 0 ? `${mappingCount} products` : null },
+    { done: liveCount > 0, text: "Add the button to your theme", note: null },
+  ];
+  const doneCount = steps.filter((s) => s.done).length;
 
   return (
     <s-page heading="AR Try-on">
-      <s-button slot="primary-action" href="/app/models">Go to Models</s-button>
+      <s-button slot="primary-action" href="/app/products">Go to products</s-button>
 
-      <s-section heading="Let shoppers try on your glasses">
-        <s-paragraph>
-          AR Try-on lets shoppers see how sunglasses look on their own face before they
-          buy, using their device camera in real time, directly on the product page. Face
-          tracking runs entirely in the shopper&apos;s browser -- no photo or video is ever
-          uploaded or stored.
-        </s-paragraph>
+      <s-section heading="Set up try-on">
+        <s-paragraph>{doneCount} of 3 done</s-paragraph>
+        <s-stack direction="block" gap="base">
+          {steps.map((step) => (
+            <s-stack key={step.text} direction="inline" gap="base" alignItems="center">
+              <s-badge tone={step.done ? "success" : "neutral"} icon={step.done ? "check-circle" : "circle"}>
+                {step.done ? "Done" : "To do"}
+              </s-badge>
+              <s-text>{step.text}</s-text>
+              {step.note && <s-text tone="subdued">{step.note}</s-text>}
+            </s-stack>
+          ))}
+        </s-stack>
+        {liveCount === 0 && (
+          // Top-level: the theme editor is an admin URL and cannot be embedded
+          // in this app's iframe, the same reason app.jsx breaks out for pricing.
+          <s-paragraph>
+            <a href={themeUrl} target="_top" rel="noreferrer">Add to theme</a>
+          </s-paragraph>
+        )}
       </s-section>
 
-      <s-section heading="Setup">
-        <s-stack direction="block" gap="base">
-          <s-stack direction="inline" gap="base" alignItems="center">
-            <s-badge tone={hasModels ? "success" : "neutral"} icon={hasModels ? "check-circle" : "circle"}>
-              {hasModels ? `${modelCount} uploaded` : "To do"}
-            </s-badge>
-            <s-text>Upload a calibrated 3D model on the <s-link href="/app/models">Models</s-link> page.</s-text>
-          </s-stack>
-          <s-stack direction="inline" gap="base" alignItems="center">
-            <s-badge tone={hasMappings ? "success" : "neutral"} icon={hasMappings ? "check-circle" : "circle"}>
-              {hasMappings ? `${mappingCount} mapped` : "To do"}
-            </s-badge>
-            <s-text>Map each model to its product.</s-text>
-          </s-stack>
-          <s-stack direction="inline" gap="base" alignItems="center">
-            <s-badge tone="neutral" icon="circle">Last step</s-badge>
-            <s-text>Add the &quot;AR Try-On&quot; block to the product page in the theme editor.</s-text>
-          </s-stack>
+      <s-section heading="Your plan">
+        <s-stack direction="block" gap="small-500">
+          <s-text type="strong">{usage.planName ?? "No plan"}</s-text>
+          {usage.unlimited ? (
+            <s-text tone="subdued">{usage.used} products using try-on</s-text>
+          ) : (
+            <>
+              <s-text tone="subdued">{usage.used} of {usage.limit} products using try-on</s-text>
+              {usage.pricingUrl && (
+                <s-paragraph>
+                  <a href={usage.pricingUrl} target="_top" rel="noreferrer">
+                    {usage.atLimit ? "Upgrade to add more products" : "Change plan"}
+                  </a>
+                </s-paragraph>
+              )}
+            </>
+          )}
         </s-stack>
       </s-section>
 

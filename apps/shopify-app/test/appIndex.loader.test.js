@@ -38,4 +38,26 @@ describe('app._index loader counts', () => {
     const result = await loader({ request: new Request('https://x/app') })
     expect(result).toMatchObject({ modelCount: 1, mappingCount: 1 })
   })
+
+  it('reports plan usage and a theme link', async () => {
+    const asset = await prisma.modelAsset.create({ data: { shop, storageRef: `${tag}/u.glb`, fitMetadata: {} } })
+    await prisma.productMapping.create({ data: { shop, productId: `gid://shopify/Product/${tag}-u`, modelAssetId: asset.id } })
+
+    const result = await loader({ request: new Request('https://x/app') })
+    expect(result.usage).toMatchObject({ used: 1, unlimited: true })
+    expect(result.themeUrl).toContain('addAppBlockId')
+  })
+
+  it('counts a product as live only once it has been seen working', async () => {
+    const asset = await prisma.modelAsset.create({ data: { shop, storageRef: `${tag}/l.glb`, fitMetadata: {} } })
+    const pid = `gid://shopify/Product/${tag}-l`
+    await prisma.productMapping.create({ data: { shop, productId: pid, modelAssetId: asset.id } })
+    expect((await loader({ request: new Request('https://x/app') })).liveCount).toBe(0)
+
+    await prisma.productMapping.update({
+      where: { shop_productId: { shop, productId: pid } },
+      data: { lastSeenLiveAt: new Date() },
+    })
+    expect((await loader({ request: new Request('https://x/app') })).liveCount).toBe(1)
+  })
 })
