@@ -49,6 +49,7 @@ model ModelAsset {
   shop        String
   sourceUrl   String?
   filename    String?
+  label       String?
   storageRef  String
   fitMetadata Json
   confidence  Float?
@@ -70,6 +71,7 @@ model ProductMapping {
   modelAsset   ModelAsset @relation(fields: [modelAssetId], references: [id])
   modelAssetId String
   createdAt    DateTime   @default(now())
+  lastSeenLiveAt DateTime?
 
   @@unique([shop, productId])
 }
