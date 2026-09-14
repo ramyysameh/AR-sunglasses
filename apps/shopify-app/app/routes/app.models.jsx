@@ -78,17 +78,11 @@ export const action = async ({ request }) => {
   return { error: 'Unknown action.' }
 }
 
-// A human label for a model: its uploaded file name, with the upload date to
-// disambiguate re-uploads of the same file. Falls back to a short id for older
-// rows (and block-registered models) that predate the stored filename.
+// A human label for a model: its uploaded file name. Falls back to a short id
+// for older rows (and block-registered models) that predate the stored
+// filename.
 function modelName(a) {
   return a.filename || `Model ${a.id.slice(0, 8)}`
-}
-function modelLabel(a) {
-  const when = a.createdAt
-    ? new Date(a.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-    : null
-  return when ? `${modelName(a)} · ${when}` : modelName(a)
 }
 
 function sourceLabel(up) {
@@ -98,38 +92,27 @@ function sourceLabel(up) {
 }
 
 export default function Models() {
-  const { assets, mappings } = useLoaderData()
-  const mapFetcher = useFetcher()
-  const unmapFetcher = useFetcher()
+  const { assets } = useLoaderData()
   const shopify = useAppBridge()
   const revalidator = useRevalidator()
   const [pendingFile, setPendingFile] = useState(null)
-  const [picked, setPicked] = useState(null) // { id, title, imageUrl }
-  const [modelAssetId, setModelAssetId] = useState('')
   const [progress, setProgress] = useState(null) // null | 0..100 | 'calibrating'
   const [uploadResult, setUploadResult] = useState(null)
   const [uploadErr, setUploadErr] = useState(null)
   const uploading = progress !== null
   const MAX_UPLOAD_BYTES = 25 * 1048576
 
-  const mapping = mapFetcher.state !== 'idle'
-  const mapError = mapFetcher.data?.error
-  const mapped = mapFetcher.data?.mapped
+  const manageFetcher = useFetcher()
+  const rename = (modelAssetId, label) =>
+    manageFetcher.submit({ intent: 'rename', modelAssetId, label }, { method: 'POST' })
+  const remove = (modelAssetId) =>
+    manageFetcher.submit({ intent: 'delete', modelAssetId }, { method: 'POST' })
 
   useEffect(() => {
-    if (mapped) {
-      shopify.toast.show('Product mapped')
-      setPicked(null)
-      setModelAssetId('')
-    }
-    if (mapError) shopify.toast.show(mapError, { isError: true })
-  }, [mapped, mapError, shopify])
-
-  const removeMapping = (productId) => unmapFetcher.submit({ intent: 'unmap', productId }, { method: 'POST' })
-  useEffect(() => {
-    if (unmapFetcher.data?.unmapped) shopify.toast.show('Mapping removed')
-    if (unmapFetcher.data?.error) shopify.toast.show(unmapFetcher.data.error, { isError: true })
-  }, [unmapFetcher.data, shopify])
+    if (manageFetcher.data?.renamed) shopify.toast.show('Name saved')
+    if (manageFetcher.data?.deleted) shopify.toast.show('Model deleted')
+    if (manageFetcher.data?.error) shopify.toast.show(manageFetcher.data.error, { isError: true })
+  }, [manageFetcher.data, shopify])
 
   // POST to the resource route and parse JSON defensively: a non-JSON body
   // (an error page, an auth bounce) becomes a clear message instead of the
@@ -198,22 +181,6 @@ export default function Models() {
     }
   }
 
-  const pickProduct = async () => {
-    const selection = await shopify.resourcePicker({ type: 'product', action: 'select' })
-    if (selection && selection[0]) {
-      const p = selection[0]
-      setPicked({ id: p.id, title: p.title, imageUrl: p.images?.[0]?.originalSrc ?? null })
-    }
-  }
-
-  const submitMapping = () => {
-    if (!picked?.id || !modelAssetId) {
-      shopify.toast.show('Pick a product and a model first', { isError: true })
-      return
-    }
-    mapFetcher.submit({ intent: 'map', productId: picked.id, modelAssetId }, { method: 'POST' })
-  }
-
   return (
     <s-page heading="Models">
       <s-section heading="Upload a model (GLB)">
@@ -267,94 +234,11 @@ export default function Models() {
         {uploadErr && <s-banner heading="Upload failed" tone="critical">{uploadErr}</s-banner>}
       </s-section>
 
-      <s-section heading="Map a product to a model">
+      <s-section heading="Your models">
         {assets.length === 0 ? (
-          <s-paragraph>Upload a model first, then map it to a product.</s-paragraph>
-        ) : (
           <s-stack direction="block" gap="base">
-            <s-paragraph>Select a product, then choose a model to map it to.</s-paragraph>
-            <s-stack direction="inline" gap="base" alignItems="center">
-              <s-button onClick={pickProduct} icon="product">
-                {picked ? 'Change product' : 'Select product'}
-              </s-button>
-              {picked && (
-                <s-stack direction="inline" gap="small-500" alignItems="center">
-                  {picked.imageUrl && (
-                    <s-thumbnail src={picked.imageUrl} alt={picked.title} size="small"></s-thumbnail>
-                  )}
-                  <s-text type="strong">{picked.title}</s-text>
-                </s-stack>
-              )}
-            </s-stack>
-            <s-select
-              label="Model"
-              name="modelAssetId"
-              value={modelAssetId}
-              onChange={(e) => setModelAssetId(e.target.value)}
-            >
-              <s-option value="">Choose a model…</s-option>
-              {assets.map((a) => (
-                <s-option key={a.id} value={a.id}>
-                  {modelLabel(a)}
-                </s-option>
-              ))}
-            </s-select>
-            <s-stack direction="inline" gap="base">
-              <s-button variant="primary" onClick={submitMapping} {...(mapping ? { loading: true } : {})}>
-                Map product
-              </s-button>
-            </s-stack>
-            {mapError && <s-banner heading="Could not map" tone="critical">{mapError}</s-banner>}
-          </s-stack>
-        )}
-      </s-section>
-
-      <s-section heading="Product mappings">
-        {mappings.length === 0 ? (
-          <s-stack direction="block" gap="base" alignItems="center">
-            <s-text tone="subdued">No products mapped yet.</s-text>
-            <s-paragraph>Upload a model, then map it to the product it belongs to.</s-paragraph>
-          </s-stack>
-        ) : (
-          <s-table variant="auto">
-            <s-table-header-row>
-              <s-table-header listSlot="primary">Product</s-table-header>
-              <s-table-header>Model status</s-table-header>
-              <s-table-header>Actions</s-table-header>
-            </s-table-header-row>
-            <s-table-body>
-              {mappings.map((m) => (
-                <s-table-row key={m.id}>
-                  <s-table-cell>
-                    <s-stack direction="inline" gap="small-500" alignItems="center">
-                      {m.product?.imageUrl && (
-                        <s-thumbnail src={m.product.imageUrl} alt={m.product.imageAlt ?? m.product.title} size="small"></s-thumbnail>
-                      )}
-                      <s-text type="strong">{m.product?.title ?? 'Product unavailable'}</s-text>
-                    </s-stack>
-                  </s-table-cell>
-                  <s-table-cell>
-                    <s-badge tone={m.modelAsset.status === 'ready' ? 'success' : 'warning'}>
-                      {m.modelAsset.status === 'ready' ? 'Calibrated' : 'Needs review'}
-                    </s-badge>
-                  </s-table-cell>
-                  <s-table-cell>
-                    <s-button variant="tertiary" tone="critical" icon="delete" onClick={() => removeMapping(m.productId)}>
-                      Remove
-                    </s-button>
-                  </s-table-cell>
-                </s-table-row>
-              ))}
-            </s-table-body>
-          </s-table>
-        )}
-      </s-section>
-
-      <s-section heading="Uploaded models">
-        {assets.length === 0 ? (
-          <s-stack direction="block" gap="base" alignItems="center">
-            <s-text tone="subdued">No models yet.</s-text>
-            <s-paragraph>Upload your first calibrated GLB above to get started.</s-paragraph>
+            <s-text type="strong">Upload your first model</s-text>
+            <s-paragraph>Add a .glb of your frames above to get started.</s-paragraph>
           </s-stack>
         ) : (
           <s-grid gridTemplateColumns="1fr 1fr" gap="base">
@@ -362,13 +246,30 @@ export default function Models() {
               <s-box key={a.id} padding="base" borderWidth="base" borderRadius="base">
                 <s-stack direction="block" gap="small-500">
                   <ModelViewer src={`/models/${a.id}.glb`} alt={modelName(a)} />
-                  <s-text type="strong">{modelName(a)}</s-text>
+                  <s-text-field
+                    label="Name"
+                    value={a.label ?? ''}
+                    placeholder={a.filename ?? `Model ${a.id.slice(0, 8)}`}
+                    onBlur={(e) => rename(a.id, e.currentTarget.value)}
+                  ></s-text-field>
                   <s-stack direction="inline" gap="small-500" alignItems="center">
                     <s-badge tone={a.status === 'ready' ? 'success' : 'warning'}>
-                      {a.status === 'ready' ? 'Calibrated' : 'Needs review'}
+                      {a.status === 'ready' ? 'Ready' : 'Check fit'}
                     </s-badge>
-                    {a.confidence != null && <s-text tone="subdued">confidence {Math.round(a.confidence * 100)}%</s-text>}
+                    {a.confidence != null && (
+                      <s-text tone="subdued">fit confidence {Math.round(a.confidence * 100)}%</s-text>
+                    )}
                   </s-stack>
+                  {a.mappingCount > 0 ? (
+                    <s-text tone="subdued">
+                      Used by {a.mappingCount} product{a.mappingCount === 1 ? '' : 's'} --{' '}
+                      <s-link href="/app/products">view</s-link>
+                    </s-text>
+                  ) : (
+                    <s-button variant="tertiary" tone="critical" icon="delete" onClick={() => remove(a.id)}>
+                      Delete
+                    </s-button>
+                  )}
                 </s-stack>
               </s-box>
             ))}
