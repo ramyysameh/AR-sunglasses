@@ -474,7 +474,7 @@ export function previewUrl({ engineUrl, shop, productId, gscale }) {
 - [ ] **Step 4: Run the tests and make sure they pass**
 
 Run: `npx vitest run test/adminLinks.server.test.js`
-Expected: PASS, 1 test.
+Expected: PASS, 3 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -1124,7 +1124,7 @@ export const headers = (headersArgs) => {
 - [ ] **Step 5: Run the tests and make sure they pass**
 
 Run: `npx vitest run test/appProducts.loader.test.js`
-Expected: PASS, 3 tests.
+Expected: PASS, 1 test.
 
 - [ ] **Step 6: Add Products to the nav**
 
