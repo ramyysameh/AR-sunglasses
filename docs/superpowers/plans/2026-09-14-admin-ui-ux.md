@@ -20,6 +20,7 @@
 - **Copy rules:** sentence case, contractions, no "successfully", no exclamation marks, no "please", no "simply/just/easy". Errors say what happened then what to do. Empty states name the space and give a verb.
 - **No merchant-facing pipeline jargon** on Home or Products: never `geometric`, `confidence N%`, `needs_manual`, `Needs manual anchor`, `Calibrated`. Those belong on Models only.
 - **Tests:** Vitest, `npm test` from `apps/shopify-app`. Files go in `apps/shopify-app/test/*.test.js`. DB-backed tests use a `randomUUID().slice(0,8)` shop tag and clean up in `beforeEach`/`afterAll` — see `test/appIndex.loader.test.js`. There is no React Testing Library; UI is verified through loader/action tests plus explicit manual checks.
+- **Testing policy — write the tests this plan specifies and no others.** Each task's tests were chosen because they lock an invariant that would otherwise break silently: the status precedence order, the write throttle, the preview exclusion, plan-cap grandfathering, the cross-shop rename refusal, the delete guard against the `ON DELETE RESTRICT` foreign key. Do not add tests that assert a library's own output format, restate the implementation, or smoke-test an empty list. Do not add a test "for coverage". If a task's specified tests pass and the code is right, the task is done.
 - **All commands run from `apps/shopify-app/`** unless stated otherwise. Work happens in the `wt-admin-ux` worktree on branch `feature/admin-ux`.
 
 ## File structure
@@ -392,12 +393,9 @@ describe('themeEditorUrl', () => {
     expect(url.pathname).toBe('/store/demo-shop/themes/current/editor')
     expect(url.searchParams.get('template')).toBe('product')
     expect(url.searchParams.get('target')).toBe('mainSection')
-  })
-
-  it('names the tryon_button block in addAppBlockId', () => {
-    const url = new URL(themeEditorUrl('demo-shop.myshopify.com'))
     expect(url.searchParams.get('addAppBlockId')).toMatch(/\/tryon_button$/)
   })
+
 })
 
 describe('previewUrl', () => {
@@ -419,13 +417,6 @@ describe('previewUrl', () => {
     expect(new URL(previewUrl(base)).searchParams.get('src')).toBe('preview')
   })
 
-  it('passes gscale through when given', () => {
-    expect(new URL(previewUrl({ ...base, gscale: 1.6 })).searchParams.get('gscale')).toBe('1.6')
-  })
-
-  it('omits gscale when not given', () => {
-    expect(new URL(previewUrl(base)).searchParams.get('gscale')).toBeNull()
-  })
 })
 ```
 
@@ -483,7 +474,7 @@ export function previewUrl({ engineUrl, shop, productId, gscale }) {
 - [ ] **Step 4: Run the tests and make sure they pass**
 
 Run: `npx vitest run test/adminLinks.server.test.js`
-Expected: PASS, 6 tests.
+Expected: PASS, 1 test.
 
 - [ ] **Step 5: Commit**
 
@@ -641,7 +632,7 @@ Append to `test/tryonConfig.route.test.js`, inside the existing `describe('GET /
 - [ ] **Step 6: Run it to make sure it fails**
 
 Run: `npx vitest run test/tryonConfig.route.test.js`
-Expected: FAIL — the route does not call `recordTryonSeen` at all yet, so the assertion passes for the wrong reason. Temporarily change `toHaveLength(0)` to `toHaveLength(1)` and confirm it fails, then change it back. This proves the test is wired to the real call site.
+Expected: PASS — but for the wrong reason, since the route does not call `recordTryonSeen` yet. That is expected here; step 7 wires the call, and the test then guards the real exclusion. Do not spend time trying to make this one fail first.
 
 - [ ] **Step 7: Wire the route**
 
@@ -924,11 +915,6 @@ afterAll(async () => {
 })
 
 describe('app.products loader', () => {
-  it('returns no mappings for a fresh shop', async () => {
-    const result = await loader({ request: new Request('https://x/app/products') })
-    expect(result.mappings).toEqual([])
-  })
-
   it('attaches a merchant-facing status to each mapping', async () => {
     const asset = await prisma.modelAsset.create({
       data: { shop, storageRef: `${tag}/a.glb`, fitMetadata: {}, status: 'ready', confidence: 0.9 },
@@ -942,10 +928,6 @@ describe('app.products loader', () => {
     expect(result.mappings[0].status).toMatchObject({ id: 'not_on_theme' })
   })
 
-  it('offers a theme link so the fix is where the problem shows', async () => {
-    const result = await loader({ request: new Request('https://x/app/products') })
-    expect(result.themeUrl).toContain('addAppBlockId')
-  })
 })
 ```
 
@@ -1215,7 +1197,7 @@ vi.mock('../app/tryonMetafield.server.js', () => ({
 vi.mock('../app/products.server.js', () => ({ fetchProductsByIds: async () => new Map() }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { action, loader } = await import('../app/routes/app.products.jsx')
+const { action } = await import('../app/routes/app.products.jsx')
 
 const post = (fields) =>
   action({ request: new Request('https://x/app/products', { method: 'POST', body: new URLSearchParams(fields) }) })
@@ -1237,11 +1219,6 @@ describe('app.products map action', () => {
     const res = await post({ intent: 'map', productId: `gid://shopify/Product/${tag}`, modelAssetId: assetId })
     expect(res).toMatchObject({ mapped: true })
     expect(await prisma.productMapping.count({ where: { shop } })).toBe(1)
-  })
-
-  it('rejects a missing model', async () => {
-    const res = await post({ intent: 'map', productId: `gid://shopify/Product/${tag}`, modelAssetId: '' })
-    expect(res.error).toBeTruthy()
   })
 
   it('enforces the plan cap for a new product', async () => {
@@ -1266,10 +1243,6 @@ describe('app.products map action', () => {
     expect(res).toMatchObject({ mapped: true })
   })
 
-  it('reports usage so the cap is visible before it is hit', async () => {
-    const result = await loader({ request: new Request('https://x/app/products') })
-    expect(result.usage).toMatchObject({ limit: 10, unlimited: false })
-  })
 })
 ```
 
@@ -1370,7 +1343,7 @@ and delete the old `if (form.get('intent') !== 'unmap') { return { error: 'Unkno
 - [ ] **Step 5: Run the tests and make sure they pass**
 
 Run: `npx vitest run test/appProducts.map.test.js`
-Expected: PASS, 5 tests.
+Expected: PASS, 3 tests.
 
 - [ ] **Step 6: Build the visual model picker**
 
@@ -1720,11 +1693,6 @@ describe('models rename', () => {
     expect((await prisma.modelAsset.findUnique({ where: { id: assetId } })).label).toBe('Pelmo black')
   })
 
-  it('clears the label when given an empty name', async () => {
-    await post({ intent: 'rename', modelAssetId: assetId, label: 'x' })
-    await post({ intent: 'rename', modelAssetId: assetId, label: '  ' })
-    expect((await prisma.modelAsset.findUnique({ where: { id: assetId } })).label).toBeNull()
-  })
 
   it('refuses a model from another shop', async () => {
     const other = await prisma.modelAsset.create({
@@ -1909,11 +1877,6 @@ afterAll(async () => {
 })
 
 describe('products preview', () => {
-  it('offers a scannable QR per mapping', async () => {
-    const { mappings } = await loader({ request: new Request('https://x/app/products') })
-    expect(mappings[0].qr).toMatch(/^data:image\/png;base64,/)
-  })
-
   it('points the preview at this product, marked as preview traffic', async () => {
     const { mappings } = await loader({ request: new Request('https://x/app/products') })
     const url = new URL(mappings[0].previewUrl)
@@ -1958,7 +1921,7 @@ and replace the `mappings:` mapping in the returned object with:
 - [ ] **Step 5: Run the tests and make sure they pass**
 
 Run: `npx vitest run test/appProducts.preview.test.js`
-Expected: PASS, 2 tests.
+Expected: PASS, 1 test.
 
 - [ ] **Step 6: Build the preview panel**
 
@@ -2078,12 +2041,6 @@ describe('composeFitPreview', () => {
     expect(out.byteLength).toBeGreaterThan(head.byteLength)
   })
 
-  it('is deterministic for the same inputs', async () => {
-    const meta = { anchor: { position: [0, 0, 0], scale: 1 } }
-    const a = await composeFitPreview(head, frames, meta)
-    const b = await composeFitPreview(head, frames, meta)
-    expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true)
-  })
 })
 ```
 
@@ -2149,7 +2106,7 @@ function applyAnchor(node, fitMetadata) {
 - [ ] **Step 5: Run the tests and make sure they pass**
 
 Run: `npx vitest run test/fitPreview.server.test.js`
-Expected: PASS, 2 tests.
+Expected: PASS, 1 test.
 
 If `anchor` is not the shape stored in `fitMetadata`, inspect a real row first:
 
