@@ -1,7 +1,7 @@
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
-import { getActivePlanName } from "../billing.server";
+import { getActivePlanName, hasFreeAccess } from "../billing.server";
 import { planUsage } from "../planUsage.server";
 import { themeEditorUrl } from "../adminLinks.server";
 import prisma from "../db.server";
@@ -32,13 +32,25 @@ export const loader = async ({ request }) => {
     modelCount,
     mappingCount,
     liveCount,
-    usage: planUsage({ planName: activePlan, used: mappingCount, shop: session.shop }),
+    // Owner-comped stores keep their unlimited backend entitlement, but this
+    // card previews the Starter tier so the owner sees the merchant upgrade UI.
+    usage: planUsage({
+      planName: hasFreeAccess(session.shop) ? "Starter" : activePlan,
+      used: mappingCount,
+      shop: session.shop,
+    }),
     themeUrl,
   };
 };
 
 export default function Index() {
   const { modelCount, mappingCount, liveCount, usage, themeUrl } = useLoaderData();
+  const usagePercent = usage.unlimited || usage.limit <= 0
+    ? 0
+    : Math.min(100, Math.round((usage.used / usage.limit) * 100));
+  const openPricing = () => {
+    if (usage.pricingUrl) window.open(usage.pricingUrl, "_top");
+  };
   const steps = [
     { done: modelCount > 0, text: "Upload a model", note: modelCount > 0 ? `${modelCount} uploaded` : null },
     { done: mappingCount > 0, text: "Add try-on to a product", note: mappingCount > 0 ? `${mappingCount} products` : null },
@@ -76,20 +88,53 @@ export default function Index() {
       </s-section>
 
       <s-section heading="Your plan">
-        <s-stack direction="block" gap="small-500">
-          <s-text type="strong">{usage.planName ?? "No plan"}</s-text>
+        <s-stack direction="block" gap="base">
           {usage.unlimited ? (
-            <s-text tone="subdued">{usage.used} products using try-on</s-text>
+            <>
+              <s-text type="strong">{usage.planName ?? "No plan"}</s-text>
+              <s-text tone="subdued">{usage.used} products using try-on</s-text>
+            </>
           ) : (
             <>
-              <s-text tone="subdued">{usage.used} of {usage.limit} products using try-on</s-text>
-              {usage.pricingUrl && (
-                <s-paragraph>
-                  <a href={usage.pricingUrl} target="_top" rel="noreferrer">
-                    {usage.atLimit ? "Upgrade to add more products" : "Change plan"}
-                  </a>
-                </s-paragraph>
-              )}
+              <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+                <s-stack direction="block" gap="small-200">
+                  <s-text type="strong">{usage.planName ?? "No plan"}</s-text>
+                  <s-text tone="subdued">{usage.used} / {usage.limit} products</s-text>
+                </s-stack>
+                {usage.pricingUrl && (
+                  <s-button variant="secondary" onClick={openPricing}>
+                    Upgrade plan
+                  </s-button>
+                )}
+              </s-stack>
+              <div
+                role="progressbar"
+                aria-label={`${usage.used} of ${usage.limit} products used`}
+                aria-valuemin="0"
+                aria-valuemax={usage.limit}
+                aria-valuenow={Math.min(usage.used, usage.limit)}
+                style={{
+                  width: "100%",
+                  height: "8px",
+                  overflow: "hidden",
+                  borderRadius: "4px",
+                  background: "#e3e3e3",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${usagePercent}%`,
+                    height: "100%",
+                    borderRadius: "4px",
+                    background: "#008060",
+                  }}
+                />
+              </div>
+              <s-text tone="subdued">
+                {usage.limit - usage.used > 0
+                  ? `${usage.limit - usage.used} product${usage.limit - usage.used === 1 ? "" : "s"} remaining`
+                  : "Upgrade to add more products"}
+              </s-text>
             </>
           )}
         </s-stack>
