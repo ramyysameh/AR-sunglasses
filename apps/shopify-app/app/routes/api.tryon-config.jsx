@@ -1,5 +1,5 @@
 import db from '../db.server'
-import { getTryonConfig } from '../tryonConfig.server'
+import { getTryonConfig, recordTryonSeen } from '../tryonConfig.server'
 import { getShopSubscription, isServable, hasFreeAccess } from '../billing.server'
 
 // Public endpoint: the hosted engine (inside the theme iframe) fetches this to
@@ -33,5 +33,17 @@ export const loader = async ({ request }) => {
   }
   const cfg = await getTryonConfig(db, shop, productId)
   if (!cfg) return new Response('not found', { status: 404 })
+  // Proof of life: reaching here means the block is installed, the product is
+  // mapped, and the subscription is servable. Merchant previews carry
+  // src=preview and are excluded -- otherwise previewing your own product would
+  // report a theme block that was never installed.
+  if (url.searchParams.get('src') !== 'preview') {
+    try {
+      await recordTryonSeen(db, shop, productId)
+    } catch (e) {
+      // Never fail the storefront's config fetch over a bookkeeping write.
+      console.error('recordTryonSeen failed', e)
+    }
+  }
   return Response.json(cfg)
 }
