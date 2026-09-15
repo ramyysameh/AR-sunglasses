@@ -28,8 +28,6 @@ const ROT_LEAD_MS = 60
 const MAX_ROT_LEAD_FRAMES = 4
 const FALLBACK_FACE_DEPTH = -0.78
 const NEAREST_DISPLAY_DEPTH = -0.62
-const LOW_QUALITY_FREEZE_FRAMES = 3
-const LOW_QUALITY_THRESHOLD = 0.42
 // How many frontal samples the running size estimate averages over. Capped so it
 // remains a long moving average and can still follow a genuine change of face.
 const FRONTAL_SCALE_SAMPLES = 120
@@ -1254,18 +1252,6 @@ export class RenderLoop {
 
       if (!pose) {
         this._hideTrackedObjects(timestamp)
-        this.renderer?.render(this.scene, this.camera)
-        return
-      }
-
-      if (pose.poseQuality < LOW_QUALITY_THRESHOLD) {
-        this.lowQualityFrames += 1
-      } else {
-        this.lowQualityFrames = 0
-      }
-
-      if (this.lowQualityFrames > 1 && this.lastGoodTransform && this.lowQualityFrames <= LOW_QUALITY_FREEZE_FRAMES) {
-        this._applyTransform(this.lastGoodTransform)
         this.renderer?.render(this.scene, this.camera)
         return
       }
