@@ -1312,7 +1312,12 @@ export class RenderLoop {
       const basePosition = fitSolution.glassesTransform.position
       const tunedPosition = basePosition.clone().add(new THREE.Vector3(xOffset, yOffset, zOffset))
 
-      this._updateAdaptiveFilters(tunedPosition, fitSolution.glassesTransform.quaternion, timestamp)
+      // A 60 Hz render loop commonly sees each 30 Hz camera frame twice. Keep
+      // filtering toward the cached target on the in-between render, but only
+      // update motion classification from a genuinely new observation.
+      if (this.faceTracker?.lastDetectionWasFresh !== false) {
+        this._updateAdaptiveFilters(tunedPosition, fitSolution.glassesTransform.quaternion, timestamp)
+      }
 
       const smoothPos = this.positionFilter
         ? this.positionFilter.filter(tunedPosition, timestamp)

@@ -11,6 +11,9 @@ export class FaceTracker {
     this.modelAssetPath = options.modelAssetPath ?? DEFAULT_MODEL_URL
     this.wasmRoot = options.wasmRoot ?? DEFAULT_WASM_ROOT
     this.faceLandmarker = null
+    this.lastVideoTime = null
+    this.lastResult = null
+    this.lastDetectionWasFresh = false
   }
 
   async init() {
@@ -35,11 +38,23 @@ export class FaceTracker {
       return null
     }
 
-    return this.faceLandmarker.detectForVideo(videoElement, timestamp)
+    const videoTime = Number(videoElement.currentTime)
+    if (Number.isFinite(videoTime) && videoTime === this.lastVideoTime) {
+      this.lastDetectionWasFresh = false
+      return this.lastResult
+    }
+
+    this.lastResult = this.faceLandmarker.detectForVideo(videoElement, timestamp)
+    this.lastVideoTime = Number.isFinite(videoTime) ? videoTime : null
+    this.lastDetectionWasFresh = true
+    return this.lastResult
   }
 
   dispose() {
     this.faceLandmarker?.close?.()
     this.faceLandmarker = null
+    this.lastVideoTime = null
+    this.lastResult = null
+    this.lastDetectionWasFresh = false
   }
 }
