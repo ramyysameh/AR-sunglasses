@@ -37,5 +37,8 @@ export async function calibrateUpload(glbBuffer) {
     confidence: calibration.confidence,
     needsManual: calibration.needsManual,
     storedGlb: glbBuffer,
+    // Compatibility for fit-preview and older callers. Raw passthrough means
+    // the normalized payload is deliberately the caller's original bytes.
+    normalizedGlb: glbBuffer,
   }
 }
