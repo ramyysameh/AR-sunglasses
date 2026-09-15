@@ -26,7 +26,9 @@ describe('Help loader', () => {
     expect(url.origin).toBe('https://help-recovery.myshopify.com')
     expect(url.pathname).toBe('/admin/themes/current/editor')
     expect(url.searchParams.get('template')).toBe('product')
-    expect(url.searchParams.get('addAppBlockId')).toMatch(/\/tryon_button$/)
+    expect(url.searchParams.get('addAppBlockId')).toBe(
+      'be1db9d64c7c617dcd67f6add58f4824/tryon_button',
+    )
   })
 })
 

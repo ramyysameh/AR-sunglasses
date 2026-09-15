@@ -8,7 +8,9 @@ describe('themeEditorUrl', () => {
     expect(url.pathname).toBe('/admin/themes/current/editor')
     expect(url.searchParams.get('template')).toBe('product')
     expect(url.searchParams.get('target')).toBe('mainSection')
-    expect(url.searchParams.get('addAppBlockId')).toMatch(/\/tryon_button$/)
+    expect(url.searchParams.get('addAppBlockId')).toBe(
+      'be1db9d64c7c617dcd67f6add58f4824/tryon_button',
+    )
   })
 
   it('previews the selected product when its handle is available', () => {
