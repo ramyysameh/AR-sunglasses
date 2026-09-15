@@ -365,7 +365,9 @@ export class FaceOccluder {
     anchorWorldPoints = {},
     smoothingAlpha = 1,
     correction = null,
-    headQuaternion = null
+    headQuaternion = null,
+    rotationCorrection = null,
+    correctionPivot = null,
   ) {
     if (!this.occluderMesh || !Array.isArray(faceWorldPoints)) {
       return
@@ -391,6 +393,8 @@ export class FaceOccluder {
     const cx = correction?.x ?? 0
     const cy = correction?.y ?? 0
     const cz = correction?.z ?? 0
+    const rotateSurface = rotationCorrection?.isQuaternion && correctionPivot
+    const corrected = rotateSurface ? new THREE.Vector3() : null
     const SNAP_DIST_SQ = 0.05 * 0.05 // >5 cm jump = re-acquisition, not jitter
     if (!this._smoothedPts || this._smoothedPts.length !== OCCLUDER_POINTS.length * 3) {
       this._smoothedPts = null
@@ -422,7 +426,16 @@ export class FaceOccluder {
         s[i + 1] += dy * a
         s[i + 2] += dz * a
       }
-      position.setXYZ(vertexIndex, s[i] + cx, s[i + 1] + cy, s[i + 2] + cz)
+      if (rotateSurface) {
+        corrected
+          .set(s[i], s[i + 1], s[i + 2])
+          .sub(correctionPivot)
+          .applyQuaternion(rotationCorrection)
+          .add(correctionPivot)
+        position.setXYZ(vertexIndex, corrected.x + cx, corrected.y + cy, corrected.z + cz)
+      } else {
+        position.setXYZ(vertexIndex, s[i] + cx, s[i + 1] + cy, s[i + 2] + cz)
+      }
     })
 
     this._updateShell(position, headQuaternion, cx, cy, cz)

@@ -112,6 +112,30 @@ const CAP = BACK_START + RING_LENGTH
 const EXTRUDED_START = EAR_START
 
 describe('FaceOccluder head shell', () => {
+  it('rotates the face depth surface with the displayed glasses pose', async () => {
+    const occluder = await makeOccluder({ shellDepthRatio: 0 })
+    const points = makeFaceWorldPoints()
+    points[1] = { x: 1, y: 0, z: 0 }
+    const quarterTurn = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      Math.PI / 2,
+    )
+
+    occluder.updateFromFaceMesh(
+      points,
+      {},
+      1,
+      null,
+      quarterTurn,
+      quarterTurn,
+      new THREE.Vector3(),
+    )
+
+    const position = occluder.occluderMesh.geometry.attributes.position
+    expect(position.getX(1)).toBeCloseTo(0)
+    expect(position.getZ(1)).toBeCloseTo(-1)
+  })
+
   it('builds the face surface from the real tessellation, not a stand-in', async () => {
     const occluder = await makeOccluder({})
     const geometry = occluder.occluderMesh.geometry

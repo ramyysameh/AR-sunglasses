@@ -856,7 +856,9 @@ export class RenderLoop {
         // frame's own position delta: the head shell extrudes along this axis, so
         // the surface the temple arm hides behind is locked to the arm by
         // construction instead of by two smoothing curves agreeing.
-        transform.quaternion
+        transform.quaternion,
+        transform.occluderRotation,
+        transform.occluderPivot,
       )
     } else if (transform.anchorWorldPoints) {
       this.faceOccluder?.updateFromAnchors(transform.anchorWorldPoints)
@@ -1027,7 +1029,10 @@ export class RenderLoop {
       return
     }
 
-    const yaw = THREE.MathUtils.radToDeg(this.headYaw ?? 0)
+    const displayedYaw = transform?.quaternion
+      ? new THREE.Euler().setFromQuaternion(transform.quaternion, 'YXZ').y
+      : this.headYaw
+    const yaw = THREE.MathUtils.radToDeg(displayedYaw ?? 0)
     const nearSide = Math.abs(yaw) < NEAR_ARM_YAW_DEG ? 0 : (yaw >= 0 ? -1 : 1)
     if (nearSide === 0) {
       this.faceOccluder.aimTempleFloor?.(null)
@@ -1379,6 +1384,10 @@ export class RenderLoop {
       // its OVERALL position to the frame's, by construction, instead of
       // hoping two separately-tuned smoothing curves happen to agree.
       const occluderCorrection = displayPos.clone().sub(tunedPosition)
+      const occluderRotation = displayQuat.clone().multiply(
+        fitSolution.glassesTransform.quaternion.clone().invert(),
+      )
+      const occluderPivot = tunedPosition.clone()
       const fitScale = this._smoothSolvedScale(fitSolution.glassesTransform.scale)
       this._updateFitDebugOverlay({
         yaw: THREE.MathUtils.radToDeg(this.headYaw ?? 0),
@@ -1396,6 +1405,8 @@ export class RenderLoop {
         anchorWorldPoints,
         occlusionMesh: fitSolution.occlusionMesh,
         occluderCorrection,
+        occluderRotation,
+        occluderPivot,
         fitSolution,
       }
 
@@ -1407,6 +1418,8 @@ export class RenderLoop {
         anchorWorldPoints,
         occlusionMesh: fitSolution.occlusionMesh,
         occluderCorrection: occluderCorrection.clone(),
+        occluderRotation: occluderRotation.clone(),
+        occluderPivot: occluderPivot.clone(),
         fitSolution,
       }
       this.lastTrackingTimestamp = timestamp
