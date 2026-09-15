@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+/* eslint-disable react/prop-types -- route-local modal components consume loader-shaped data */
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useFetcher, useLoaderData, useRevalidator } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
@@ -78,235 +79,521 @@ export const action = async ({ request }) => {
   return { error: 'Unknown action.' }
 }
 
-// A human label for a model: its uploaded file name. Falls back to a short id
-// for older rows (and block-registered models) that predate the stored
-// filename.
-function modelName(a) {
-  return a.filename || `Model ${a.id.slice(0, 8)}`
+const MAX_UPLOAD_BYTES = 25 * 1048576
+
+export function modelName(asset) {
+  return asset.label?.trim() || asset.filename || `Model ${asset.id.slice(0, 8)}`
 }
 
-function sourceLabel(up) {
-  if (up.source === 'tagged') return 'tagged (exact)'
-  const pct = up.confidence == null ? '—' : `${Math.round(up.confidence * 100)}%`
-  return `geometric (confidence ${pct})`
+export function uploadValidationError(file) {
+  if (!file || !file.name.toLowerCase().endsWith('.glb')) return 'Choose a .glb file'
+  if (file.size > MAX_UPLOAD_BYTES) return 'Model exceeds the 25 MB limit'
+  return null
 }
 
-export default function Models() {
-  const { assets } = useLoaderData()
-  const shopify = useAppBridge()
-  const revalidator = useRevalidator()
-  const [pendingFile, setPendingFile] = useState(null)
-  const [progress, setProgress] = useState(null) // null | 0..100 | 'calibrating'
-  const [uploadResult, setUploadResult] = useState(null)
-  const [uploadErr, setUploadErr] = useState(null)
-  const uploading = progress !== null
-  const MAX_UPLOAD_BYTES = 25 * 1048576
+export function renameSubmitDisabled({ asset, draft, currentLabel, state }) {
+  if (asset === null) return true
+  return state !== 'idle' || draft.trim() === (currentLabel ?? '').trim()
+}
 
-  const manageFetcher = useFetcher()
-  const rename = (modelAssetId, label) =>
-    manageFetcher.submit({ intent: 'rename', modelAssetId, label }, { method: 'POST' })
-  const remove = (modelAssetId) => {
-    // Dismiss the confirmation before the row disappears under it.
-    document.getElementById(`delete-${modelAssetId}`)?.hide()
-    manageFetcher.submit({ intent: 'delete', modelAssetId }, { method: 'POST' })
+export function modalSessionReducer(state, action) {
+  if (action.type === 'open') {
+    return { modelId: action.modelId, session: state.session + 1 }
   }
+  if (action.type === 'dismiss') {
+    return { modelId: null, session: state.session + 1 }
+  }
+  return state
+}
+
+export function uploadModalReducer(state, action) {
+  if (action.type === 'select') {
+    return { pendingFile: action.file, uploadError: null }
+  }
+  if (action.type === 'reject') {
+    return { pendingFile: null, uploadError: 'Choose a .glb file' }
+  }
+  if (action.type === 'error') {
+    return { ...state, uploadError: action.message }
+  }
+  return state
+}
+
+export function createUploadCancellationCoordinator() {
+  let activeUpload = null
+
+  return {
+    begin() {
+      const controller = new AbortController()
+      activeUpload = { controller, xhr: null }
+      return controller.signal
+    },
+    attachXhr(xhr) {
+      if (!activeUpload || activeUpload.controller.signal.aborted) {
+        xhr.abort()
+        return
+      }
+      activeUpload.xhr = xhr
+    },
+    detachXhr(xhr) {
+      if (activeUpload?.xhr === xhr) activeUpload.xhr = null
+    },
+    cancel() {
+      const upload = activeUpload
+      activeUpload = null
+      upload?.controller.abort()
+      upload?.xhr?.abort()
+    },
+  }
+}
+
+function useModalEvents({ onHide, onAfterHide }) {
+  const modalRef = useRef(null)
 
   useEffect(() => {
-    if (manageFetcher.data?.renamed) shopify.toast.show('Name saved')
-    if (manageFetcher.data?.deleted) shopify.toast.show('Model deleted')
-    if (manageFetcher.data?.error) shopify.toast.show(manageFetcher.data.error, { isError: true })
-  }, [manageFetcher.data, shopify])
-
-  // POST to the resource route and parse JSON defensively: a non-JSON body
-  // (an error page, an auth bounce) becomes a clear message instead of the
-  // opaque "Unexpected token '<'" a bare response.json() throws on HTML.
-  const postJson = async (body) => {
-    const res = await fetch('/api/model-upload', { method: 'POST', body })
-    const text = await res.text()
-    let data
-    try {
-      data = JSON.parse(text)
-    } catch {
-      throw new Error(`Server error (HTTP ${res.status})`)
+    const modal = modalRef.current
+    if (!modal) return undefined
+    if (onHide) modal.addEventListener('hide', onHide)
+    if (onAfterHide) modal.addEventListener('afterhide', onAfterHide)
+    return () => {
+      if (onHide) modal.removeEventListener('hide', onHide)
+      if (onAfterHide) modal.removeEventListener('afterhide', onAfterHide)
     }
-    if (data.error) throw new Error(data.error)
-    return data
+  }, [onAfterHide, onHide])
+
+  return modalRef
+}
+
+async function postUploadJson(body, signal) {
+  const res = await fetch('/api/model-upload', { method: 'POST', body, signal })
+  const text = await res.text()
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch {
+    throw new Error(`Server error (HTTP ${res.status})`)
   }
+  if (data.error) throw new Error(data.error)
+  return data
+}
+
+function UploadModalContent({ cancellationCoordinator }) {
+  const shopify = useAppBridge()
+  const revalidator = useRevalidator()
+  const [{ pendingFile, uploadError }, dispatchUpload] = useReducer(uploadModalReducer, {
+    pendingFile: null,
+    uploadError: null,
+  })
+  const [progress, setProgress] = useState(null)
+  const uploading = progress !== null
 
   const upload = async () => {
-    if (!pendingFile) {
-      shopify.toast.show('Choose a .glb file first', { isError: true }); return
+    const validationError = uploadValidationError(pendingFile)
+    if (validationError) {
+      dispatchUpload({ type: 'error', message: validationError })
+      return
     }
-    if (!pendingFile.name.toLowerCase().endsWith('.glb')) {
-      shopify.toast.show('Choose a .glb file', { isError: true }); return
-    }
-    if (pendingFile.size > MAX_UPLOAD_BYTES) {
-      shopify.toast.show('Model exceeds the 25 MB limit', { isError: true }); return
-    }
-    setUploadErr(null); setUploadResult(null); setProgress(0)
-    try {
-      // 1) presign
-      const pf = new FormData(); pf.append('intent', 'upload-presign')
-      const { uploadUrl, storageRef } = await postJson(pf)
 
-      // 2) direct PUT with progress (XHR — fetch can't report upload progress)
+    dispatchUpload({ type: 'select', file: pendingFile })
+    setProgress(0)
+    const signal = cancellationCoordinator.begin()
+    try {
+      const presignForm = new FormData()
+      presignForm.append('intent', 'upload-presign')
+      const { uploadUrl, storageRef } = await postUploadJson(presignForm, signal)
+      if (signal.aborted) return
+
       await new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest()
+        cancellationCoordinator.attachXhr(xhr)
+        if (signal.aborted) {
+          reject(new DOMException('Upload canceled', 'AbortError'))
+          return
+        }
         xhr.open('PUT', uploadUrl)
         xhr.setRequestHeader('Content-Type', 'model/gltf-binary')
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100))
+        xhr.upload.onprogress = (event) => {
+          if (!signal.aborted && event.lengthComputable) {
+            setProgress(Math.round((event.loaded / event.total) * 100))
+          }
         }
-        xhr.onload = () =>
-          xhr.status >= 200 && xhr.status < 300
-            ? resolve()
-            : reject(new Error(`Upload failed (${xhr.status})`))
-        xhr.onerror = () => reject(new Error('Upload failed (network/CORS)'))
+        xhr.onload = () => {
+          cancellationCoordinator.detachXhr(xhr)
+          if (xhr.status >= 200 && xhr.status < 300) resolve()
+          else reject(new Error(`Upload failed (${xhr.status})`))
+        }
+        xhr.onerror = () => {
+          cancellationCoordinator.detachXhr(xhr)
+          reject(new Error('Upload failed (network/CORS)'))
+        }
+        xhr.onabort = () => reject(new DOMException('Upload canceled', 'AbortError'))
         xhr.send(pendingFile)
       })
+      if (signal.aborted) return
 
-      // 3) finalize (calibrate server-side)
-      setProgress('calibrating')
-      const ff = new FormData()
-      ff.append('intent', 'upload-finalize')
-      ff.append('storageRef', storageRef)
-      ff.append('filename', pendingFile.name)
-      const fin = await postJson(ff)
+      setProgress('preparing')
+      const finalizeForm = new FormData()
+      finalizeForm.append('intent', 'upload-finalize')
+      finalizeForm.append('storageRef', storageRef)
+      finalizeForm.append('filename', pendingFile.name)
+      await postUploadJson(finalizeForm, signal)
+      if (signal.aborted) return
+      revalidator.revalidate()
 
-      setUploadResult(fin.uploaded)
-      shopify.toast.show('Model calibrated')
-      revalidator.revalidate() // refresh the model list (no fetcher to auto-revalidate now)
-    } catch (e) {
-      setUploadErr(e.message)
+      shopify.toast.show('Model ready')
+      shopify.modal.hide('upload-model')
+    } catch (error) {
+      if (!signal.aborted) dispatchUpload({ type: 'error', message: error.message })
     } finally {
-      setProgress(null)
+      if (!signal.aborted) setProgress(null)
     }
   }
 
   return (
-    <s-page heading="Models">
-      <s-section heading="Upload a model (GLB)">
+    <>
+      <s-stack direction="block" gap="base">
         <s-paragraph>
-          Upload a calibrated eyewear GLB. It is validated and calibrated
-          server-side by the A1 pipeline, and the normalized model is stored for
-          try-on.
+          Choose a .glb eyewear model up to 25 MB. We&apos;ll prepare it for try-on.
         </s-paragraph>
         <s-drop-zone
           label="Model file (.glb)"
           name="model"
           accept=".glb,model/gltf-binary"
-          onChange={(e) => setPendingFile(e.currentTarget.files?.[0] ?? null)}
+          accessibilityLabel="Choose a GLB model file"
+          disabled={uploading}
+          onChange={(event) => {
+            dispatchUpload({
+              type: 'select',
+              file: event.currentTarget.files?.[0] ?? null,
+            })
+          }}
+          onDropRejected={() => dispatchUpload({ type: 'reject' })}
         ></s-drop-zone>
         {pendingFile && (
-          <s-banner tone="info">
-            Selected: {pendingFile.name} ({(pendingFile.size / 1048576).toFixed(1)} MB)
-          </s-banner>
+          <s-text color="subdued">
+            {pendingFile.name} ({(pendingFile.size / 1048576).toFixed(1)} MB)
+          </s-text>
         )}
-        <s-stack direction="inline" gap="base">
-          <s-button variant="primary" onClick={upload} {...(uploading ? { loading: true } : {})}>
-            Upload and calibrate
-          </s-button>
-        </s-stack>
-
         {progress !== null && (
           <s-stack direction="block" gap="small-500">
             {typeof progress === 'number' ? (
               <>
                 <progress value={progress} max="100" style={{ width: '100%' }} />
-                <s-text>Uploading… {progress}%</s-text>
+                <s-text>Uploading {progress}%</s-text>
               </>
             ) : (
-              <s-text>Calibrating…</s-text>
+              <s-text>Preparing model...</s-text>
             )}
           </s-stack>
         )}
-
-        {uploadResult && (
-          <s-banner heading="Model calibrated" tone="success">
-            <s-stack direction="block" gap="small-500">
-              <s-stack direction="inline" gap="base" alignItems="center">
-                <s-text>Validation</s-text>
-                <s-badge tone="success">{uploadResult.status}</s-badge>
-              </s-stack>
-              <s-text>Fit: {sourceLabel(uploadResult)}</s-text>
-              {uploadResult.needsManual && <s-badge tone="warning">Needs manual anchor</s-badge>}
-            </s-stack>
+        {uploadError && (
+          <s-banner heading="Could not upload model" tone="critical">
+            {uploadError}
           </s-banner>
         )}
-        {uploadErr && <s-banner heading="Upload failed" tone="critical">{uploadErr}</s-banner>}
-      </s-section>
+      </s-stack>
+      <s-button
+        slot="secondary-actions"
+        commandFor="upload-model"
+        command="--hide"
+      >
+        Cancel
+      </s-button>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        onClick={upload}
+        disabled={!pendingFile || uploading}
+        {...(uploading ? { loading: true } : {})}
+      >
+        Upload model
+      </s-button>
+    </>
+  )
+}
 
-      <s-section heading="Your models">
+function UploadModal() {
+  const [session, setSession] = useState(0)
+  const cancellationCoordinator = useRef(null)
+  if (!cancellationCoordinator.current) {
+    cancellationCoordinator.current = createUploadCancellationCoordinator()
+  }
+
+  const cancel = useCallback(() => cancellationCoordinator.current.cancel(), [])
+  const reset = useCallback(() => setSession((value) => value + 1), [])
+  const modalRef = useModalEvents({ onHide: cancel, onAfterHide: reset })
+
+  useEffect(() => cancel, [cancel])
+
+  return (
+    <s-modal ref={modalRef} id="upload-model" heading="Upload model">
+      <UploadModalContent
+        key={session}
+        cancellationCoordinator={cancellationCoordinator.current}
+      />
+    </s-modal>
+  )
+}
+
+function RenameModalContent({ asset }) {
+  const fetcher = useFetcher()
+  const shopify = useAppBridge()
+  const [draft, setDraft] = useState(asset?.label ?? '')
+  const disabled = renameSubmitDisabled({
+    asset: asset ?? null,
+    draft,
+    currentLabel: asset?.label,
+    state: fetcher.state,
+  })
+
+  useEffect(() => {
+    if (!fetcher.data?.renamed) return
+    shopify.toast.show('Name saved')
+    shopify.modal.hide('rename-model')
+  }, [fetcher.data, shopify])
+
+  const rename = () => {
+    if (disabled) return
+    fetcher.submit(
+      { intent: 'rename', modelAssetId: asset.id, label: draft.trim() },
+      { method: 'POST' },
+    )
+  }
+
+  return (
+    <>
+      <s-stack direction="block" gap="base">
+        <s-text-field
+          label="Model name"
+          value={draft}
+          placeholder={asset?.filename ?? 'Model name'}
+          onChange={(event) => setDraft(event.currentTarget.value)}
+        ></s-text-field>
+        <s-paragraph color="subdued">
+          Leave the name blank to use the filename in your model library.
+        </s-paragraph>
+        {fetcher.data?.error && (
+          <s-banner heading="Could not rename model" tone="critical">
+            {fetcher.data.error}
+          </s-banner>
+        )}
+      </s-stack>
+      <s-button
+        slot="secondary-actions"
+        commandFor="rename-model"
+        command="--hide"
+      >
+        Cancel
+      </s-button>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        onClick={rename}
+        disabled={disabled}
+        {...(fetcher.state !== 'idle' ? { loading: true } : {})}
+      >
+        Save
+      </s-button>
+    </>
+  )
+}
+
+function RenameModal({ asset, session, onDismiss }) {
+  const modalRef = useModalEvents({ onAfterHide: onDismiss })
+
+  return (
+    <s-modal
+      ref={modalRef}
+      id="rename-model"
+      heading={`Rename ${asset ? modelName(asset) : 'model'}`}
+    >
+      <RenameModalContent key={session} asset={asset} />
+    </s-modal>
+  )
+}
+
+function DeleteModalContent({ modelId }) {
+  const fetcher = useFetcher()
+  const shopify = useAppBridge()
+
+  useEffect(() => {
+    if (!fetcher.data?.deleted) return
+    shopify.toast.show('Model deleted')
+    shopify.modal.hide('delete-model')
+  }, [fetcher.data, shopify])
+
+  const remove = () => {
+    if (!modelId) return
+    fetcher.submit(
+      { intent: 'delete', modelAssetId: modelId },
+      { method: 'POST' },
+    )
+  }
+
+  return (
+    <>
+      <s-stack direction="block" gap="base">
+        <s-paragraph>
+          This removes the model and its 3D file. You can&apos;t undo it, and you&apos;ll
+          need to upload the file again to use it later.
+        </s-paragraph>
+        {fetcher.data?.error && (
+          <s-banner heading="Could not delete model" tone="critical">
+            {fetcher.data.error}
+          </s-banner>
+        )}
+      </s-stack>
+      <s-button slot="secondary-actions" commandFor="delete-model" command="--hide">
+        Cancel
+      </s-button>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        tone="critical"
+        onClick={remove}
+        disabled={!modelId || fetcher.state !== 'idle'}
+        {...(fetcher.state !== 'idle' ? { loading: true } : {})}
+      >
+        Delete model
+      </s-button>
+    </>
+  )
+}
+
+function DeleteModal({ asset, modelId, session, onDismiss }) {
+  const modalRef = useModalEvents({ onAfterHide: onDismiss })
+
+  return (
+    <s-modal
+      ref={modalRef}
+      id="delete-model"
+      heading={asset ? `Delete ${modelName(asset)}?` : 'Delete model?'}
+    >
+      <DeleteModalContent key={session} modelId={modelId} />
+    </s-modal>
+  )
+}
+
+export default function Models() {
+  const { assets } = useLoaderData()
+  const shopify = useAppBridge()
+  const [renameModal, dispatchRenameModal] = useReducer(modalSessionReducer, {
+    modelId: null,
+    session: 0,
+  })
+  const [deleteModal, dispatchDeleteModal] = useReducer(modalSessionReducer, {
+    modelId: null,
+    session: 0,
+  })
+  const renameAsset = assets.find((asset) => asset.id === renameModal.modelId) ?? null
+  const deleteAsset = assets.find((asset) => asset.id === deleteModal.modelId) ?? null
+  const dismissRename = useCallback(() => dispatchRenameModal({ type: 'dismiss' }), [])
+  const dismissDelete = useCallback(() => dispatchDeleteModal({ type: 'dismiss' }), [])
+
+  useEffect(() => {
+    if (renameModal.modelId) shopify.modal.show('rename-model')
+  }, [renameModal.modelId, renameModal.session, shopify])
+
+  return (
+    <s-page heading="Models">
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        commandFor="upload-model"
+        command="--show"
+      >
+        Upload model
+      </s-button>
+
+      <s-section heading="Model library">
         {assets.length === 0 ? (
           <s-stack direction="block" gap="base">
-            <s-text type="strong">Upload your first model</s-text>
-            <s-paragraph>Add a .glb of your frames above to get started.</s-paragraph>
+            <s-text type="strong">Add your first model</s-text>
+            <s-paragraph>
+              Upload a .glb eyewear model to make it available for try-on products.
+            </s-paragraph>
+            <s-button commandFor="upload-model" command="--show">
+              Upload model
+            </s-button>
           </s-stack>
         ) : (
-          <s-grid gridTemplateColumns="1fr 1fr" gap="base">
-            {assets.map((a) => (
-              <s-box key={a.id} padding="base" borderWidth="base" borderRadius="base">
-                <s-stack direction="block" gap="small-500">
-                  <ModelViewer src={`/models/${a.id}.glb`} alt={modelName(a)} />
-                  <s-text-field
-                    label="Name"
-                    value={a.label ?? ''}
-                    placeholder={a.filename ?? `Model ${a.id.slice(0, 8)}`}
-                    onBlur={(e) => rename(a.id, e.currentTarget.value)}
-                  ></s-text-field>
-                  <s-stack direction="inline" gap="small-500" alignItems="center">
-                    <s-badge tone={a.status === 'ready' ? 'success' : 'warning'}>
-                      {a.status === 'ready' ? 'Ready' : 'Check fit'}
-                    </s-badge>
-                    {a.confidence != null && (
-                      <s-text tone="subdued">fit confidence {Math.round(a.confidence * 100)}%</s-text>
+          <s-grid
+            gridTemplateColumns="repeat(auto-fit, minmax(min(100%, 260px), 1fr))"
+            gap="base"
+          >
+            {assets.map((asset) => {
+              const displayName = modelName(asset)
+              const showFilename = Boolean(
+                asset.label?.trim() && asset.filename && asset.filename !== displayName,
+              )
+
+              return (
+                <s-box
+                  key={asset.id}
+                  padding="base"
+                  border="base"
+                  borderRadius="base"
+                >
+                  <s-stack direction="block" gap="base">
+                    <ModelViewer src={`/models/${asset.id}.glb`} alt={displayName} />
+                    <s-stack direction="inline" gap="small-500" alignItems="center">
+                      <s-heading>{displayName}</s-heading>
+                      <s-badge tone={asset.status === 'ready' ? 'success' : 'warning'}>
+                        {asset.status === 'ready' ? 'Ready' : 'Check fit'}
+                      </s-badge>
+                    </s-stack>
+                    {showFilename && <s-text color="subdued">{asset.filename}</s-text>}
+                    {asset.mappingCount > 0 ? (
+                      <s-text color="subdued">
+                        Used by {asset.mappingCount} product{asset.mappingCount === 1 ? '' : 's'}.{' '}
+                        <s-link href="/app/products">View products</s-link>
+                      </s-text>
+                    ) : (
+                      <s-text color="subdued">Not used by any products</s-text>
                     )}
+                    <s-stack direction="inline" gap="small-500">
+                      <s-button
+                        icon="edit"
+                        onClick={() => dispatchRenameModal({ type: 'open', modelId: asset.id })}
+                      >
+                        Rename
+                      </s-button>
+                      {asset.mappingCount === 0 && (
+                        <s-button
+                          variant="tertiary"
+                          tone="critical"
+                          icon="delete"
+                          commandFor="delete-model"
+                          command="--show"
+                          onClick={() => dispatchDeleteModal({
+                            type: 'open',
+                            modelId: asset.id,
+                          })}
+                        >
+                          Delete
+                        </s-button>
+                      )}
+                    </s-stack>
                   </s-stack>
-                  {a.mappingCount > 0 ? (
-                    <s-text tone="subdued">
-                      Used by {a.mappingCount} product{a.mappingCount === 1 ? '' : 's'} --{' '}
-                      <s-link href="/app/products">view</s-link>
-                    </s-text>
-                  ) : (
-                    <s-button
-                      variant="tertiary"
-                      tone="critical"
-                      icon="delete"
-                      commandFor={`delete-${a.id}`}
-                      command="show"
-                    >
-                      Delete
-                    </s-button>
-                  )}
-                </s-stack>
-              </s-box>
-            ))}
+                </s-box>
+              )
+            })}
           </s-grid>
         )}
       </s-section>
 
-      {/* Deleting drops the row and its stored GLB with no undo, so it asks
-          first. Only unmapped models reach here -- the action refuses one a
-          product still uses -- but an unused model is still work the merchant
-          would have to redo. */}
-      {assets
-        .filter((a) => a.mappingCount === 0)
-        .map((a) => (
-          <s-modal key={a.id} id={`delete-${a.id}`} heading={`Delete ${modelName(a)}?`}>
-            <s-paragraph>
-              This removes the model and its 3D file. You can&apos;t undo it, and
-              you&apos;d need to upload the file again to use it.
-            </s-paragraph>
-            <s-button
-              slot="primary-action"
-              variant="primary"
-              tone="critical"
-              onClick={() => remove(a.id)}
-            >
-              Delete model
-            </s-button>
-          </s-modal>
-        ))}
+      <UploadModal />
+      <RenameModal
+        asset={renameAsset}
+        session={renameModal.session}
+        onDismiss={dismissRename}
+      />
+      <DeleteModal
+        asset={deleteAsset}
+        modelId={deleteModal.modelId}
+        session={deleteModal.session}
+        onDismiss={dismissDelete}
+      />
     </s-page>
   )
 }
