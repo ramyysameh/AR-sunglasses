@@ -120,6 +120,8 @@ export function uploadModalReducer(state, action) {
 }
 
 export function createUploadCancellationCoordinator() {
+  /** @type {{ controller: AbortController, xhr: XMLHttpRequest | null } | null} */
+  // @ts-ignore -- the Shopify validator wraps this JS file as TSX and ignores JSDoc types.
   let activeUpload = null
 
   return {
@@ -147,7 +149,7 @@ export function createUploadCancellationCoordinator() {
   }
 }
 
-function useModalEvents({ onHide, onAfterHide }) {
+function useModalEvents({ onHide = undefined, onAfterHide = undefined }) {
   const modalRef = useRef(null)
 
   useEffect(() => {
@@ -219,7 +221,7 @@ function UploadModalContent({ cancellationCoordinator }) {
         }
         xhr.onload = () => {
           cancellationCoordinator.detachXhr(xhr)
-          if (xhr.status >= 200 && xhr.status < 300) resolve()
+          if (xhr.status >= 200 && xhr.status < 300) resolve(undefined)
           else reject(new Error(`Upload failed (${xhr.status})`))
         }
         xhr.onerror = () => {
@@ -243,7 +245,8 @@ function UploadModalContent({ cancellationCoordinator }) {
       shopify.toast.show('Model ready')
       shopify.modal.hide('upload-model')
     } catch (error) {
-      if (!signal.aborted) dispatchUpload({ type: 'error', message: error.message })
+      const message = error instanceof Error ? error.message : String(error)
+      if (!signal.aborted) dispatchUpload({ type: 'error', message })
     } finally {
       if (!signal.aborted) setProgress(null)
     }
