@@ -119,6 +119,12 @@ export function uploadModalReducer(state, action) {
   return state
 }
 
+export function uploadModalHideBehavior(busy) {
+  return busy
+    ? { reopen: true, reset: false }
+    : { reopen: false, reset: true }
+}
+
 export function createUploadCancellationCoordinator() {
   /** @type {{ controller: AbortController, xhr: XMLHttpRequest | null } | null} */
   // @ts-ignore -- the Shopify validator wraps this JS file as TSX and ignores JSDoc types.
@@ -140,7 +146,7 @@ export function createUploadCancellationCoordinator() {
     detachXhr(xhr) {
       if (activeUpload?.xhr === xhr) activeUpload.xhr = null
     },
-    cancel() {
+    abortForUnmount() {
       const upload = activeUpload
       activeUpload = null
       upload?.controller.abort()
@@ -179,7 +185,7 @@ async function postUploadJson(body, signal) {
   return data
 }
 
-function UploadModalContent({ cancellationCoordinator }) {
+function UploadModalContent({ cancellationCoordinator, onBusyChange }) {
   const shopify = useAppBridge()
   const revalidator = useRevalidator()
   const [{ pendingFile, uploadError }, dispatchUpload] = useReducer(uploadModalReducer, {
@@ -197,6 +203,7 @@ function UploadModalContent({ cancellationCoordinator }) {
     }
 
     dispatchUpload({ type: 'select', file: pendingFile })
+    onBusyChange(true)
     setProgress(0)
     const signal = cancellationCoordinator.begin()
     try {
@@ -240,15 +247,20 @@ function UploadModalContent({ cancellationCoordinator }) {
       finalizeForm.append('filename', pendingFile.name)
       await postUploadJson(finalizeForm, signal)
       if (signal.aborted) return
-      revalidator.revalidate()
 
+      onBusyChange(false)
+      setProgress(null)
       shopify.toast.show('Model ready')
       shopify.modal.hide('upload-model')
+      revalidator.revalidate()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (!signal.aborted) dispatchUpload({ type: 'error', message })
     } finally {
-      if (!signal.aborted) setProgress(null)
+      if (!signal.aborted) {
+        onBusyChange(false)
+        setProgress(null)
+      }
     }
   }
 
@@ -287,6 +299,7 @@ function UploadModalContent({ cancellationCoordinator }) {
             ) : (
               <s-text>Preparing model...</s-text>
             )}
+            <s-text color="subdued">Keep this window open while the model is uploading and preparing.</s-text>
           </s-stack>
         )}
         {uploadError && (
@@ -295,13 +308,15 @@ function UploadModalContent({ cancellationCoordinator }) {
           </s-banner>
         )}
       </s-stack>
-      <s-button
-        slot="secondary-actions"
-        commandFor="upload-model"
-        command="--hide"
-      >
-        Cancel
-      </s-button>
+      {!uploading && (
+        <s-button
+          slot="secondary-actions"
+          commandFor="upload-model"
+          command="--hide"
+        >
+          Cancel
+        </s-button>
+      )}
       <s-button
         slot="primary-action"
         variant="primary"
@@ -316,23 +331,35 @@ function UploadModalContent({ cancellationCoordinator }) {
 }
 
 function UploadModal() {
+  const shopify = useAppBridge()
   const [session, setSession] = useState(0)
+  const busyRef = useRef(false)
   const cancellationCoordinator = useRef(null)
   if (!cancellationCoordinator.current) {
     cancellationCoordinator.current = createUploadCancellationCoordinator()
   }
 
-  const cancel = useCallback(() => cancellationCoordinator.current.cancel(), [])
-  const reset = useCallback(() => setSession((value) => value + 1), [])
-  const modalRef = useModalEvents({ onHide: cancel, onAfterHide: reset })
+  const onBusyChange = useCallback((busy) => {
+    busyRef.current = busy
+  }, [])
+  const finishHide = useCallback(() => {
+    const behavior = uploadModalHideBehavior(busyRef.current)
+    if (behavior.reopen) {
+      shopify.modal.show('upload-model')
+    } else if (behavior.reset) {
+      setSession((value) => value + 1)
+    }
+  }, [shopify])
+  const modalRef = useModalEvents({ onAfterHide: finishHide })
 
-  useEffect(() => cancel, [cancel])
+  useEffect(() => () => cancellationCoordinator.current.abortForUnmount(), [])
 
   return (
     <s-modal ref={modalRef} id="upload-model" heading="Upload model">
       <UploadModalContent
         key={session}
         cancellationCoordinator={cancellationCoordinator.current}
+        onBusyChange={onBusyChange}
       />
     </s-modal>
   )

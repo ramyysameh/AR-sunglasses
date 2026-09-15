@@ -51,6 +51,7 @@ vi.mock('../app/shopify.server.js', () => ({
 
 const prisma = (await import('../app/db.server.js')).default
 const { action, loader } = await import('../app/routes/app.products.jsx')
+const { deleteMappingWithRecovery } = await import('../app/productMappingRecovery.server.js')
 
 const productId = `gid://shopify/Product/${tag}`
 
@@ -154,6 +155,22 @@ describe('unmap action', () => {
     const res = await action({ request: form('unmap', { productId }) })
     expect(res.unmapped).toBeUndefined()
     expect(res.error).toMatch(/storefront/i)
+  })
+
+  it('returns an error and best-effort republishes when database deletion fails', async () => {
+    const db = {
+      productMapping: { deleteMany: vi.fn().mockRejectedValue(new Error('database unavailable')) },
+    }
+    const publish = vi.fn().mockRejectedValue(new Error('Shopify unavailable'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await deleteMappingWithRecovery({ db, admin: {}, shop, productId, publish })
+
+    expect(res.error).toMatch(/couldn't finish removing/i)
+    expect(publish).toHaveBeenCalledWith({}, productId)
+    expect(errorSpy).toHaveBeenCalledWith('product mapping delete failed', expect.any(Error))
+    expect(errorSpy).toHaveBeenCalledWith('try-on metafield recovery publish failed', expect.any(Error))
+    errorSpy.mockRestore()
   })
 })
 

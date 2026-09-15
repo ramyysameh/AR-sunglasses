@@ -31,6 +31,7 @@ const {
   modalSessionReducer,
   renameSubmitDisabled,
   uploadModalReducer,
+  uploadModalHideBehavior,
   uploadValidationError,
 } = await import('../app/routes/app.models.jsx')
 
@@ -94,7 +95,7 @@ describe('Models UI behavior', () => {
     const xhr = { abort: vi.fn() }
 
     coordinator.attachXhr(xhr)
-    coordinator.cancel()
+    coordinator.abortForUnmount()
 
     expect(firstSignal.aborted).toBe(true)
     expect(xhr.abort).toHaveBeenCalledOnce()
@@ -123,6 +124,11 @@ describe('Models UI behavior', () => {
       pendingFile: null,
       uploadError: 'Choose a .glb file',
     })
+  })
+
+  it('reopens a busy upload modal but resets an idle dismissed modal', () => {
+    expect(uploadModalHideBehavior(true)).toEqual({ reopen: true, reset: false })
+    expect(uploadModalHideBehavior(false)).toEqual({ reopen: false, reset: true })
   })
 
   it('renders the model library as the primary surface with valid modal targets', () => {

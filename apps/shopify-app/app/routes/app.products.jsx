@@ -8,6 +8,7 @@ import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
 import { listMappings, mapProductToModel } from '../models.server'
 import { publishMapping, publishMappings, unpublishMapping } from '../tryonMetafield.server'
+import { deleteMappingWithRecovery } from '../productMappingRecovery.server'
 import { getActivePlanName, planLimit } from '../billing.server'
 import { planUsage } from '../planUsage.server'
 import ModelPicker from '../components/ModelPicker'
@@ -168,7 +169,13 @@ export const action = async ({ request }) => {
     console.error('try-on metafield unpublish failed', e)
     return { error: "Try-on couldn't be removed from your storefront. Nothing was changed; try again." }
   }
-  await prisma.productMapping.deleteMany({ where: { shop: session.shop, productId } })
+  const deleteError = await deleteMappingWithRecovery({
+    db: prisma,
+    admin,
+    shop: session.shop,
+    productId,
+  })
+  if (deleteError) return deleteError
   return { unmapped: true }
 }
 
