@@ -158,5 +158,8 @@ describe('Products working surface', () => {
     }]
     const html = renderToStaticMarkup(React.createElement(Products))
     expect(html).toContain('previewPath=%2Fproducts%2Fproduct-selected')
+    expect(html).toContain('<s-button')
+    expect(html).toContain('variant="primary"')
+    expect(html).toContain('icon="external"')
   })
 })

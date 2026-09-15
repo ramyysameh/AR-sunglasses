@@ -17,11 +17,12 @@ function extensionUid() {
  * @param {string|null} [productHandle] product to preview in the theme editor
  */
 export function themeEditorUrl(shop, productHandle = null) {
-  const store = String(shop).replace(/\.myshopify\.com$/, '')
-  const url = new URL(`https://admin.shopify.com/store/${store}/themes/current/editor`)
-  url.searchParams.set('template', 'product')
+  const domain = String(shop).replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const url = new URL(`https://${domain}/admin/themes/current/editor`)
   if (productHandle) {
     url.searchParams.set('previewPath', `/products/${productHandle}`)
+  } else {
+    url.searchParams.set('template', 'product')
   }
   url.searchParams.set('addAppBlockId', `${extensionUid()}/${BLOCK_HANDLE}`)
   url.searchParams.set('target', 'mainSection')

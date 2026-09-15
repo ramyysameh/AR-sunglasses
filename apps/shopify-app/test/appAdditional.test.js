@@ -23,8 +23,8 @@ describe('Help loader', () => {
     const result = await loader({ request: new Request('https://example.test/app/additional') })
     const url = new URL(result.themeEditorUrl)
 
-    expect(url.origin).toBe('https://admin.shopify.com')
-    expect(url.pathname).toBe('/store/help-recovery/themes/current/editor')
+    expect(url.origin).toBe('https://help-recovery.myshopify.com')
+    expect(url.pathname).toBe('/admin/themes/current/editor')
     expect(url.searchParams.get('template')).toBe('product')
     expect(url.searchParams.get('addAppBlockId')).toMatch(/\/tryon_button$/)
   })

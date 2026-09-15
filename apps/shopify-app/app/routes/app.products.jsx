@@ -529,7 +529,14 @@ export default function Products() {
                     <s-stack direction="inline" gap="small-500" alignItems="center">
                       <StatusBadge status={m.status} />
                       {m.status.id === 'not_on_theme' && (
-                        <a href={m.themeUrl ?? themeUrl} target="_top" rel="noreferrer">Add to theme</a>
+                        <s-button
+                          href={m.themeUrl ?? themeUrl}
+                          target="_top"
+                          variant="primary"
+                          icon="external"
+                        >
+                          Add to theme
+                        </s-button>
                       )}
                     </s-stack>
                   </s-table-cell>
