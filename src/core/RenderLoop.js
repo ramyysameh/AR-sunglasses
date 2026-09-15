@@ -26,7 +26,7 @@ const MAX_PREDICTION_SPEED = 1.2
 const MAX_POSITION_LEAD_M = 0.035
 // Rotation lead (ms) to cancel capture->detect->render latency during turns.
 const ROT_LEAD_MS = 75
-const MAX_ROT_LEAD_FRAMES = 4
+const MAX_ROT_LEAD_FRAMES = 1
 const FALLBACK_FACE_DEPTH = -0.78
 const NEAREST_DISPLAY_DEPTH = -0.62
 // How many frontal samples the running size estimate averages over. Capped so it
@@ -534,7 +534,8 @@ export class RenderLoop {
     }
 
     const dt = Math.max((timestamp - (this.lastPredictionTimestamp ?? timestamp)) / 1000, 1 / 120)
-    const velocity = smoothPos.clone().sub(this.prevFilteredPos).multiplyScalar(1 / dt)
+    const observedDelta = smoothPos.clone().sub(this.prevFilteredPos)
+    const velocity = observedDelta.clone().multiplyScalar(1 / dt)
 
     // Smooth the velocity before using it as a lead. Raw per-frame velocity is
     // noisy, and once scaled by the prediction gain that noise becomes visible
@@ -556,7 +557,11 @@ export class RenderLoop {
     const lead = this.smoothedVelocity.clone().multiplyScalar(
       (POSITION_LEAD_MS / 1000) * (this.motionLevel ?? 0),
     )
-    if (lead.length() > MAX_POSITION_LEAD_M) lead.setLength(MAX_POSITION_LEAD_M)
+    // Never extrapolate farther than the movement we just observed. A large
+    // time-based lead can otherwise turn a 10 mm sample into a 45 mm pose,
+    // visibly crossing the face before the next sample corrects it.
+    const maxLead = Math.min(MAX_POSITION_LEAD_M, observedDelta.length())
+    if (lead.length() > maxLead) lead.setLength(maxLead)
     this.predictionDelta = lead.length()
     return smoothPos.clone().add(lead)
   }

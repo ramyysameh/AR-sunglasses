@@ -66,13 +66,23 @@ describe('moving-pose latency', () => {
     expect(rotationParams.minCutoff).toBeGreaterThan(7)
   })
 
-  it('predicts translation by time and keeps the lead bounded', () => {
+  it('predicts translation without leading farther than the measured movement', () => {
     const loop = Object.create(RenderLoop.prototype)
     loop.motionLevel = 1
     expect(loop._predictPosition(new THREE.Vector3(0, 0, 0), 0).x).toBe(0)
     const predicted = loop._predictPosition(new THREE.Vector3(0.01, 0, 0), 16)
-    expect(predicted.x).toBeGreaterThan(0.03)
-    expect(predicted.x).toBeCloseTo(0.045, 9)
+    expect(predicted.x).toBeGreaterThan(0.01)
+    expect(predicted.x).toBeLessThanOrEqual(0.02)
+  })
+
+  it('does not extrapolate rotation by more than one observed frame', () => {
+    const loop = Object.create(RenderLoop.prototype)
+    loop.motionLevel = 1
+    const identity = new THREE.Quaternion()
+    const observed = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.1)
+    loop._predictRotation(identity, 0)
+    const predicted = loop._predictRotation(observed, 16)
+    expect(identity.angleTo(predicted)).toBeLessThanOrEqual(0.2 + 1e-9)
   })
 })
 
