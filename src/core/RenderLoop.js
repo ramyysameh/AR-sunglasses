@@ -18,11 +18,11 @@ import { resolveFrameReflectionConfig } from './frameReflection.js'
 import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
 
 const TRACK_LOSS_RESET_MS = 180
-// Lower lead than before (was 0.85): heavy lead on an already-smoothed signal
-// overshoots and recoils, which reads as rubber-banding. A light lead just
-// compensates residual filter latency.
-const PREDICTION_FACTOR = 0.85
+// Bounded translation lead to compensate camera + detector + filter latency.
+// Time-based rather than "frames ahead" so behavior is stable across 30/60 Hz.
+const POSITION_LEAD_MS = 45
 const MAX_PREDICTION_SPEED = 1.2
+const MAX_POSITION_LEAD_M = 0.035
 // Rotation lead (ms) to cancel capture->detect->render latency during turns.
 const ROT_LEAD_MS = 60
 const MAX_ROT_LEAD_FRAMES = 4
@@ -521,18 +521,17 @@ export class RenderLoop {
     })
   }
 
-  _predictPosition(smoothPos) {
+  _predictPosition(smoothPos, timestamp = performance.now()) {
     if (!this.prevFilteredPos) {
       this.prevFilteredPos = smoothPos.clone()
       this.smoothedVelocity = null
       this.predictionDelta = 0
-      this.lastPredictionTimestamp = performance.now()
+      this.lastPredictionTimestamp = timestamp
       return smoothPos.clone()
     }
 
-    const now = performance.now()
-    const dt = Math.max((now - (this.lastPredictionTimestamp ?? now)) / 1000, 1 / 120)
-    const velocity = smoothPos.clone().sub(this.prevFilteredPos)
+    const dt = Math.max((timestamp - (this.lastPredictionTimestamp ?? timestamp)) / 1000, 1 / 120)
+    const velocity = smoothPos.clone().sub(this.prevFilteredPos).multiplyScalar(1 / dt)
 
     // Smooth the velocity before using it as a lead. Raw per-frame velocity is
     // noisy, and once scaled by the prediction gain that noise becomes visible
@@ -543,21 +542,20 @@ export class RenderLoop {
       this.smoothedVelocity.lerp(velocity, 0.45)
     }
 
-    const leadVelocity = this.smoothedVelocity.clone()
-    const velocityLength = leadVelocity.length()
-    const maxPredictionDelta = THREE.MathUtils.clamp(MAX_PREDICTION_SPEED * dt, 0.006, 0.045)
-    if (velocityLength > maxPredictionDelta) {
-      leadVelocity.multiplyScalar(maxPredictionDelta / velocityLength)
+    const speed = this.smoothedVelocity.length()
+    if (speed > MAX_PREDICTION_SPEED) {
+      this.smoothedVelocity.multiplyScalar(MAX_PREDICTION_SPEED / speed)
     }
 
     this.prevFilteredPos = smoothPos.clone()
-    this.lastPredictionTimestamp = now
-    this.predictionDelta = Math.min(velocityLength, maxPredictionDelta)
+    this.lastPredictionTimestamp = timestamp
 
-    // Scale lead by current motion: zero prediction (and zero noise amplification)
-    // at rest, ramping to full lead during real movement.
-    const predictionGain = PREDICTION_FACTOR * (this.motionLevel ?? 0)
-    return smoothPos.clone().addScaledVector(leadVelocity, predictionGain)
+    const lead = this.smoothedVelocity.clone().multiplyScalar(
+      (POSITION_LEAD_MS / 1000) * (this.motionLevel ?? 0),
+    )
+    if (lead.length() > MAX_POSITION_LEAD_M) lead.setLength(MAX_POSITION_LEAD_M)
+    this.predictionDelta = lead.length()
+    return smoothPos.clone().add(lead)
   }
 
   _predictRotation(quat, timestamp) {
@@ -652,14 +650,14 @@ export class RenderLoop {
     // landmark noise doesn't jitter the frame; high ceilings keep it responsive
     // once real movement ramps `motion` up.
     this.positionFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.40, 6.0, smoothedMotion) * smoothFactor,
-      beta: THREE.MathUtils.lerp(0.010, 0.22, smoothedMotion) * smoothFactor,
+      minCutoff: THREE.MathUtils.lerp(0.40, 11.0, smoothedMotion) * smoothFactor,
+      beta: THREE.MathUtils.lerp(0.010, 0.28, smoothedMotion) * smoothFactor,
       dCutoff: 1.0,
     })
 
     this.rotationFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.35, 6.0, smoothedMotion) * smoothFactor,
-      beta: THREE.MathUtils.lerp(0.02, 0.30, smoothedMotion) * smoothFactor,
+      minCutoff: THREE.MathUtils.lerp(0.35, 11.0, smoothedMotion) * smoothFactor,
+      beta: THREE.MathUtils.lerp(0.02, 0.36, smoothedMotion) * smoothFactor,
       dCutoff: 1.0,
     })
 
@@ -1344,7 +1342,7 @@ export class RenderLoop {
         ? fitSolution.headYaw
         : new THREE.Euler().setFromQuaternion(predictedQuat, 'YXZ').y
 
-      const predictedPos = this._predictPosition(smoothPos)
+      const predictedPos = this._predictPosition(smoothPos, timestamp)
       // Depth (z) jitter damping. (Yaw-induced depth inflation is now handled at
       // the source in FaceFitSolver, so x/y/z stay consistent.)
       const depthAlpha = THREE.MathUtils.lerp(0.05, 0.85, this.motionLevel ?? 0)

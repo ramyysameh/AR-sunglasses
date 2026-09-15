@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { OneEuroFilter } from '../../src/filters/OneEuroFilter.js'
 import { QuaternionFilter } from '../../src/filters/QuaternionFilter.js'
+import { RenderLoop } from '../../src/core/RenderLoop.js'
 
 describe('tracking filter velocity', () => {
   it('does not invent velocity while settling toward a held scalar sample', () => {
@@ -22,5 +23,35 @@ describe('tracking filter velocity', () => {
     const velocityAfterStep = filter.angularVelocityFilter.dx.value
     filter.filter(target, 32)
     expect(filter.angularVelocityFilter.dx.value).toBeLessThan(velocityAfterStep)
+  })
+})
+
+describe('moving-pose latency', () => {
+  it('uses high-bandwidth filtering during deliberate motion', () => {
+    const loop = Object.create(RenderLoop.prototype)
+    const positionParams = []
+    const rotationParams = []
+    loop.positionFilter = { setParams: (value) => positionParams.push(value) }
+    loop.rotationFilter = { setParams: (value) => rotationParams.push(value) }
+    loop.lastRawPosition = new THREE.Vector3()
+    loop.lastRawQuat = new THREE.Quaternion()
+    loop.lastRawTimestamp = 0
+    loop.motionLevel = 0
+    loop._updateAdaptiveFilters(
+      new THREE.Vector3(0.03, 0, 0),
+      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.15),
+      33,
+    )
+    expect(positionParams.at(-1).minCutoff).toBeGreaterThanOrEqual(10)
+    expect(rotationParams.at(-1).minCutoff).toBeGreaterThanOrEqual(10)
+  })
+
+  it('predicts translation by time and keeps the lead bounded', () => {
+    const loop = Object.create(RenderLoop.prototype)
+    loop.motionLevel = 1
+    expect(loop._predictPosition(new THREE.Vector3(0, 0, 0), 0).x).toBe(0)
+    const predicted = loop._predictPosition(new THREE.Vector3(0.01, 0, 0), 16)
+    expect(predicted.x).toBeGreaterThan(0.02)
+    expect(predicted.x).toBeLessThanOrEqual(0.045)
   })
 })

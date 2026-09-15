@@ -31,10 +31,8 @@ export default function PreviewPanel({ mapping }) {
       <s-stack direction="block" gap="base">
         <s-heading>Check the fit</s-heading>
         <ModelViewer
-          // The GLB response is immutable, so bump this version whenever the
-          // composition changes to bypass existing browser and edge caches.
-          src={`/models/${mapping.modelAssetId}/fit-preview.glb?v=2`}
-          alt="Your frames on a reference head"
+          src={`/models/${mapping.modelAssetId}.glb`}
+          alt="Your glasses model"
         />
         <s-paragraph color="subdued">
           If the frames look too small or too large here, adjust Glasses size in the

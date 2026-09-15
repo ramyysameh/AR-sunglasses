@@ -1,6 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import PreviewPanel from '../app/components/PreviewPanel.jsx'
 
 const routeState = vi.hoisted(() => ({ loaderData: null }))
 
@@ -16,6 +17,9 @@ vi.mock('@shopify/shopify-app-react-router/server', () => ({
 }))
 vi.mock('../app/shopify.server.js', () => ({ authenticate: { admin: vi.fn() } }))
 vi.mock('../app/db.server.js', () => ({ default: {} }))
+vi.mock('../app/components/ModelViewer.jsx', () => ({
+  default: ({ src, alt }) => React.createElement('div', { 'data-model-src': src, 'data-model-alt': alt }),
+}))
 
 global.React = React
 
@@ -74,6 +78,12 @@ describe('ModelPicker', () => {
 })
 
 describe('Products working surface', () => {
+  it('previews the glasses model without composing it onto a mock head', () => {
+    const html = renderToStaticMarkup(React.createElement(PreviewPanel, { mapping: mapping('preview') }))
+    expect(html).toContain('data-model-src="/models/model-a.glb"')
+    expect(html).not.toContain('fit-preview.glb')
+    expect(html).not.toMatch(/reference head/i)
+  })
   it('starts a fresh modal session when the same mapping is reopened after dismissal', () => {
     const initial = { mappingId: null, session: 0 }
     const opened = mappingModalReducer(initial, { type: 'open', mappingId: 'mapping-1' })
