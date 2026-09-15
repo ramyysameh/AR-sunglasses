@@ -8,6 +8,8 @@ export const REQUIRED_FIELDS = [
   'frontFramePlaneZ',
   'lensCenterOffset',
   'scaleLimits',
+  'modelScale',
+  'modelBoundsCenter',
   'provenance',
 ]
 
@@ -30,6 +32,15 @@ export function createFitMetadata(fields) {
     frontFramePlaneZ: fields.frontFramePlaneZ,
     lensCenterOffset: fields.lensCenterOffset,
     scaleLimits: fields.scaleLimits,
+    // Uniform factor the ENGINE must apply to the served file. The stored GLB is
+    // the merchant's original, so any rescale the measurement pass needed lives
+    // here as a number instead of as rewritten vertex data.
+    modelScale: fields.modelScale,
+    // Centre of the measured bounding box. The engine's loader re-origins every
+    // model from its own bounds, so an anchor has to be expressed relative to
+    // this to land in the same frame as the geometry the solver moves. See
+    // fitMetadataAdapter.
+    modelBoundsCenter: fields.modelBoundsCenter,
     provenance: fields.provenance,
   }
 }

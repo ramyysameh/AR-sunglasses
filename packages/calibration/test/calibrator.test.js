@@ -36,7 +36,9 @@ describe('calibrate', () => {
   it('keeps the default scale band for a model already sized near real-world meters', () => {
     const res = calibrate(buildDoc(goodFrame), MODELING_SPEC)
     // goodFrame is ~0.138 m wide (real eyewear scale) -> natural fit ~1.
-    expect(res.fitMetadata.scaleLimits).toEqual({ min: 0.85, max: 1.15 })
+    // Wide enough to admit a broad face plus camera variance, not a tight
+    // +/-15% that clamps legitimate fits -- see DEFAULT_SCALE_LIMITS.
+    expect(res.fitMetadata.scaleLimits).toEqual({ min: 0.6, max: 1.6 })
   })
 
   it('scales the scale band down for a large-coordinate model so the fit is not clamped huge', () => {
@@ -54,7 +56,32 @@ describe('calibrate', () => {
     expect(scaleLimits.min).toBeGreaterThan(0)
     expect(scaleLimits.min).toBeLessThan(naturalFit)
     expect(scaleLimits.max).toBeGreaterThan(naturalFit * 2)
-    expect(scaleLimits.max).toBeLessThan(0.85) // not the normalized-model band
+    expect(scaleLimits.max).toBeLessThan(0.6) // not the normalized-model band
+  })
+})
+
+describe('calibrate scale + bounds reporting', () => {
+  const GEOM = [
+    -0.069, 0, 0.02, 0.069, 0, 0.02, 0, 0.024, 0.02,
+    -0.069, -0.04, -0.13, 0.069, -0.04, -0.13, 0, -0.02, 0.02,
+  ]
+
+  it('defaults modelScale to 1 when the caller passes nothing', () => {
+    const { fitMetadata } = calibrate(buildDoc(GEOM), MODELING_SPEC)
+    expect(fitMetadata.modelScale).toBe(1)
+  })
+
+  it('records the modelScale the caller measured', () => {
+    const { fitMetadata } = calibrate(buildDoc(GEOM), MODELING_SPEC, { modelScale: 0.0483 })
+    expect(fitMetadata.modelScale).toBeCloseTo(0.0483, 6)
+  })
+
+  it('records the bounding-box centre of the measured geometry', () => {
+    const { fitMetadata } = calibrate(buildDoc(GEOM), MODELING_SPEC)
+    // x spans -0.069..0.069, y spans -0.04..0.024, z spans -0.13..0.02
+    expect(fitMetadata.modelBoundsCenter.x).toBeCloseTo(0, 6)
+    expect(fitMetadata.modelBoundsCenter.y).toBeCloseTo(-0.008, 6)
+    expect(fitMetadata.modelBoundsCenter.z).toBeCloseTo(-0.055, 6)
   })
 })
 

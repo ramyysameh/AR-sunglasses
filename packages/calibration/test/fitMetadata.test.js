@@ -9,6 +9,8 @@ const base = {
   frontFramePlaneZ: 0.02,
   lensCenterOffset: { x: 0, y: 0, z: 0 },
   scaleLimits: { min: 0.85, max: 1.15 },
+  modelScale: 1,
+  modelBoundsCenter: { x: 0, y: -0.008, z: -0.055 },
   provenance: { source: 'tagged', confidence: null },
 }
 
@@ -22,6 +24,11 @@ describe('createFitMetadata', () => {
 
   it('throws listing every missing required field', () => {
     expect(() => createFitMetadata({ frameWidthMeters: 0.138 })).toThrowError(/bridgeAnchor/)
+  })
+
+  it('requires modelScale and modelBoundsCenter', () => {
+    const { modelScale, modelBoundsCenter, ...without } = base
+    expect(() => createFitMetadata(without)).toThrowError(/modelScale, modelBoundsCenter/)
   })
 
   it('throws a clear error when called with no/invalid argument', () => {

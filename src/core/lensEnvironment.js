@@ -1,6 +1,11 @@
 /**
- * Builds the lens reflection environment: a procedural sky, PMREM-prefiltered
- * so it can be used as an envMap.
+ * Builds the reflection environment, PMREM-prefiltered so it can be used as an
+ * envMap.
+ *
+ * Two of them. STUDIO is the default, because eyewear is shot in a studio and
+ * what makes a frame read as glossy is a soft band travelling along the bevel as
+ * the head turns -- a single sun disc gives a dot instead. SKY is the original
+ * outdoor one, kept and reachable with ?env=sky.
  *
  * Applied to LENS materials only (see lensReflection.js). scene.environment is
  * deliberately never assigned — that would light the frame too and bring back
@@ -8,6 +13,7 @@
  */
 import * as THREE from 'three'
 import { createSkyPixels } from './skyTexture.js'
+import { createStudioPixels } from './studioTexture.js'
 
 // Also determines PMREM cube-face resolution: fromEquirectangular sizes the
 // cubemap at width/4, so 128 gives 32px faces. Lowering this for memory blurs
@@ -18,7 +24,8 @@ const HEIGHT = 64
 export function createLensEnvironment(renderer, options = {}) {
   // options is spread FIRST so the mandated resolution wins: a caller passing
   // width/height must not silently resize the source or the PMREM cube faces.
-  const pixels = createSkyPixels({ ...options, width: WIDTH, height: HEIGHT })
+  const build = options.environment === 'sky' ? createSkyPixels : createStudioPixels
+  const pixels = build({ ...options, width: WIDTH, height: HEIGHT })
 
   const source = new THREE.DataTexture(pixels, WIDTH, HEIGHT, THREE.RGBAFormat, THREE.FloatType)
   source.mapping = THREE.EquirectangularReflectionMapping

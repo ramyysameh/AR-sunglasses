@@ -9,6 +9,38 @@ import { applyLensReflection } from '../core/lensReflection.js'
 import { applyFrameReflection } from '../core/frameReflection.js'
 
 /**
+ * Scales a freshly loaded scene to metres.
+ *
+ * The served GLB is the merchant's original, so a model authored outside metre
+ * space arrives at its authored size. The calibration pass measured the factor
+ * and put it in fitMetadata.modelScale rather than rewriting every vertex --
+ * a uniform scale is the one transform that would not have corrupted normals,
+ * but the stored bytes stay untouched regardless.
+ *
+ * Scales the direct children (a uniform scale about the scene origin) rather
+ * than the root, so the caller's own transform on the root stays free.
+ *
+ * A missing or non-finite factor is a no-op: rows written before the
+ * raw-passthrough change have the rescale baked into their stored file already,
+ * and scaling those again would shrink them twice.
+ *
+ * Exported for test -- standing up a GLTFLoader and a real non-metre file to
+ * cover three lines is not worth it, and a copy of this rule living in the test
+ * would pass whether or not load() ever called it.
+ *
+ * @param {THREE.Object3D} model
+ * @param {number} modelScale
+ */
+export function applyModelScale(model, modelScale) {
+  if (!Number.isFinite(modelScale) || modelScale === 1) return
+  for (const child of model.children) {
+    child.position.multiplyScalar(modelScale)
+    child.scale.multiplyScalar(modelScale)
+  }
+  model.updateMatrixWorld(true)
+}
+
+/**
  * Fades the rear of the temple arms to transparent based on the model's local Z.
  * The ear-hook tips can't be hidden by a face occluder (the MediaPipe face mesh
  * has no ears/hair), so we taper them out instead of letting them clip the cheeks.
@@ -83,6 +115,10 @@ export class GlassesModelLoader {
     if (!model) {
       throw new Error(`No scene found in model: ${url}`)
     }
+
+    // BEFORE any bounds are taken, so the recentring below and the natural size
+    // reported to the solver are both in metres.
+    applyModelScale(model, modelConfig.modelScale)
 
     model.traverse((node) => {
       const child = /** @type {THREE.Mesh} */ (node)

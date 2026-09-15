@@ -5,7 +5,20 @@ import { mergedPositions } from './glbAccess.js'
 import { computeBounds, measureFrontWidth } from './geometry.js'
 import { createFitMetadata } from './fitMetadata.js'
 
-const DEFAULT_SCALE_LIMITS = { min: 0.85, max: 1.15 }
+// Band for a model already sized in real metres.
+//
+// Widened from +/-15%. That band applied a tight guard to metric models while
+// large-coordinate models got a deliberately wide one (see
+// LARGE_MODEL_SCALE_SPAN below) -- and the reasoning given there, that measured
+// face width varies widely by camera so the band should only reject outliers,
+// is just as true here. Human face widths also vary +/-10-15% before any
+// measurement variance, so +/-15% clamps legitimate fits rather than outliers.
+//
+// Measured: on a broad test head the solver asked for 1.1764 and was held at
+// 1.1500, rendering the frame 2.3% small with no signal that anything had been
+// overridden. The fit solver now reports when this binds (see FaceFitSolver's
+// scaleClamped), so a clamp is visible rather than silent.
+const DEFAULT_SCALE_LIMITS = { min: 0.6, max: 1.6 }
 
 // Any real eyewear frame is well under half a metre wide. A measured frame width
 // above this means the model was authored in a large coordinate space (e.g. a raw
@@ -36,7 +49,7 @@ function scaleLimitsFor(width) {
   return { min: natural * LARGE_MODEL_SCALE_SPAN.min, max: natural * LARGE_MODEL_SCALE_SPAN.max }
 }
 
-function buildRecord(doc, anchors, width, provenance) {
+function buildRecord(doc, anchors, width, provenance, modelScale) {
   const bounds = computeBounds(mergedPositions(doc))
   return createFitMetadata({
     frameWidthMeters: width,
@@ -46,16 +59,18 @@ function buildRecord(doc, anchors, width, provenance) {
     frontFramePlaneZ: bounds.max.z,
     lensCenterOffset: { x: 0, y: anchors.bridge.y * 0.5, z: 0 },
     scaleLimits: scaleLimitsFor(width),
+    modelScale,
+    modelBoundsCenter: bounds.center,
     provenance,
   })
 }
 
-export function calibrate(doc, spec) {
+export function calibrate(doc, spec, { modelScale = 1 } = {}) {
   const tags = readTags(doc, spec)
   const width = measureFrontWidth(mergedPositions(doc))
 
   if (tags.found) {
-    const fitMetadata = buildRecord(doc, tags.anchors, width, { source: 'tagged', confidence: null })
+    const fitMetadata = buildRecord(doc, tags.anchors, width, { source: 'tagged', confidence: null }, modelScale)
     return { fitMetadata, confidence: null, source: 'tagged', needsManual: false }
   }
 
@@ -68,7 +83,7 @@ export function calibrate(doc, spec) {
     // Added alongside `source`, never replacing it: saveModelGlb's caller and
     // the admin's sourceLabel both read provenance.source.
     anchorSources,
-  })
+  }, modelScale)
   return {
     fitMetadata,
     confidence,

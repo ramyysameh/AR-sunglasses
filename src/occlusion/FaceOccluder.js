@@ -2,64 +2,105 @@
  * Landmark-derived invisible face shell that writes depth for glasses occlusion.
  */
 import * as THREE from 'three'
+import { TEMPLE_FLOOR_DEPTH, templeFloorMatrix } from './templeFloor.js'
+import { FaceLandmarker } from '@mediapipe/tasks-vision'
+import {
+  FACE_OVAL_RING,
+  RING_LENGTH,
+  TEMPLE_SPAN_LANDMARKS,
+  resolveShellDepthRatio,
+  resolveShellLateralRatio,
+  resolveShellTaper,
+  resolveShellEarDepth,
+  shellTriangles,
+  tessellationTriangles,
+  templeSpan,
+} from './headShell.js'
 
-const OCCLUDER_POINTS = [
-  { key: 'forehead', index: 10 },
-  { key: 'leftTemple', index: 234 },
-  { key: null, index: 70 },
-  { key: 'browCenter', index: 9 },
-  { key: null, index: 300 },
-  { key: 'rightTemple', index: 454 },
-  { key: null, index: 33 },
-  { key: 'leftIris', index: 468 },
-  { key: 'bridgeTop', index: 168 },
-  { key: 'rightIris', index: 473 },
-  { key: null, index: 263 },
-  { key: 'leftCheek', index: 123 },
-  { key: 'bridgeCenter', index: 6 },
-  { key: 'rightCheek', index: 352 },
-  { key: null, index: 129 },
-  { key: 'noseTip', index: 1 },
-  { key: null, index: 358 },
-  { key: null, index: 152 },
-  { key: null, index: 172 },
-  { key: null, index: 397 },
-  { key: null, index: 205 },
-  { key: null, index: 425 },
-]
+// The occluder's FRONT surface is MediaPipe's own face mesh -- all 468
+// landmarks, tessellated with the table MediaPipe ships. It replaces a
+// hand-written 22-vertex mask that was too coarse to work as a depth surface:
+// measured at 38 degrees of yaw, 100% of the far temple's pixels fell inside
+// the occluder's silhouette while only 1% were actually hidden, because a
+// cartoon of a face cannot put the nose and cheek in front of an arm passing
+// behind them. The real mesh has the relief that depth test needs.
+const FACE_VERTEX_COUNT = 468
 
-const OCCLUDER_INDICES = [
-  0, 1, 2,
-  0, 2, 3,
-  0, 3, 4,
-  0, 4, 5,
-  2, 6, 7,
-  2, 7, 8,
-  4, 8, 9,
-  4, 9, 10,
-  6, 11, 7,
-  7, 11, 12,
-  7, 12, 8,
-  8, 12, 9,
-  9, 12, 13,
-  9, 13, 10,
-  11, 14, 12,
-  12, 14, 15,
-  12, 15, 16,
-  12, 16, 13,
-  11, 18, 14,
-  14, 18, 17,
-  14, 17, 15,
-  15, 17, 16,
-  16, 17, 19,
-  16, 19, 13,
-  11, 20, 14,
-  13, 16, 21,
-]
+const OCCLUDER_POINTS = Array.from({ length: FACE_VERTEX_COUNT }, (_, index) => ({ index }))
+
+// Ring vertices are the face-oval landmarks THEMSELVES -- no separate copies,
+// since the full mesh already contains them. The wall is stitched from those
+// vertices to their extruded partners, which keeps the shell welded to the face
+// surface instead of meeting it at a seam.
+const EAR_RING_START = FACE_VERTEX_COUNT
+const BACK_RING_START = EAR_RING_START + RING_LENGTH
+const CAP_VERTEX = BACK_RING_START + RING_LENGTH
+const VERTEX_COUNT = CAP_VERTEX + 1
+// Kept for the tests and the collapse loop, which only care where the shell starts.
+const EXTRUDED_START = EAR_RING_START
+
+const TEMPLE_SPAN_VERTEX = {
+  left: TEMPLE_SPAN_LANDMARKS.left,
+  right: TEMPLE_SPAN_LANDMARKS.right,
+}
+
+/**
+ * Central landmarks used as the head's origin for shell shaping.
+ *
+ * NOT the temple midpoint, which is the obvious choice and the wrong one. The
+ * face-oval sides sit on the silhouette edge and are half self-occluded through
+ * a turn, which makes them the noisiest landmarks on the face. Measured in
+ * head-local space over 90 frames of live turning, movement per frame that a
+ * rigid head should not have at all:
+ *
+ *   nose tip (1)        0.57 mm mean,  5.7 mm peak
+ *   forehead (10)       0.57 mm mean,  4.4 mm peak
+ *   face oval (234)     2.55 mm mean, 27.3 mm peak   <- silhouette edge
+ *   face oval (454)     2.52 mm mean, 25.2 mm peak   <- silhouette edge
+ *
+ * Anchoring on the central points keeps that 4x noise out of the shell's origin.
+ */
+const HEAD_ORIGIN_VERTICES = [1, 4, 10, 168]
+
+/**
+ * Smoothing on the shell's SHAPE, held in head-local space.
+ *
+ * A head's shape does not change; only its pose does. The shell was rebuilt from
+ * the face-oval ring every frame, so it inherited those landmarks' noise one for
+ * one -- the extruded ring measured 2.63 mm mean / 27.7 mm peak of head-local
+ * movement, essentially identical to the oval it is built from. The temple tip
+ * is cut exactly at that boundary, by design, so the visible end of the arm
+ * danced with it.
+ *
+ * Smoothing here costs no tracking latency: POSE still comes straight from the
+ * frame's quaternion and the head origin every frame. Only the shape is held.
+ */
+const SHELL_SHAPE_ALPHA = 0.08
+
+const TESSELLATION_INDICES = tessellationTriangles(FaceLandmarker.FACE_LANDMARKS_TESSELATION)
+const SHELL_INDICES = shellTriangles(FACE_OVAL_RING, EAR_RING_START, BACK_RING_START, CAP_VERTEX)
+const OCCLUDER_INDICES = [...TESSELLATION_INDICES, ...SHELL_INDICES]
+
+/**
+ * Where the shell's own triangles start in the index buffer.
+ *
+ * The buffer is the face tessellation followed by the shell. A head-width ray
+ * cast wants the SHELL wall -- the face mesh sits inboard of it, so casting
+ * against the whole buffer measures the skin and, on the collapsed-shell path
+ * where every shell triangle is zero-area, silently returns a plausible width
+ * instead of nothing.
+ */
+export const SHELL_INDEX_START = TESSELLATION_INDICES.length
+
+/** Reads one vertex out of the flat smoothed-position array. */
+function readPoint(positions, vertex) {
+  const i = vertex * 3
+  return { x: positions[i], y: positions[i + 1], z: positions[i + 2] }
+}
 
 function createOcclusionGeometry() {
   const geometry = new THREE.BufferGeometry()
-  const positions = new Float32Array(OCCLUDER_POINTS.length * 3)
+  const positions = new Float32Array(VERTEX_COUNT * 3)
 
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   geometry.setIndex(OCCLUDER_INDICES)
@@ -68,10 +109,56 @@ function createOcclusionGeometry() {
   return geometry
 }
 
+/**
+ * When the depth-only shell draws, relative to everything else in the scene.
+ *
+ * Exported because it is half of a contract, not a local detail: the shell is
+ * colorWrite:false, so it hides a mesh only by writing depth BEFORE that mesh
+ * draws. Anything with a smaller renderOrder is drawn first and therefore
+ * survives the shell entirely -- which is exactly how the near temple is lifted
+ * out of the face (templeHinge's TEMPLE_ON_TOP_ORDER), and equally how a temple
+ * could end up drawn straight through the skull if the two numbers ever drifted
+ * together. A test asserts the ordering across the two modules.
+ */
+export const OCCLUDER_RENDER_ORDER = -1
+
+/**
+ * The FLOOR under the lifted temple: a second depth-only copy of the shell,
+ * pushed away from the camera, drawn before everything.
+ *
+ * The near temple is lifted ahead of the shell so the shell cannot eat an arm
+ * resting on the head -- and nothing then bounded how DEEP that arm could be. In
+ * front of the ear it drew whatever its geometry did, skull or no skull. This
+ * draws first, so a lifted arm survives only in the band between the two
+ * surfaces and is occluded once it passes below the floor.
+ *
+ * See templeFloor.js for how deep temples actually go, and why the band cannot
+ * simply be closed to zero.
+ */
+export const INNER_OCCLUDER_RENDER_ORDER = -3
+
+
 export class FaceOccluder {
-  constructor() {
+  constructor(options = {}) {
     this.scene = null
     this.occluderMesh = null
+    this.innerOccluderMesh = null
+    this.shellDepthRatio = Number.isFinite(options.shellDepthRatio)
+      ? options.shellDepthRatio
+      : resolveShellDepthRatio(typeof window !== 'undefined' ? window.location.search : '')
+    this.shellLateralRatio = Number.isFinite(options.shellLateralRatio)
+      ? options.shellLateralRatio
+      : resolveShellLateralRatio(typeof window !== 'undefined' ? window.location.search : '')
+    this.shellTaper = Number.isFinite(options.shellTaper)
+      ? options.shellTaper
+      : resolveShellTaper(typeof window !== 'undefined' ? window.location.search : '')
+    this.shellEarDepth = Number.isFinite(options.shellEarDepth)
+      ? options.shellEarDepth
+      : resolveShellEarDepth(typeof window !== 'undefined' ? window.location.search : '')
+    this.debugVisible = options.debugVisible ?? (
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('occdbg') === '1'
+    )
   }
 
   async init(scene) {
@@ -86,13 +173,41 @@ export class FaceOccluder {
     })
 
     this.occluderMesh = new THREE.Mesh(geometry, material)
-    this.occluderMesh.renderOrder = -1
+    this.occluderMesh.renderOrder = OCCLUDER_RENDER_ORDER
     this.occluderMesh.matrixAutoUpdate = false
     this.occluderMesh.frustumCulled = false
     this.occluderMesh.visible = false
     this.occluderMesh.matrix.identity()
 
+    // ?occdbg=1 paints the normally-invisible occluder as wireframe, so the
+    // shell's size and placement can be judged on a real face -- it is the one
+    // part of this mesh you cannot infer from the render.
+    // Only colorWrite/wireframe change: renderOrder and depthTest stay as they
+    // are, so the mesh still draws FIRST and still occludes. Forcing it in front
+    // (renderOrder 999 + depthTest off) shows the shell but stops it masking
+    // anything -- a debug view that quietly disables the thing being debugged.
+    if (this.debugVisible) {
+      material.colorWrite = true
+      material.wireframe = true
+      material.color.setHex(0xff2266)
+    }
+
+    // Shares the geometry, so it tracks every landmark update for free. Only
+    // the matrix differs, and it is depth-only like its outer twin.
+    this.innerOccluderMesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+      colorWrite: false,
+      depthWrite: true,
+      depthTest: true,
+      side: THREE.DoubleSide,
+    }))
+    this.innerOccluderMesh.renderOrder = INNER_OCCLUDER_RENDER_ORDER
+    this.innerOccluderMesh.matrixAutoUpdate = false
+    this.innerOccluderMesh.frustumCulled = false
+    this.innerOccluderMesh.visible = false
+    this.innerOccluderMesh.matrix.identity()
+
     this.scene.add(this.occluderMesh)
+    this.scene.add(this.innerOccluderMesh)
 
     return this
   }
@@ -101,6 +216,12 @@ export class FaceOccluder {
     if (!this.occluderMesh || !matrix) {
       return
     }
+
+    // Same reasoning as updateFromAnchors: this path carries no ring landmarks,
+    // so the shell folds away instead of being dragged around by the matrix.
+    const position = this.occluderMesh.geometry.attributes.position
+    this._collapseShell(position)
+    position.needsUpdate = true
 
     this.occluderMesh.matrix.copy(matrix)
     this.occluderMesh.matrixAutoUpdate = false
@@ -112,27 +233,140 @@ export class FaceOccluder {
     if (!this.occluderMesh || !anchorWorldPoints) {
       return
     }
-
-    const position = this.occluderMesh.geometry.attributes.position
-
-    OCCLUDER_POINTS.forEach((definition, index) => {
-      const point = definition.key ? anchorWorldPoints[definition.key] : null
-      if (!point) {
-        return
-      }
-
-      position.setXYZ(index, point.x, point.y, point.z)
-    })
-
-    position.needsUpdate = true
-    this.occluderMesh.geometry.computeVertexNormals()
-    this.occluderMesh.geometry.computeBoundingSphere()
-    this.occluderMesh.matrix.identity()
-    this.occluderMesh.matrixWorldNeedsUpdate = true
-    this.show()
+    // Anchor-only data cannot populate any of the 468 face vertices. Keeping
+    // the previous mesh visible here writes a ghost head at the old pose.
+    this.hide()
   }
 
-  updateFromFaceMesh(faceWorldPoints, anchorWorldPoints = {}, smoothingAlpha = 1, correction = null) {
+  /**
+   * Flattens every shell vertex onto the mask's first vertex.
+   *
+   * The ring landmarks only arrive on the face-mesh path; the anchor and matrix
+   * paths have no data for them. Collapsing ring, extruded and cap vertices onto
+   * one point makes every shell triangle zero-area, so it draws nothing instead
+   * of smearing stale positions across the scene as a depth-writing volume.
+   */
+  _collapseShell(position) {
+    const x = position.getX(0)
+    const y = position.getY(0)
+    const z = position.getZ(0)
+
+    for (let vertex = EXTRUDED_START; vertex < VERTEX_COUNT; vertex += 1) {
+      position.setXYZ(vertex, x, y, z)
+    }
+  }
+
+  /**
+   * Builds the closed shell: ring pushed outward at the ears, extruded back
+   * along the head's own -Z, sealed with a cap.
+   *
+   * The direction comes from the FRAME's quaternion, not from a separately
+   * derived head pose: the same reasoning as `correction` below, one step up in
+   * rotation rather than position. Extruding along the arm's own axis means the
+   * surface the arm disappears behind cannot rotate out from under it, however
+   * the two smoothing curves happen to be tuned.
+   */
+  _updateShell(position, headQuaternion, cx, cy, cz) {
+    const s = this._smoothedPts
+    const templeL = readPoint(s, TEMPLE_SPAN_VERTEX.left)
+    const templeR = readPoint(s, TEMPLE_SPAN_VERTEX.right)
+    const rawSpan = templeSpan(templeL, templeR)
+
+    if (!headQuaternion || !(rawSpan > 0)) {
+      this._collapseShell(position)
+      return
+    }
+
+    // Head origin from central landmarks only -- see HEAD_ORIGIN_VERTICES.
+    let ox = 0, oy = 0, oz = 0
+    for (const vertex of HEAD_ORIGIN_VERTICES) {
+      const i = vertex * 3
+      ox += s[i]; oy += s[i + 1]; oz += s[i + 2]
+    }
+    ox /= HEAD_ORIGIN_VERTICES.length
+    oy /= HEAD_ORIGIN_VERTICES.length
+    oz /= HEAD_ORIGIN_VERTICES.length
+
+    const seeded = this._ringLocal != null
+    if (!seeded) this._ringLocal = new Float32Array(RING_LENGTH * 3)
+    const alpha = seeded ? SHELL_SHAPE_ALPHA : 1
+
+    // Span is a shape measurement too, and it is taken from the same noisy
+    // silhouette landmarks, so it gets the same treatment. Left unsmoothed it
+    // breathes the whole shell in and out, since it scales both the extrusion
+    // depth and the ear bulge.
+    this._shellSpan = seeded ? this._shellSpan + (rawSpan - this._shellSpan) * alpha : rawSpan
+    const span = this._shellSpan
+    const depth = span * this.shellDepthRatio
+    const widen = span * this.shellLateralRatio
+    const halfSpan = span * 0.5
+
+    const inverse = (this._invQuat ??= new THREE.Quaternion()).copy(headQuaternion).invert()
+    const v = (this._shellTmp ??= new THREE.Vector3())
+
+    let capX = 0
+    let capY = 0
+    let capZ = 0
+
+    for (let k = 0; k < RING_LENGTH; k += 1) {
+      const i = FACE_OVAL_RING[k] * 3
+      const j = k * 3
+
+      // Into the head's own frame, where the ring is a fixed shape, and average
+      // it there. Smoothing in WORLD space -- which is what the face mesh does --
+      // cannot do this job: through a turn the world position of a rigid point
+      // changes legitimately and fast, so a world-space average lags the head
+      // instead of removing shape noise.
+      v.set(s[i] - ox, s[i + 1] - oy, s[i + 2] - oz).applyQuaternion(inverse)
+      this._ringLocal[j] += (v.x - this._ringLocal[j]) * alpha
+      this._ringLocal[j + 1] += (v.y - this._ringLocal[j + 1]) * alpha
+      this._ringLocal[j + 2] += (v.z - this._ringLocal[j + 2]) * alpha
+
+      // Bulge and extrusion are now plain axis operations: in head-local space
+      // +X IS lateral and -Z IS backward, so no projection onto a rotated axis
+      // is needed and none of that arithmetic can pick up pose noise.
+      const lx = this._ringLocal[j]
+      const w = halfSpan > 1e-6
+        ? widen * Math.max(Math.min(lx / halfSpan, 1), -1)
+        : 0
+
+      // Ear ring: bulged outward, a third of the way back, where a head is
+      // widest and where the temple tip has to disappear.
+      v.set(lx + w, this._ringLocal[j + 1], this._ringLocal[j + 2] - depth * this.shellEarDepth)
+        .applyQuaternion(headQuaternion)
+      // Only the EXTRUDED copies are written. The ring vertex itself is a shared
+      // face-mesh vertex; moving it would tear a hole in the face surface.
+      position.setXYZ(EAR_RING_START + k, ox + v.x + cx, oy + v.y + cy, oz + v.z + cz)
+
+      // Back ring: tapered in toward the occiput. A cylinder here is what
+      // swallowed the arm from the cheekbone backwards.
+      const taper = this.shellTaper
+      v.set(lx * taper, this._ringLocal[j + 1] * taper, this._ringLocal[j + 2] - depth)
+        .applyQuaternion(headQuaternion)
+
+      const ex = ox + v.x + cx
+      const ey = oy + v.y + cy
+      const ez = oz + v.z + cz
+      position.setXYZ(BACK_RING_START + k, ex, ey, ez)
+
+      capX += ex
+      capY += ey
+      capZ += ez
+    }
+
+    // Single vertex closing the back: the mean of the extruded ring, which keeps
+    // the cap flat and inside the ring's own silhouette. It only has to seal the
+    // volume, not model the back of the skull.
+    position.setXYZ(CAP_VERTEX, capX / RING_LENGTH, capY / RING_LENGTH, capZ / RING_LENGTH)
+  }
+
+  updateFromFaceMesh(
+    faceWorldPoints,
+    anchorWorldPoints = {},
+    smoothingAlpha = 1,
+    correction = null,
+    headQuaternion = null
+  ) {
     if (!this.occluderMesh || !Array.isArray(faceWorldPoints)) {
       return
     }
@@ -166,8 +400,7 @@ export class FaceOccluder {
     const s = this._smoothedPts
 
     OCCLUDER_POINTS.forEach((definition, vertexIndex) => {
-      const point = faceWorldPoints[definition.index] ??
-        (definition.key ? anchorWorldPoints[definition.key] : null)
+      const point = faceWorldPoints[definition.index]
       if (!point) {
         return
       }
@@ -177,6 +410,10 @@ export class FaceOccluder {
       const dy = point.y - s[i + 1]
       const dz = point.z - s[i + 2]
       if (seed || dx * dx + dy * dy + dz * dz > SNAP_DIST_SQ) {
+        if (!seed) {
+          this._ringLocal = null
+          this._shellSpan = null
+        }
         s[i] = point.x
         s[i + 1] = point.y
         s[i + 2] = point.z
@@ -188,8 +425,12 @@ export class FaceOccluder {
       position.setXYZ(vertexIndex, s[i] + cx, s[i + 1] + cy, s[i + 2] + cz)
     })
 
+    this._updateShell(position, headQuaternion, cx, cy, cz)
+
     position.needsUpdate = true
-    this.occluderMesh.geometry.computeVertexNormals()
+    // No computeVertexNormals: the occluder is a MeshBasicMaterial that never
+    // reads normals, and recomputing them for ~960 triangles every frame was
+    // pure waste. Bounding sphere still matters for culling correctness.
     this.occluderMesh.geometry.computeBoundingSphere()
     this.occluderMesh.matrix.identity()
     this.occluderMesh.matrixWorldNeedsUpdate = true
@@ -200,11 +441,51 @@ export class FaceOccluder {
     if (this.occluderMesh) {
       this.occluderMesh.visible = false
     }
+    if (this.innerOccluderMesh) {
+      this.innerOccluderMesh.visible = false
+    }
   }
 
   show() {
     if (this.occluderMesh) {
       this.occluderMesh.visible = true
     }
+    // Comes back WITH the shell. hide()/show() around a measurement pass would
+    // otherwise leave the floor off until the next aim, and a frame with the
+    // shell up and its floor down is a frame where a temple may draw through
+    // the head -- precisely the state the floor exists to rule out.
+    if (this.innerOccluderMesh) {
+      this.innerOccluderMesh.visible = this._floorAimed === true
+    }
   }
+
+  /**
+   * Aims the floor down the camera axis, and turns it on.
+   *
+   * Left OFF until aimed. The floor draws before everything else, so one still
+   * carrying the previous frame's matrix writes depth in the wrong place and
+   * punches a hole through whatever now occupies it.
+   *
+   * @param {{x:number,y:number,z:number}|null} viewDirection unit vector from
+   *   the camera into the scene; null turns the floor off
+   * @param {number} [bound] how far behind the head surface the floor sits
+   */
+  aimTempleFloor(viewDirection, bound = TEMPLE_FLOOR_DEPTH) {
+    const mesh = this.innerOccluderMesh
+    if (!mesh) return
+    if (!viewDirection || !(bound > 0)) {
+      this._floorAimed = false
+      mesh.visible = false
+      return
+    }
+    mesh.matrix.fromArray(templeFloorMatrix(
+      [viewDirection.x, viewDirection.y, viewDirection.z],
+      bound,
+      this._floorElements ??= new Array(16),
+    ))
+    mesh.matrixWorldNeedsUpdate = true
+    this._floorAimed = true
+    mesh.visible = Boolean(this.occluderMesh?.visible)
+  }
+
 }

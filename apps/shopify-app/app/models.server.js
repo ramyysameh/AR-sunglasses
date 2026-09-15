@@ -10,7 +10,7 @@ import { tagged } from './errors.server.js'
 export async function saveCalibratedModel(prisma, shop, glbBytes, filename = null) {
   const result = await calibrateUpload(glbBytes)
   const storageRef = `${globalThis.crypto.randomUUID()}.glb`
-  await saveModelGlb(storageRef, result.normalizedGlb)
+  await saveModelGlb(storageRef, result.storedGlb)
   const confidence = result.confidence?.overall ?? null
   const asset = await prisma.modelAsset.create({
     data: {
@@ -149,7 +149,7 @@ export async function registerModelByUrl(prisma, url, shop) {
 
   const result = await calibrateUpload(glbBytes)
   const storageRef = `${globalThis.crypto.randomUUID()}.glb`
-  await saveModelGlb(storageRef, result.normalizedGlb)
+  await saveModelGlb(storageRef, result.storedGlb)
 
   let filename = null
   try {

@@ -59,7 +59,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     // In mock mode the "face" is a static image, so the head-turn calibration
     // can never complete — relax the scanner to lock on from the front view only.
     const mockParam = new URLSearchParams(window.location.search).get('mock')
-    const mockMode = mockParam === '1' || mockParam === 'turn'
+    const mockMode = Boolean(mockParam)
     const localFaceScanner = mockMode
       ? new LocalFaceScanner({ stageTargets: { front: 5, yawLeft: 0, yawRight: 0, neutralReturn: 0 } })
       : undefined
@@ -174,7 +174,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     // Dev/preview: ?mock=1 feeds a static face image instead of the webcam,
     // so the AR pipeline can be previewed without camera access.
     const mock = new URLSearchParams(window.location.search).get('mock')
-    if (mock === '1' || mock === 'turn') {
+    if (mock) {
       await this._startMockCamera()
       return
     }
@@ -217,22 +217,45 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
   }
 
   async _startMockCamera() {
-    // ?mock=1   -> static virtual face
-    // ?mock=turn-> virtual face that oscillates left/right (to test head turns)
+    // ?mock=1    -> static virtual face
+    // ?mock=turn -> virtual face that oscillates left/right (to test head turns)
+    // ?mock=pitch-> virtual face that nods up/down.
+    //
+    // Pitch is a separate sweep because the fit solver's rotation pivot is
+    // mathematically INVARIANT under yaw -- a pivot offset along Y is unchanged
+    // by a Y rotation -- so the turn sweep cannot see a pivot error at all, no
+    // matter how large. Frames are rendered from the same head.glb; see
+    // headrender.html ?axis=pitch.
     const mode = new URLSearchParams(window.location.search).get('mock')
     const cb = Date.now()
 
     let images
-    if (mode === 'turn') {
-      const N = 9
-      images = await Promise.all(
+    // Any other value names a sweep directory: /mock-<mode>/frame-N.png. Sweeps
+    // are rendered, not fixtures, so a new axis costs a render rather than a
+    // code change -- see headrender.html. Camera framing must MATCH across
+    // sweeps being compared: apparent face size drives the IPD depth estimate,
+    // and re-rendering one axis at a different `dist` moved measured scale 9%
+    // with nothing about the model or solver changed.
+    if (mode && mode !== '1') {
+      // ?mockframes=<n> lets a denser turn sequence be dropped in for smoother
+      // motion and finer angle steps; the repo ships 9. Frames that are missing
+      // resolve to null and get filtered out rather than rejecting the whole
+      // Promise.all -- asking for more frames than exist should thin the
+      // sequence, not kill the mock camera outright.
+      const requested = parseInt(new URLSearchParams(window.location.search).get('mockframes'), 10)
+      const N = Number.isFinite(requested) ? Math.min(Math.max(requested, 2), 121) : 9
+      const loaded = await Promise.all(
         Array.from({ length: N }, (_, i) => {
           const im = new Image()
           im.crossOrigin = 'anonymous'
-          im.src = `/mock-turn/frame-${i}.png?v=${cb}`
-          return im.decode().then(() => im)
+          im.src = `/mock-${mode}/frame-${i}.png?v=${cb}`
+          return im.decode().then(() => im, () => null)
         })
       )
+      images = loaded.filter(Boolean)
+      if (!images.length) {
+        throw new Error(`mock=${mode}: no /mock-${mode}/frame-*.png could be loaded`)
+      }
     } else {
       const im = new Image()
       im.crossOrigin = 'anonymous'
@@ -251,25 +274,87 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     const start = performance.now()
     const PERIOD_MS = 2600 // one full left->right->left cycle (brisk, to stress tracking)
     this._oscStart = null
+    // Deterministic pose control. Without it every A/B comparison is taken at a
+    // slightly different head angle, because the oscillation never stops -- which
+    // is how a run comparing three occluder settings ended up silently sampling
+    // three different parts of the turn and "proving" the wrong thing. Pinning a
+    // frame makes before/after captures differ by exactly one variable.
+    //
+    // ?mockframe=<n> pins from the start; window.__mock drives it at runtime.
+    const pinned = parseInt(new URLSearchParams(window.location.search).get('mockframe'), 10)
+    this._mockFrame = Number.isFinite(pinned) ? Math.min(Math.max(pinned, 0), N - 1) : null
+
+    // Which frame the mock shows while the scan runs. The middle one is frontal
+    // in a symmetric sweep, which is why it is the default -- but a sweep that
+    // holds a yaw while pitching has no frontal frame in its series at all, and
+    // the scan will not lock on a turned face. Those sets render an extra
+    // square-on frame on the end (headrender ?anchor=1) and point this at it.
+    const hold = parseInt(new URLSearchParams(window.location.search).get('mockhold'), 10)
+    const HOLD_FRAME = Number.isFinite(hold) ? Math.min(Math.max(hold, 0), N - 1) : (N - 1) >> 1
+
     const draw = () => {
-      let idx = (N - 1) >> 1 // front frame (middle)
+      let idx = HOLD_FRAME
       // Hold front during init warm-up AND while the calibration overlay is
       // visible; only start oscillating once the scan has actually locked, so it
       // never starts turning before calibration completes.
       const scanOverlay = document.getElementById('scan-overlay')
       const calibrating = scanOverlay ? scanOverlay.hidden === false : false
       const warmup = performance.now() - start < 2500
-      if (N > 1 && !calibrating && !warmup) {
+      // A pin still waits for calibration: the scan will not lock off-frontal, so
+      // pinning a turned frame before it completes means the glasses never appear.
+      if (this._mockFrame != null && !calibrating && !warmup) {
+        idx = this._mockFrame
+      } else if (N > 1 && !calibrating && !warmup) {
         if (this._oscStart == null) this._oscStart = performance.now()
         const phase = Math.sin(((performance.now() - this._oscStart) / PERIOD_MS) * Math.PI * 2) // -1..1
         idx = Math.round((phase * 0.5 + 0.5) * (N - 1))
       }
-      ctx.drawImage(images[idx], 0, 0, canvas.width, canvas.height)
+      paint(idx)
       this._mockRAF = requestAnimationFrame(draw)
     }
+
+    // Manual frame delivery. captureStream(0) hands back a track that only
+    // emits when requestFrame() is called, instead of sampling the canvas on a
+    // clock. That matters because requestAnimationFrame is throttled to a crawl
+    // (or stopped) whenever the page is not being painted -- a hidden or
+    // backgrounded preview pane froze the video mid-calibration, the scan never
+    // locked, and every probe reading came back "glasses hidden". Pushing frames
+    // explicitly makes the mock independent of whether anyone is watching.
+    const stream = canvas.captureStream(0)
+    const track = stream.getVideoTracks()[0]
+    const paint = (idx) => {
+      ctx.drawImage(images[idx], 0, 0, canvas.width, canvas.height)
+      track.requestFrame?.()
+    }
+
     draw()
 
-    this.stream = canvas.captureStream(30)
+    window.__mock = {
+      frameCount: N,
+      pin: (i) => {
+        this._mockFrame = i == null ? null : Math.min(Math.max(i, 0), N - 1)
+        return this._mockFrame
+      },
+      release: () => {
+        this._mockFrame = null
+        this._oscStart = null
+      },
+      current: () => this._mockFrame,
+      /**
+       * Pushes `count` frames by hand, for driving the pipeline while the page
+       * is throttled. MediaPipe, the pose filters and the fit solver each lag
+       * the input by a few frames, so a single frame is never enough to settle.
+       */
+      step: (count = 1) => {
+        const idx = this._mockFrame ?? ((N - 1) >> 1)
+        for (let i = 0; i < count; i += 1) paint(idx)
+        return idx
+      },
+    }
+
+    // Reuses the manual-delivery stream created above; capturing a second one at
+    // a fixed frame rate here would silently re-introduce the clock dependency.
+    this.stream = stream
     this.video.srcObject = this.stream
     this.video.muted = true
     this.video.playsInline = true

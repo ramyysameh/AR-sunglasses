@@ -19,7 +19,9 @@
     "validate:tryon": "node scripts/validate-tryon-config.mjs",
     "inspect:models": "node scripts/inspect-models.mjs",
     "normalize:models": "node scripts/normalize-glasses-model.mjs",
-    "compress:models": "node scripts/compress-models.mjs"
+    "compress:models": "node scripts/compress-models.mjs",
+    "harness": "vite --config harness/mock-server.config.mjs",
+    "harness:https": "vite --config harness/mock-server-https.config.mjs"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.4.0",
