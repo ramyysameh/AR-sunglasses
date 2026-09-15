@@ -31,7 +31,9 @@ export default function PreviewPanel({ mapping }) {
       <s-stack direction="block" gap="base">
         <s-heading>Check the fit</s-heading>
         <ModelViewer
-          src={`/models/${mapping.modelAssetId}/fit-preview.glb`}
+          // The GLB response is immutable, so bump this version whenever the
+          // composition changes to bypass existing browser and edge caches.
+          src={`/models/${mapping.modelAssetId}/fit-preview.glb?v=2`}
           alt="Your frames on a reference head"
         />
         <s-paragraph color="subdued">

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import { NodeIO } from '@gltf-transform/core'
 import { KHRONOS_EXTENSIONS } from '@gltf-transform/extensions'
+import { getBounds } from '@gltf-transform/functions'
 import { buildDoc } from '@artryon/calibration/test/helpers/buildDoc.js'
 import { composeFitPreview } from '../app/fitPreview.server.js'
 import { calibrateUpload } from '../app/calibration.server.js'
@@ -32,8 +33,22 @@ describe('composeFitPreview', () => {
   it('returns a valid GLB containing both meshes', async () => {
     const out = await composeFitPreview(head, frames, fitMetadata)
     // glTF binary magic
-    expect(Buffer.from(out.slice(0, 4)).toString()).toBe('glTF')
+    expect(new TextDecoder().decode(out.slice(0, 4))).toBe('glTF')
     expect(out.byteLength).toBeGreaterThan(head.byteLength)
+  })
+
+  it('keeps the frames large enough to inspect against the reference head', async () => {
+    const out = await composeFitPreview(head, frames, fitMetadata)
+    const doc = await new NodeIO().registerExtensions(KHRONOS_EXTENSIONS).readBinary(out)
+    const scene = doc.getRoot().getDefaultScene()
+    const frameNode = scene.listChildren().find((node) => node.getName() === 'frameNode')
+    const headNode = scene.listChildren().find((node) => node.getMesh() && node !== frameNode)
+    const headBounds = getBounds(headNode)
+    const frameBounds = getBounds(frameNode)
+    const headWidth = headBounds.max[0] - headBounds.min[0]
+    const frameWidth = frameBounds.max[0] - frameBounds.min[0]
+
+    expect(frameWidth / headWidth).toBeGreaterThan(0.3)
   })
 
   it('round-trips a GLB written by the calibration pipeline IO without throwing', async () => {

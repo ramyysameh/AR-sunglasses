@@ -59,18 +59,18 @@ export async function composeFitPreview(headGlb, framesGlb, fitMetadata) {
   return io.writeBinary(merged)
 }
 
-// Where the head sits relative to the frames, in metres. The frames are already
-// normalized (0.145 m wide, front plane at z = 0.0053), so they stay at identity
-// and the head moves to meet them. There is nothing to derive this from: every
-// field in fitMetadata measures the FRAMES, and on the storefront the engine gets
-// head position from live face tracking, which a static preview cannot use.
-// Tuned by eye against the rendered preview -- adjust here, not in the caller.
-const HEAD_OFFSET = { x: 0, y: 0.015, z: -0.085 }
+// The source bust uses normalized authoring units (about 1.9 units wide), while
+// uploaded frames are calibrated in metres (0.145 m wide). Scale the bust into
+// the same coordinate system before placing its eye line and face plane behind
+// the frames. These values are fixed to the vendored mock-head.glb geometry.
+const HEAD_SCALE = 0.2
+const HEAD_OFFSET = { x: 0, y: -0.076, z: -0.1 }
 
 function applyHeadPlacement(node, fitMetadata) {
   // bridgeAnchor.z is where the frames' bridge sits; nudge the head by it so a
   // deeper or shallower frame front still rests on the nose.
   const bridgeZ = fitMetadata?.bridgeAnchor?.z
+  node.setScale([HEAD_SCALE, HEAD_SCALE, HEAD_SCALE])
   node.setTranslation([
     HEAD_OFFSET.x,
     HEAD_OFFSET.y,
