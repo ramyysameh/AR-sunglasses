@@ -26,10 +26,7 @@ import {
 // behind them. The real mesh has the relief that depth test needs.
 const FACE_VERTEX_COUNT = 468
 
-const OCCLUDER_POINTS = Array.from({ length: FACE_VERTEX_COUNT }, (_, index) => ({
-  key: null,
-  index,
-}))
+const OCCLUDER_POINTS = Array.from({ length: FACE_VERTEX_COUNT }, (_, index) => ({ index }))
 
 // Ring vertices are the face-oval landmarks THEMSELVES -- no separate copies,
 // since the full mesh already contains them. The wall is stitched from those
@@ -236,30 +233,9 @@ export class FaceOccluder {
     if (!this.occluderMesh || !anchorWorldPoints) {
       return
     }
-
-    const position = this.occluderMesh.geometry.attributes.position
-
-    OCCLUDER_POINTS.forEach((definition, index) => {
-      const point = definition.key ? anchorWorldPoints[definition.key] : null
-      if (!point) {
-        return
-      }
-
-      position.setXYZ(index, point.x, point.y, point.z)
-    })
-
-    // No ring landmarks on the anchor path -- fold the shell away rather than
-    // leaving the last face-mesh frame's volume standing in the scene.
-    this._collapseShell(position)
-
-    position.needsUpdate = true
-    // No computeVertexNormals: the occluder is a MeshBasicMaterial that never
-    // reads normals, and recomputing them for ~960 triangles every frame was
-    // pure waste. Bounding sphere still matters for culling correctness.
-    this.occluderMesh.geometry.computeBoundingSphere()
-    this.occluderMesh.matrix.identity()
-    this.occluderMesh.matrixWorldNeedsUpdate = true
-    this.show()
+    // Anchor-only data cannot populate any of the 468 face vertices. Keeping
+    // the previous mesh visible here writes a ghost head at the old pose.
+    this.hide()
   }
 
   /**
@@ -424,8 +400,7 @@ export class FaceOccluder {
     const s = this._smoothedPts
 
     OCCLUDER_POINTS.forEach((definition, vertexIndex) => {
-      const point = faceWorldPoints[definition.index] ??
-        (definition.key ? anchorWorldPoints[definition.key] : null)
+      const point = faceWorldPoints[definition.index]
       if (!point) {
         return
       }
@@ -435,6 +410,10 @@ export class FaceOccluder {
       const dy = point.y - s[i + 1]
       const dz = point.z - s[i + 2]
       if (seed || dx * dx + dy * dy + dz * dz > SNAP_DIST_SQ) {
+        if (!seed) {
+          this._ringLocal = null
+          this._shellSpan = null
+        }
         s[i] = point.x
         s[i + 1] = point.y
         s[i + 2] = point.z

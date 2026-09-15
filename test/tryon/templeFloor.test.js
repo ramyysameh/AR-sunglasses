@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { templeFloorMatrix, TEMPLE_FLOOR_DEPTH } from '../../src/occlusion/templeFloor.js'
+import { INNER_OCCLUDER_RENDER_ORDER, OCCLUDER_RENDER_ORDER } from '../../src/occlusion/FaceOccluder.js'
+import { TEMPLE_ON_TOP_ORDER } from '../../src/models/templeHinge.js'
 
 /** Applies a column-major 4x4 to a point, the way three does. */
 function apply(e, [x, y, z]) {
@@ -18,6 +20,11 @@ const VIEW = (() => {
 })()
 
 describe('templeFloorMatrix', () => {
+  it('keeps the floor ahead of the lifted temple and the outer shell behind it', () => {
+    expect(INNER_OCCLUDER_RENDER_ORDER).toBeLessThan(TEMPLE_ON_TOP_ORDER)
+    expect(TEMPLE_ON_TOP_ORDER).toBeLessThan(OCCLUDER_RENDER_ORDER)
+    expect(OCCLUDER_RENDER_ORDER).toBeLessThan(0)
+  })
   it('moves the shell straight away from the camera by exactly the bound', () => {
     const p = [0.11, -0.04, 0.37]
     const out = apply(templeFloorMatrix(VIEW, 0.02), p)

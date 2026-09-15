@@ -227,7 +227,13 @@ describe('buildHinges', () => {
       // the joint sits between hinge and tip, at the documented fraction
       expect(h.cutZ).toBeLessThan(h.hingeLocal.z)
       expect(h.cutZ).toBeGreaterThan(-0.13)
+      const authoredTipZ = -0.013 * 11
+      expect(h.cutZ).toBeCloseTo(h.hingeLocal.z - (h.hingeLocal.z - authoredTipZ) * TEMPLE_CUT_RATIO, 6)
     }
+  })
+
+  it('pins the measured articulation point used by all merchant models', () => {
+    expect(TEMPLE_CUT_RATIO).toBe(0.66)
   })
 
   it('grouping and cutting alone move nothing', () => {

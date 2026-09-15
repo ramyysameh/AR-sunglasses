@@ -160,4 +160,36 @@ describe('_openTemples', () => {
     expect(loop._splayAngle).toBeUndefined()
     expect(loop._headWidthMean).toBeUndefined()
   })
+
+  it('solves immediately, latches after ten samples, and re-solves when scale changes', () => {
+    const loop = Object.create(RenderLoop.prototype)
+    loop._hinges = [makeHinge(0)]
+    loop.faceOccluder = { occluderMesh: makeOccluderMesh(BOX_VERTS) }
+    loop.headYaw = 0
+    loop.glassesRoot = new THREE.Object3D()
+    const transform = { quaternion: new THREE.Quaternion() }
+
+    for (let i = 0; i < 9; i += 1) loop._openTemples(transform)
+    expect(loop._hinges[0].group.rotation.y).not.toBe(0)
+    expect(loop._splayForWidth).toBeUndefined()
+
+    loop._openTemples(transform)
+    expect(loop._splayForWidth).toBeCloseTo(BOX_HALF_WIDTH, 4)
+    expect(loop._splayForScale).toBe(1)
+    const firstAngle = loop._splayAngle
+
+    loop.glassesRoot.scale.setScalar(1.03)
+    loop._openTemples(transform)
+    expect(loop._splayAngle).not.toBeCloseTo(firstAngle, 6)
+    expect(loop._splayForScale).toBeCloseTo(1.03, 8)
+  })
+
+  it('lowers the temple floor when the current model has no hinges', () => {
+    const loop = Object.create(RenderLoop.prototype)
+    const calls = []
+    loop._hinges = []
+    loop.faceOccluder = { aimTempleFloor: (direction) => calls.push(direction) }
+    loop._clipNearArm({})
+    expect(calls).toEqual([null])
+  })
 })

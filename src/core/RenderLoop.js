@@ -43,6 +43,8 @@ const MAX_PLAUSIBLE_HEAD_HALF_M = 0.13
 // opened, and how far that average must move to justify re-solving.
 const HEAD_WIDTH_SAMPLES = 90
 const HEAD_WIDTH_RESOLVE_M = 0.004
+/** Re-solve once glasses scale drifts by 1%; roughly half a degree of splay. */
+const SPLAY_SCALE_RESOLVE = 0.01
 /**
  * Samples required before the resolve latch is set, so the mean has settled
  * before the solve stops being revisited. The SOLVE itself runs on every
@@ -221,6 +223,7 @@ export class RenderLoop {
     // blew past HEAD_WIDTH_RESOLVE_M. At 0.8 mm of spread it no longer does, and
     // the new frame would keep its authored, unopened, uncurled arms all session.
     this._splayForWidth = null
+    this._splayForScale = null
 
     if (this.glassesRoot && this.scene) {
       this.scene.add(this.glassesRoot)
@@ -240,6 +243,7 @@ export class RenderLoop {
 
   setFaceOccluder(faceOccluder) {
     this.faceOccluder = faceOccluder
+    this._shellWorld = null
 
     if (this.faceOccluder?.occluderMesh && this.scene && this.faceOccluder.occluderMesh.parent !== this.scene) {
       this.scene.add(this.faceOccluder.occluderMesh)
@@ -253,9 +257,11 @@ export class RenderLoop {
    * needs to toggle each of them, and they arrive from different callers.
    */
   _installProbe() {
-    if (!this.probeEnabled || this._probe || !this.glassesRoot || !this.faceOccluder) {
+    if (!this.probeEnabled || !this.glassesRoot || !this.faceOccluder) {
       return
     }
+    if (this._probe?.glassesRoot === this.glassesRoot) return
+    this._probe?.target?.dispose?.()
 
     this._probe = new OcclusionProbe({
       renderer: this.renderer,
@@ -447,6 +453,10 @@ export class RenderLoop {
     this.smoothedDepth = null
     this._frontalScaleMean = null
     this._frontalScaleCount = 0
+    this._headWidthMean = null
+    this._headWidthCount = 0
+    this._splayForWidth = null
+    this._splayForScale = null
     this._lastRotQuat = null
     this._angVelQ = null
   }
@@ -902,11 +912,15 @@ export class RenderLoop {
     // at THAT height rather than at its widest point anywhere.
     const armTmp = (this._splayArmTmp ??= new THREE.Vector3())
     let armHeight = 0
+    let armHeightCount = 0
     for (const hinge of this._hinges) {
-      hinge.curl?.getWorldPosition(armTmp)
+      if (!hinge.curl) continue
+      hinge.curl.getWorldPosition(armTmp)
       armHeight += armTmp.sub(mid).dot(axY)
+      armHeightCount += 1
     }
-    armHeight /= this._hinges.length
+    if (armHeightCount === 0) return
+    armHeight /= armHeightCount
 
     // The head's half-width WHERE THE TEMPLE RUNS, not at the head's widest
     // point -- measuring anywhere else aims the arm at a different height than
@@ -952,11 +966,15 @@ export class RenderLoop {
     this._headWidthMean = this._headWidthMean == null
       ? headHalfWidth
       : this._headWidthMean + (headHalfWidth - this._headWidthMean) / this._headWidthCount
-    if (this._splayForWidth != null && Math.abs(this._headWidthMean - this._splayForWidth) < HEAD_WIDTH_RESOLVE_M) {
+    const scale = this.glassesRoot?.scale?.x || 1
+    if (
+      this._splayForWidth != null &&
+      Math.abs(this._headWidthMean - this._splayForWidth) < HEAD_WIDTH_RESOLVE_M &&
+      Math.abs(scale - (this._splayForScale ?? 0)) < SPLAY_SCALE_RESOLVE
+    ) {
       return
     }
 
-    const scale = this.glassesRoot?.scale?.x || 1
     let angle = 0
     for (const hinge of this._hinges) {
       const solved = solveSplay(this._headWidthMean, hinge.armLateral * scale, hinge.jointDepth * scale)
@@ -975,6 +993,7 @@ export class RenderLoop {
     // the temple hidden with earGapRatio +0.145.
     if (this._headWidthCount >= HEAD_WIDTH_MIN_SAMPLES) {
       this._splayForWidth = this._headWidthMean
+      this._splayForScale = scale
     }
     this._splayAngle = angle
   }
@@ -990,12 +1009,16 @@ export class RenderLoop {
    * detached fragment past it at others.
    */
   _clipNearArm(transform) {
-    if (!this._hinges?.length || !this.faceOccluder?.occluderMesh) {
+    if (!this._hinges?.length) {
+      this.faceOccluder?.aimTempleFloor?.(null)
+      return
+    }
+    if (!this.faceOccluder?.occluderMesh) {
       return
     }
     const position = this.faceOccluder.occluderMesh.geometry.attributes.position
     if (!this.faceOccluder.occluderMesh.visible || position.count <= Math.max(...EAR_LANDMARKS)) {
-      this.faceOccluder.aimTempleFloor(null)
+      this.faceOccluder.aimTempleFloor?.(null)
       applyNearArmClip(this._hinges, 0, null, null)
       return
     }
@@ -1003,7 +1026,7 @@ export class RenderLoop {
     const yaw = THREE.MathUtils.radToDeg(this.headYaw ?? 0)
     const nearSide = Math.abs(yaw) < NEAR_ARM_YAW_DEG ? 0 : (yaw >= 0 ? -1 : 1)
     if (nearSide === 0) {
-      this.faceOccluder.aimTempleFloor(null)
+      this.faceOccluder.aimTempleFloor?.(null)
       applyNearArmClip(this._hinges, 0, null, null)
       return
     }
@@ -1022,7 +1045,7 @@ export class RenderLoop {
       { origin: (this._clipMid ??= new THREE.Vector3()), forward: (this._clipForward ??= new THREE.Vector3()) },
     )
     if (!frame) {
-      this.faceOccluder.aimTempleFloor(null)
+      this.faceOccluder.aimTempleFloor?.(null)
       applyNearArmClip(this._hinges, 0, null, null)
       return
     }
@@ -1043,7 +1066,7 @@ export class RenderLoop {
     // frame already exists, and only on the path that actually lifts something:
     // an inner shell left on while nothing is lifted is pure cost, and one left
     // aimed at a stale head punches a hole wherever that head used to be.
-    this.faceOccluder.aimTempleFloor(
+    this.faceOccluder.aimTempleFloor?.(
       this.camera.getWorldDirection((this._floorView ??= new THREE.Vector3())),
     )
 
@@ -1242,7 +1265,6 @@ export class RenderLoop {
       }
 
       if (this.lowQualityFrames > 1 && this.lastGoodTransform && this.lowQualityFrames <= LOW_QUALITY_FREEZE_FRAMES) {
-        this.lowQualityFrames += 1
         this._applyTransform(this.lastGoodTransform)
         this.renderer?.render(this.scene, this.camera)
         return
@@ -1375,6 +1397,7 @@ export class RenderLoop {
         scale: fitScale,
         anchorWorldPoints,
         occlusionMesh: fitSolution.occlusionMesh,
+        occluderCorrection: occluderCorrection.clone(),
         fitSolution,
       }
       this.lastTrackingTimestamp = timestamp
