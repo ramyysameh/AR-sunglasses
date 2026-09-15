@@ -17,5 +17,6 @@ describe('FaceTracker camera cadence', () => {
     tracker.detect(video, 30)
     expect(tracker.faceLandmarker.detectForVideo).toHaveBeenCalledTimes(2)
     expect(tracker.lastDetectionWasFresh).toBe(true)
+    expect(tracker.frameIntervalMs).toBeCloseTo(30.6667, 3)
   })
 })

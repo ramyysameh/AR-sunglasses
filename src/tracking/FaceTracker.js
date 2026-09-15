@@ -14,6 +14,8 @@ export class FaceTracker {
     this.lastVideoTime = null
     this.lastResult = null
     this.lastDetectionWasFresh = false
+    this.lastDetectionTimestamp = null
+    this.frameIntervalMs = 1000 / 30
   }
 
   async init() {
@@ -26,7 +28,7 @@ export class FaceTracker {
       },
       runningMode: 'VIDEO',
       numFaces: 1,
-      outputFaceBlendshapes: true,
+      outputFaceBlendshapes: false,
       outputFacialTransformationMatrixes: true,
     })
 
@@ -45,6 +47,13 @@ export class FaceTracker {
     }
 
     this.lastResult = this.faceLandmarker.detectForVideo(videoElement, timestamp)
+    if (this.lastDetectionTimestamp != null) {
+      const observedInterval = timestamp - this.lastDetectionTimestamp
+      if (observedInterval >= 8 && observedInterval <= 100) {
+        this.frameIntervalMs += (observedInterval - this.frameIntervalMs) * 0.2
+      }
+    }
+    this.lastDetectionTimestamp = timestamp
     this.lastVideoTime = Number.isFinite(videoTime) ? videoTime : null
     this.lastDetectionWasFresh = true
     return this.lastResult
@@ -56,5 +65,7 @@ export class FaceTracker {
     this.lastVideoTime = null
     this.lastResult = null
     this.lastDetectionWasFresh = false
+    this.lastDetectionTimestamp = null
+    this.frameIntervalMs = 1000 / 30
   }
 }

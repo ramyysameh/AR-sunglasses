@@ -16,6 +16,7 @@ import { createLensEnvironment } from './lensEnvironment.js'
 import { resolveLensReflectionConfig, resolveEnvironmentName} from './lensReflection.js'
 import { resolveFrameReflectionConfig } from './frameReflection.js'
 import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
+import { PoseInterpolator } from '../tracking/PoseInterpolator.js'
 
 const TRACK_LOSS_RESET_MS = 180
 // Bounded translation lead to compensate camera + detector + filter latency.
@@ -101,6 +102,7 @@ export class RenderLoop {
     this._frontalScaleMean = null
     this._frontalScaleCount = 0
     this.lastPredictionTimestamp = null
+    this.poseInterpolator = new PoseInterpolator()
     this.occlusionEnabled = true
     // The flat CircleGeometry "contact shadow" reads as a grey disc on the nose,
     // so keep it off. Revisit with a proper soft/blurred shadow later if desired.
@@ -447,6 +449,7 @@ export class RenderLoop {
     this.lastGoodTransform = null
     this.lowQualityFrames = 0
     this.lastPredictionTimestamp = null
+    this.poseInterpolator?.reset?.()
     this.smoothedScale = null
     this.smoothedDepth = null
     this._frontalScaleMean = null
@@ -1350,6 +1353,18 @@ export class RenderLoop {
         ? predictedPos.z
         : THREE.MathUtils.lerp(this.smoothedDepth, predictedPos.z, depthAlpha)
       predictedPos.z = this.smoothedDepth
+      const freshDetection = this.faceTracker?.lastDetectionWasFresh !== false
+      if (freshDetection) {
+        this.poseInterpolator.push(
+          predictedPos,
+          predictedQuat,
+          timestamp,
+          this.faceTracker?.frameIntervalMs,
+        )
+      }
+      const displayPose = this.poseInterpolator.sample(timestamp)
+      const displayPos = displayPose?.position ?? predictedPos
+      const displayQuat = displayPose?.quaternion ?? predictedQuat
       // The occluder mesh is built from RAW per-frame landmarks (it has to be,
       // to deform to the actual face shape), while the frame above just went
       // through OneEuro smoothing + predictive lead + this same depth damping.
@@ -1358,7 +1373,7 @@ export class RenderLoop {
       // (the nose bridge). Passing this exact delta into the occluder locks
       // its OVERALL position to the frame's, by construction, instead of
       // hoping two separately-tuned smoothing curves happen to agree.
-      const occluderCorrection = predictedPos.clone().sub(tunedPosition)
+      const occluderCorrection = displayPos.clone().sub(tunedPosition)
       const fitScale = this._smoothSolvedScale(fitSolution.glassesTransform.scale)
       this._updateFitDebugOverlay({
         yaw: THREE.MathUtils.radToDeg(this.headYaw ?? 0),
@@ -1366,12 +1381,12 @@ export class RenderLoop {
         raw: fitSolution.glassesTransform.scale,
         fittedRaw: fitSolution.fittedScaleRaw,
         clamped: fitSolution.scaleClamped,
-        z: predictedPos.z,
+        z: displayPos.z,
         quality: fitSolution.fitQuality,
       })
       const transform = {
-        position: predictedPos,
-        quaternion: predictedQuat,
+        position: displayPos,
+        quaternion: displayQuat,
         scale: fitScale,
         anchorWorldPoints,
         occlusionMesh: fitSolution.occlusionMesh,
@@ -1381,8 +1396,8 @@ export class RenderLoop {
 
       this._applyTransform(transform)
       this.lastGoodTransform = {
-        position: predictedPos.clone(),
-        quaternion: predictedQuat.clone(),
+        position: displayPos.clone(),
+        quaternion: displayQuat.clone(),
         scale: fitScale,
         anchorWorldPoints,
         occlusionMesh: fitSolution.occlusionMesh,
@@ -1406,7 +1421,7 @@ export class RenderLoop {
           surfaceDepth: fitSolution.debugMetrics?.surfaceDepth,
           bridgeClearance: this.modelConfig?.frontFrameClearanceMeters ?? 0,
           filterMode: this.filterMode,
-          trackingDelta: pose.rawPose?.position?.distanceTo?.(predictedPos) ?? 0,
+          trackingDelta: pose.rawPose?.position?.distanceTo?.(displayPos) ?? 0,
           templeSpan: pose.metrics?.templeSpan ?? 0,
           irisSpan: pose.metrics?.irisSpan ?? 0,
           cheekSpan: pose.metrics?.cheekSpan ?? 0,
@@ -1419,8 +1434,8 @@ export class RenderLoop {
           modelDepth: glassesModel.userData.naturalDepth,
           depthPivot: glassesModel.userData.depthPivot,
           noseBridgeZ: smoothPos.z,
-          headQuaternion: predictedQuat ?? this.lastHeadQuaternion,
-          headPosition: predictedPos ?? this.lastHeadPosition,
+          headQuaternion: displayQuat ?? this.lastHeadQuaternion,
+          headPosition: displayPos ?? this.lastHeadPosition,
           predictionDelta: this.predictionDelta ?? 0,
           debugPoints: this._projectDebugPoints(anchorWorldPoints),
         })
