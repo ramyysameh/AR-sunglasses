@@ -4,6 +4,7 @@ const PRODUCTS_QUERY = `#graphql
       ... on Product {
         id
         title
+        handle
         featuredImage { url altText }
       }
     }
@@ -22,6 +23,7 @@ export async function fetchProductsByIds(admin, ids) {
     result.set(node.id, {
       id: node.id,
       title: node.title,
+      handle: node.handle ?? null,
       imageUrl: node.featuredImage?.url ?? null,
       imageAlt: node.featuredImage?.altText ?? null,
     })

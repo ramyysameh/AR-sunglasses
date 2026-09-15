@@ -41,10 +41,11 @@ function mapping(id, modelAssetId = 'model-a') {
     productId: `gid://shopify/Product/${id}`,
     modelAssetId,
     modelAsset: assets.find((asset) => asset.id === modelAssetId),
-    product: { title: `Product ${id}`, imageUrl: null, imageAlt: null },
+    product: { title: `Product ${id}`, handle: `product-${id}`, imageUrl: null, imageAlt: null },
     status: { id: 'live', label: 'Live', tone: 'success' },
     previewUrl: `https://preview.example/${id}`,
     qr: null,
+    themeUrl: `https://admin.shopify.com/theme?previewPath=%2Fproducts%2Fproduct-${id}`,
   }
 }
 
@@ -148,5 +149,14 @@ describe('Products working surface', () => {
       const escapedTarget = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       expect(html.match(new RegExp(`id="${escapedTarget}"`, 'g'))).toHaveLength(1)
     }
+  })
+
+  it('opens Add to theme on the selected product page', () => {
+    routeState.loaderData.mappings = [{
+      ...mapping('selected'),
+      status: { id: 'not_on_theme', label: 'Not on theme', tone: 'warning' },
+    }]
+    const html = renderToStaticMarkup(React.createElement(Products))
+    expect(html).toContain('previewPath=%2Fproducts%2Fproduct-selected')
   })
 })

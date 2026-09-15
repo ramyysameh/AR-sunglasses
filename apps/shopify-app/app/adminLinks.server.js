@@ -14,11 +14,15 @@ function extensionUid() {
  * product template. Not embeddable: open top-level (target="_top"), the same
  * reason app.jsx opens the Managed Pricing URL that way.
  * @param {string} shop myshopify domain
+ * @param {string|null} [productHandle] product to preview in the theme editor
  */
-export function themeEditorUrl(shop) {
+export function themeEditorUrl(shop, productHandle = null) {
   const store = String(shop).replace(/\.myshopify\.com$/, '')
   const url = new URL(`https://admin.shopify.com/store/${store}/themes/current/editor`)
   url.searchParams.set('template', 'product')
+  if (productHandle) {
+    url.searchParams.set('previewPath', `/products/${productHandle}`)
+  }
   url.searchParams.set('addAppBlockId', `${extensionUid()}/${BLOCK_HANDLE}`)
   url.searchParams.set('target', 'mainSection')
   return url.toString()

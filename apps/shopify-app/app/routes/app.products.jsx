@@ -82,6 +82,7 @@ export const loader = async ({ request }) => {
           const url = previewUrl({ engineUrl, shop: session.shop, productId: m.productId })
           return {
             ...base,
+            themeUrl: themeEditorUrl(session.shop, base.product?.handle),
             previewUrl: url,
             // Generated here, not in the browser: a client-side QR library would
             // need a CDN script and the admin iframe's CSP is not ours to widen.
@@ -89,7 +90,12 @@ export const loader = async ({ request }) => {
           }
         } catch (e) {
           console.error('preview URL/QR generation failed', e)
-          return { ...base, previewUrl: null, qr: null }
+          return {
+            ...base,
+            themeUrl: themeEditorUrl(session.shop, base.product?.handle),
+            previewUrl: null,
+            qr: null,
+          }
         }
       }),
     ),
@@ -523,7 +529,7 @@ export default function Products() {
                     <s-stack direction="inline" gap="small-500" alignItems="center">
                       <StatusBadge status={m.status} />
                       {m.status.id === 'not_on_theme' && (
-                        <a href={themeUrl} target="_top" rel="noreferrer">Add to theme</a>
+                        <a href={m.themeUrl ?? themeUrl} target="_top" rel="noreferrer">Add to theme</a>
                       )}
                     </s-stack>
                   </s-table-cell>

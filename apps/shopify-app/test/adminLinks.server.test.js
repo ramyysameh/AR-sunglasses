@@ -11,6 +11,11 @@ describe('themeEditorUrl', () => {
     expect(url.searchParams.get('addAppBlockId')).toMatch(/\/tryon_button$/)
   })
 
+  it('previews the selected product when its handle is available', () => {
+    const url = new URL(themeEditorUrl('demo-shop.myshopify.com', 'black-wayfarer'))
+    expect(url.searchParams.get('previewPath')).toBe('/products/black-wayfarer')
+  })
+
 })
 
 describe('previewUrl', () => {
