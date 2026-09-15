@@ -43,8 +43,8 @@ describe('moving-pose latency', () => {
       new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.15),
       33,
     )
-    expect(positionParams.at(-1).minCutoff).toBeGreaterThanOrEqual(18)
-    expect(rotationParams.at(-1).minCutoff).toBeGreaterThanOrEqual(18)
+    expect(positionParams.at(-1).minCutoff).toBeGreaterThanOrEqual(28)
+    expect(rotationParams.at(-1).minCutoff).toBeGreaterThanOrEqual(28)
   })
 
   it('opens the filter for a normal-speed head turn, not only a fast snap', () => {
@@ -71,8 +71,8 @@ describe('moving-pose latency', () => {
     loop.motionLevel = 1
     expect(loop._predictPosition(new THREE.Vector3(0, 0, 0), 0).x).toBe(0)
     const predicted = loop._predictPosition(new THREE.Vector3(0.01, 0, 0), 16)
-    expect(predicted.x).toBeGreaterThan(0.02)
-    expect(predicted.x).toBeLessThanOrEqual(0.045)
+    expect(predicted.x).toBeGreaterThan(0.03)
+    expect(predicted.x).toBeCloseTo(0.045, 9)
   })
 })
 

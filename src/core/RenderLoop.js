@@ -20,11 +20,11 @@ import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProb
 const TRACK_LOSS_RESET_MS = 180
 // Bounded translation lead to compensate camera + detector + filter latency.
 // Time-based rather than "frames ahead" so behavior is stable across 30/60 Hz.
-const POSITION_LEAD_MS = 45
+const POSITION_LEAD_MS = 60
 const MAX_PREDICTION_SPEED = 1.2
 const MAX_POSITION_LEAD_M = 0.035
 // Rotation lead (ms) to cancel capture->detect->render latency during turns.
-const ROT_LEAD_MS = 60
+const ROT_LEAD_MS = 75
 const MAX_ROT_LEAD_FRAMES = 4
 const FALLBACK_FACE_DEPTH = -0.78
 const NEAREST_DISPLAY_DEPTH = -0.62
@@ -650,13 +650,13 @@ export class RenderLoop {
     // landmark noise doesn't jitter the frame; high ceilings keep it responsive
     // once real movement ramps `motion` up.
     this.positionFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.40, 20.0, smoothedMotion) * smoothFactor,
+      minCutoff: THREE.MathUtils.lerp(0.40, 30.0, smoothedMotion) * smoothFactor,
       beta: THREE.MathUtils.lerp(0.010, 0.28, smoothedMotion) * smoothFactor,
       dCutoff: 1.0,
     })
 
     this.rotationFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.35, 20.0, smoothedMotion) * smoothFactor,
+      minCutoff: THREE.MathUtils.lerp(0.35, 30.0, smoothedMotion) * smoothFactor,
       beta: THREE.MathUtils.lerp(0.02, 0.36, smoothedMotion) * smoothFactor,
       dCutoff: 1.0,
     })
