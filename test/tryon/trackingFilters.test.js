@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { OneEuroFilter } from '../../src/filters/OneEuroFilter.js'
 import { QuaternionFilter } from '../../src/filters/QuaternionFilter.js'
 import { RenderLoop } from '../../src/core/RenderLoop.js'
+import { depthFollowGain } from '../../src/fit/FaceFitSolver.js'
 
 describe('tracking filter velocity', () => {
   it('does not invent velocity while settling toward a held scalar sample', () => {
@@ -53,5 +54,17 @@ describe('moving-pose latency', () => {
     const predicted = loop._predictPosition(new THREE.Vector3(0.01, 0, 0), 16)
     expect(predicted.x).toBeGreaterThan(0.02)
     expect(predicted.x).toBeLessThanOrEqual(0.045)
+  })
+})
+
+describe('depth response', () => {
+  it('damps off-axis landmark noise but follows real approach motion', () => {
+    expect(depthFollowGain(false, 0.012, 1)).toBeCloseTo(0.02)
+    expect(depthFollowGain(false, 0.08, 1)).toBeCloseTo(0.22)
+    expect(depthFollowGain(true, 0.012, 1)).toBeCloseTo(0.35)
+  })
+
+  it('holds an unreliable iris estimate at extreme yaw', () => {
+    expect(depthFollowGain(false, 0.08, 0)).toBe(0)
   })
 })

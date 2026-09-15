@@ -57,6 +57,15 @@ const MAX_YAW_DEPTH_CORRECTION = Math.PI / 3 // 60 degrees
 // measured, not guessed -- see the `trust` comment in solve().
 const IRIS_RELIABLE_YAW_DEG = 32
 const IRIS_USELESS_YAW_DEG = 42
+// Off-axis IPD depth noise measured about 12 mm SD. Changes beyond 25 mm are
+// much more likely to be real forward/back motion than landmark shimmer.
+const DEPTH_MOTION_THRESHOLD_M = 0.025
+
+export function depthFollowGain(frontal, innovation, trust) {
+  const movingInDepth = Math.abs(innovation) > DEPTH_MOTION_THRESHOLD_M
+  const baseGain = frontal ? 0.35 : (movingInDepth ? 0.22 : 0.02)
+  return baseGain * THREE.MathUtils.clamp(trust, 0, 1)
+}
 
 // Fraction of the way from bridgeTop (landmark 168) toward browCenter (9) that
 // the frame anchor sits. See the frameAnchorXY comment for why this is a blend
@@ -339,16 +348,11 @@ export class FaceFitSolver {
     const trust = 1 - THREE.MathUtils.smoothstep(yawDeg, IRIS_RELIABLE_YAW_DEG, IRIS_USELESS_YAW_DEG)
     if (this._heldDepth == null) {
       this._heldDepth = rawDepth
-    } else if (frontalDepth) {
-      // Light EMA instead of snapping straight to rawDepth -- the native-video
-      // aspect estimateMetricDepth now uses (matching anchorToMetricXY, see
-      // above) is more sensitive to ordinary per-frame MediaPipe landmark
-      // noise than the old display-aspect version was, which showed up as
-      // visible nose-bridge jitter. Still responsive to real distance changes
-      // (moving closer/farther) within a few frames, just not frame-instant.
-      this._heldDepth += (rawDepth - this._heldDepth) * 0.35 * trust
     } else {
-      this._heldDepth += (rawDepth - this._heldDepth) * 0.02 * trust
+      const innovation = rawDepth - this._heldDepth
+      // Keep small off-axis fluctuations heavily damped, but let a real move
+      // toward or away from the camera clear the noise band and follow quickly.
+      this._heldDepth += innovation * depthFollowGain(frontalDepth, innovation, trust)
     }
     const baseDepth = this._heldDepth
 
