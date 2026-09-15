@@ -55,7 +55,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     this.faceTracker = await new FaceTracker().init()
     this.landmarkProcessor = new LandmarkProcessor()
 
-    this._setLoading('Loading render pipeline...')
+    this._setLoading('Bringing your look to life…')
     // In mock mode the "face" is a static image, so the head-turn calibration
     // can never complete — relax the scanner to lock on from the front view only.
     const mockParam = new URLSearchParams(window.location.search).get('mock')
