@@ -602,10 +602,10 @@ export class RenderLoop {
 
     const dt = Math.max((timestamp - this.lastRawTimestamp) / 1000, 1e-3)
     const linearSpeed = rawPosition.distanceTo(this.lastRawPosition) / dt
-    // More sensitive gate (was /0.65): heads rarely translate that fast, so the
-    // filter almost never opened up and everything lagged. /0.4 lets it respond
-    // to normal head movement.
-    const linearMotion = THREE.MathUtils.clamp(linearSpeed / 0.4, 0, 1)
+    // Reach full response at ordinary deliberate movement. The previous 0.4
+    // m/s ceiling classified normal lateral motion as nearly still, leaving the
+    // rest filter engaged while the face was visibly moving.
+    const linearMotion = THREE.MathUtils.clamp(linearSpeed / 0.25, 0, 1)
 
     // A head tilt/turn is mostly rotation with little translation. Without this,
     // the gate reads a tilt as "still" and over-smooths the rotation, so the
@@ -615,17 +615,17 @@ export class RenderLoop {
       const angularSpeed = rawQuat.angleTo(this.lastRawQuat) / dt // rad/s
       // More sensitive: a head turn should hit full motion quickly so the filters
       // open up immediately and the glasses don't trail the turn.
-      angularMotion = THREE.MathUtils.clamp(angularSpeed / 0.6, 0, 1)
+      angularMotion = THREE.MathUtils.clamp(angularSpeed / 0.35, 0, 1)
     }
 
     const rawMotion = Math.max(linearMotion, angularMotion)
     // Deadzone: ignore tiny motion (landmark noise + involuntary sway) so the
     // filter stays in its heavily-smoothed "still" mode at rest and doesn't jitter.
     // Real movement still ramps motion to 1 for full responsiveness.
-    // Wider deadzone (was 0.12): tracking is noisier when the head is held at an
-    // angle, and that noise was tripping the gate out of "still" mode and jittering.
-    // A bigger deadzone keeps any held pose (forward OR turned) in heavy smoothing.
-    const deadzone = 0.28
+    // Duplicate-frame inference and false derivative motion are now removed at
+    // their sources, so this no longer needs the oversized 0.28 deadzone that
+    // made slow, intentional movement trail the face.
+    const deadzone = 0.22
     const motion = THREE.MathUtils.clamp((rawMotion - deadzone) / (1 - deadzone), 0, 1)
     // The detector runs slower than the render loop, so a fresh pose arrives only
     // every ~2nd frame; the in-between (near-duplicate) frame reads as "still".
@@ -650,13 +650,13 @@ export class RenderLoop {
     // landmark noise doesn't jitter the frame; high ceilings keep it responsive
     // once real movement ramps `motion` up.
     this.positionFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.40, 11.0, smoothedMotion) * smoothFactor,
+      minCutoff: THREE.MathUtils.lerp(0.40, 20.0, smoothedMotion) * smoothFactor,
       beta: THREE.MathUtils.lerp(0.010, 0.28, smoothedMotion) * smoothFactor,
       dCutoff: 1.0,
     })
 
     this.rotationFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.35, 11.0, smoothedMotion) * smoothFactor,
+      minCutoff: THREE.MathUtils.lerp(0.35, 20.0, smoothedMotion) * smoothFactor,
       beta: THREE.MathUtils.lerp(0.02, 0.36, smoothedMotion) * smoothFactor,
       dCutoff: 1.0,
     })

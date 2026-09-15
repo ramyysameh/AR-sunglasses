@@ -43,8 +43,27 @@ describe('moving-pose latency', () => {
       new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.15),
       33,
     )
-    expect(positionParams.at(-1).minCutoff).toBeGreaterThanOrEqual(10)
-    expect(rotationParams.at(-1).minCutoff).toBeGreaterThanOrEqual(10)
+    expect(positionParams.at(-1).minCutoff).toBeGreaterThanOrEqual(18)
+    expect(rotationParams.at(-1).minCutoff).toBeGreaterThanOrEqual(18)
+  })
+
+  it('opens the filter for a normal-speed head turn, not only a fast snap', () => {
+    const loop = Object.create(RenderLoop.prototype)
+    let rotationParams
+    loop.positionFilter = { setParams() {} }
+    loop.rotationFilter = { setParams: (value) => { rotationParams = value } }
+    loop.lastRawPosition = new THREE.Vector3()
+    loop.lastRawQuat = new THREE.Quaternion()
+    loop.lastRawTimestamp = 0
+    loop.motionLevel = 0
+    // 0.2 rad/s is a gentle turn. It previously yielded a ~1 Hz cutoff and
+    // visibly dragged; it should now leave the heavy rest filter decisively.
+    loop._updateAdaptiveFilters(
+      new THREE.Vector3(),
+      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.0066),
+      33,
+    )
+    expect(rotationParams.minCutoff).toBeGreaterThan(7)
   })
 
   it('predicts translation by time and keeps the lead bounded', () => {
