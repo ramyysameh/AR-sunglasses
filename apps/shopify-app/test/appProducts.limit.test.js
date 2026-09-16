@@ -5,6 +5,20 @@ const tag = randomUUID().slice(0, 8)
 const shop = `limit-${tag}.myshopify.com`
 
 const hoisted = vi.hoisted(() => ({ plan: 'Starter' }))
+const admin = {
+  graphql: async () =>
+    new Response(
+      JSON.stringify({
+        data: {
+          currentAppInstallation: {
+            activeSubscriptions: hoisted.plan
+              ? [{ name: hoisted.plan, status: 'ACTIVE' }]
+              : [],
+          },
+        },
+      }),
+    ),
+}
 // Fake the Admin GraphQL response itself (rather than mocking
 // getActivePlanName) so that requireActivePlanForLoader -- which calls
 // getActivePlanName via an in-module reference, not through the mocked
@@ -13,26 +27,14 @@ vi.mock('../app/shopify.server.js', () => ({
   authenticate: {
     admin: async () => ({
       session: { shop },
-      admin: {
-        graphql: async () =>
-          new Response(
-            JSON.stringify({
-              data: {
-                currentAppInstallation: {
-                  activeSubscriptions: hoisted.plan
-                    ? [{ name: hoisted.plan, status: 'ACTIVE' }]
-                    : [],
-                },
-              },
-            }),
-          ),
-      },
+      admin,
     }),
   },
 }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { action, loader } = await import('../app/routes/app.products.jsx')
+const { loader } = await import('../app/routes/app.products.jsx')
+const { handleProductAction } = await import('../app/productActions.server.js')
 
 async function seedAsset() {
   const a = await prisma.modelAsset.create({
@@ -47,6 +49,12 @@ function mapForm(productId, modelAssetId) {
   fd.set('modelAssetId', modelAssetId)
   return new Request('https://x/app/products', { method: 'POST', body: fd })
 }
+
+const map = (productId, modelAssetId) => handleProductAction({
+  request: mapForm(productId, modelAssetId),
+  admin,
+  shop,
+})
 
 // Each case controls its own mapping count, so clear mappings first. Assets
 // persist (harmless, referenced by id) and are removed in afterAll.
@@ -68,7 +76,7 @@ describe('map action tier limit', () => {
   it('allows a new product on Pro (unlimited)', async () => {
     hoisted.plan = 'Pro'
     const assetId = await seedAsset()
-    const res = await action({ request: mapForm(`gid://shopify/Product/${tag}-pro`, assetId) })
+    const res = await map(`gid://shopify/Product/${tag}-pro`, assetId)
     expect(res.mapped).toBe(true)
   })
 
@@ -82,9 +90,7 @@ describe('map action tier limit', () => {
     await prisma.productMapping.create({
       data: { shop, productId: `gid://shopify/Product/${tag}-existing`, modelAssetId: assetId },
     })
-    const res = await action({
-      request: mapForm(`gid://shopify/Product/${tag}-existing`, assetId),
-    })
+    const res = await map(`gid://shopify/Product/${tag}-existing`, assetId)
     expect(res.error).toMatch(/no active subscription/i)
   })
 })

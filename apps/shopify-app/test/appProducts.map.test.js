@@ -3,16 +3,17 @@ import { randomUUID } from 'node:crypto'
 
 const tag = randomUUID().slice(0, 8)
 const shop = `map-${tag}.myshopify.com`
+const admin = {
+  graphql: async () => new Response(JSON.stringify({
+    data: { currentAppInstallation: { activeSubscriptions: [{ name: 'Starter', status: 'ACTIVE' }] } },
+  })),
+}
 
 vi.mock('../app/shopify.server.js', () => ({
   authenticate: {
     admin: async () => ({
       session: { shop },
-      admin: {
-        graphql: async () => new Response(JSON.stringify({
-          data: { currentAppInstallation: { activeSubscriptions: [{ name: 'Starter', status: 'ACTIVE' }] } },
-        })),
-      },
+      admin,
     }),
   },
 }))
@@ -24,10 +25,14 @@ vi.mock('../app/tryonMetafield.server.js', () => ({
 vi.mock('../app/products.server.js', () => ({ fetchProductsByIds: async () => new Map() }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { action } = await import('../app/routes/app.products.jsx')
+const { handleProductAction } = await import('../app/productActions.server.js')
 
 const post = (fields) =>
-  action({ request: new Request('https://x/app/products', { method: 'POST', body: new URLSearchParams(fields) }) })
+  handleProductAction({
+    request: new Request('https://x/app/products', { method: 'POST', body: new URLSearchParams(fields) }),
+    admin,
+    shop,
+  })
 
 let assetId
 beforeEach(async () => {
