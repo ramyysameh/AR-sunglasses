@@ -16,6 +16,10 @@ vi.mock('../app/shopify.server.js', () => ({
     }),
   },
 }))
+vi.mock('../app/tryonMetafield.server.js', () => ({
+  publishMappings: async () => {},
+}))
+vi.mock('../app/products.server.js', () => ({ fetchProductsByIds: async () => new Map() }))
 
 const prisma = (await import('../app/db.server.js')).default
 const { loader } = await import('../app/routes/app._index.jsx')
@@ -30,13 +34,17 @@ afterAll(async () => {
   await prisma.shopSubscription.deleteMany({ where: { shop } })
 })
 
-describe('app._index loader counts', () => {
-  it('returns model and mapping counts for the shop', async () => {
+describe('app._index workspace loader', () => {
+  it('returns assets, enriched mappings, and counts for the shop', async () => {
     const asset = await prisma.modelAsset.create({ data: { shop, storageRef: `${tag}/m.glb`, fitMetadata: {} } })
     await prisma.productMapping.create({ data: { shop, productId: `gid://shopify/Product/${tag}`, modelAssetId: asset.id } })
 
     const result = await loader({ request: new Request('https://x/app') })
-    expect(result).toMatchObject({ modelCount: 1, mappingCount: 1 })
+    expect(result).toMatchObject({
+      assets: [{ id: asset.id }],
+      mappings: [{ product: null, modelAsset: { id: asset.id }, status: 'add-to-theme' }],
+      counts: { all: 1, live: 0, needsAttention: 1 },
+    })
   })
 
   it('reports plan usage and a theme link', async () => {
@@ -52,12 +60,12 @@ describe('app._index loader counts', () => {
     const asset = await prisma.modelAsset.create({ data: { shop, storageRef: `${tag}/l.glb`, fitMetadata: {} } })
     const pid = `gid://shopify/Product/${tag}-l`
     await prisma.productMapping.create({ data: { shop, productId: pid, modelAssetId: asset.id } })
-    expect((await loader({ request: new Request('https://x/app') })).liveCount).toBe(0)
+    expect((await loader({ request: new Request('https://x/app') })).counts.live).toBe(0)
 
     await prisma.productMapping.update({
       where: { shop_productId: { shop, productId: pid } },
       data: { lastSeenLiveAt: new Date() },
     })
-    expect((await loader({ request: new Request('https://x/app') })).liveCount).toBe(1)
+    expect((await loader({ request: new Request('https://x/app') })).counts.live).toBe(1)
   })
 })

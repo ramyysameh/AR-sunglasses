@@ -3,20 +3,13 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { useFetcher, useLoaderData } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
-import QRCode from 'qrcode'
 import { authenticate } from '../shopify.server'
-import prisma from '../db.server'
-import { listMappings } from '../models.server'
-import { publishMappings } from '../tryonMetafield.server'
 import { getActivePlanName } from '../billing.server'
-import { planUsage } from '../planUsage.server'
 import { handleProductAction } from '../productActions.server'
 import ModelPicker from '../components/ModelPicker'
 import PreviewPanel from '../components/PreviewPanel'
-import { fetchProductsByIds } from '../products.server'
-import { productStatus } from '../tryonStatus.server'
-import { themeEditorUrl, previewUrl } from '../adminLinks.server'
 import StatusBadge from '../components/StatusBadge'
+import { emptyWorkspace, loadWorkspace } from '../workspace.server'
 
 // Resolved per-request, not at module load: the last resort must be an
 // absolute URL, and only the incoming request reliably gives us one. Neither
@@ -36,74 +29,11 @@ function resolveEngineUrl(request) {
 export const loader = async ({ request }) => {
   const engineUrl = resolveEngineUrl(request)
   const { session, admin } = await authenticate.admin(request)
-  const themeUrl = themeEditorUrl(session.shop)
   // app.jsx owns the no-subscription screen; this loader must NOT redirect
   // (App Store rejection Ref 127328). Return empty and do no gated work.
   const activePlan = await getActivePlanName(admin, session.shop)
-  if (!activePlan) {
-    return {
-      mappings: [],
-      assets: [],
-      usage: planUsage({ planName: null, used: 0, shop: session.shop }),
-      themeUrl,
-      engineUrl,
-    }
-  }
-  const [mappings, assets] = await Promise.all([
-    listMappings(prisma, session.shop),
-    prisma.modelAsset.findMany({ where: { shop: session.shop }, orderBy: { createdAt: 'desc' } }),
-  ])
-  // Self-heal: mappings made before the storefront gate existed have no
-  // metafield, so their block would go dark. Re-publishing is idempotent and
-  // batched. Best-effort -- a Shopify failure must not take down the page.
-  try {
-    await publishMappings(admin, mappings.map((m) => m.productId))
-  } catch (e) {
-    console.error('try-on metafield sync failed', e)
-  }
-  let products = new Map()
-  try {
-    products = await fetchProductsByIds(admin, mappings.map((m) => m.productId))
-  } catch (e) {
-    console.error('product enrichment failed', e)
-  }
-  return {
-    mappings: await Promise.all(
-      mappings.map(async (m) => {
-        const base = {
-          ...m,
-          product: products.get(m.productId) ?? null,
-          status: productStatus(m),
-        }
-        // Best-effort, like the metafield sync and product enrichment above: a
-        // preview convenience must never take down the primary page. A row
-        // that fails here just renders its modal without a QR (see PreviewPanel).
-        try {
-          const url = previewUrl({ engineUrl, shop: session.shop, productId: m.productId })
-          return {
-            ...base,
-            themeUrl: themeEditorUrl(session.shop, base.product?.handle),
-            previewUrl: url,
-            // Generated here, not in the browser: a client-side QR library would
-            // need a CDN script and the admin iframe's CSP is not ours to widen.
-            qr: await QRCode.toDataURL(url, { width: 220, margin: 1 }),
-          }
-        } catch (e) {
-          console.error('preview URL/QR generation failed', e)
-          return {
-            ...base,
-            themeUrl: themeEditorUrl(session.shop, base.product?.handle),
-            previewUrl: null,
-            qr: null,
-          }
-        }
-      }),
-    ),
-    assets,
-    usage: planUsage({ planName: activePlan, used: mappings.length, shop: session.shop }),
-    themeUrl,
-    engineUrl,
-  }
+  if (!activePlan) return { ...emptyWorkspace(session.shop), engineUrl }
+  return { ...await loadWorkspace({ admin, shop: session.shop, engineUrl }), engineUrl }
 }
 
 export const action = async ({ request }) => {
@@ -356,7 +286,7 @@ export default function Products() {
     mapFetcher.submit({ intent: 'map', productId: picked.id, modelAssetId }, { method: 'POST' })
   }
 
-  const liveCount = mappings.filter((mapping) => mapping.status.id === 'live').length
+  const liveCount = mappings.filter((mapping) => mapping.status === 'live').length
   const attentionCount = mappings.length - liveCount
   const usageText = usage.unlimited
     ? `${usage.used} product${usage.used === 1 ? '' : 's'} using try-on`
@@ -453,8 +383,8 @@ export default function Products() {
                   <s-table-cell>{modelName(m.modelAsset)}</s-table-cell>
                   <s-table-cell>
                     <s-stack direction="inline" gap="small-500" alignItems="center">
-                      <StatusBadge status={m.status} />
-                      {m.status.id === 'not_on_theme' && (
+                      <StatusBadge status={m.merchantStatus ?? m.status} />
+                      {(m.status === 'add-to-theme' || m.status?.id === 'not_on_theme') && (
                         <s-button
                           href={m.themeUrl ?? themeUrl}
                           target="_top"

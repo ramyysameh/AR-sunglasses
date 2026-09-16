@@ -48,7 +48,10 @@ describe('app.products loader', () => {
 
     const result = await loader({ request: new Request('https://x/app/products') })
     expect(result.mappings).toHaveLength(1)
-    expect(result.mappings[0].status).toMatchObject({ id: 'not_on_theme' })
+    expect(result.mappings[0]).toMatchObject({
+      status: 'add-to-theme',
+      merchantStatus: { id: 'not_on_theme' },
+    })
   })
 
 })

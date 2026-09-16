@@ -1,10 +1,18 @@
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
-import { getActivePlanName, hasFreeAccess } from "../billing.server";
-import { planUsage } from "../planUsage.server";
-import { themeEditorUrl } from "../adminLinks.server";
-import prisma from "../db.server";
+import { getActivePlanName } from "../billing.server";
+import { emptyWorkspace, loadWorkspace } from "../workspace.server";
+
+function resolveEngineUrl(request) {
+  return (
+    // eslint-disable-next-line no-undef
+    process.env.TRYON_ENGINE_URL
+    // eslint-disable-next-line no-undef
+    || (process.env.SHOPIFY_APP_URL && `${process.env.SHOPIFY_APP_URL}/tryon/index.html`)
+    || new URL('/tryon/index.html', request.url).toString()
+  );
+}
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request);
@@ -13,38 +21,15 @@ export const loader = async ({ request }) => {
   // redirect loops forever and renders a dead, control-less page (App Store
   // rejection Ref 127328). On no plan, do no gated DB work and return zeros.
   const activePlan = await getActivePlanName(admin, session.shop);
-  const themeUrl = themeEditorUrl(session.shop);
-  if (!activePlan) {
-    return {
-      modelCount: 0,
-      mappingCount: 0,
-      liveCount: 0,
-      usage: planUsage({ planName: null, used: 0, shop: session.shop }),
-      themeUrl,
-    };
-  }
-  const [modelCount, mappingCount, liveCount] = await Promise.all([
-    prisma.modelAsset.count({ where: { shop: session.shop } }),
-    prisma.productMapping.count({ where: { shop: session.shop } }),
-    prisma.productMapping.count({ where: { shop: session.shop, lastSeenLiveAt: { not: null } } }),
-  ]);
-  return {
-    modelCount,
-    mappingCount,
-    liveCount,
-    // Owner-comped stores keep their unlimited backend entitlement, but this
-    // card previews the Starter tier so the owner sees the merchant upgrade UI.
-    usage: planUsage({
-      planName: hasFreeAccess(session.shop) ? "Starter" : activePlan,
-      used: mappingCount,
-      shop: session.shop,
-    }),
-    themeUrl,
-  };
+  if (!activePlan) return emptyWorkspace(session.shop);
+  return loadWorkspace({ admin, shop: session.shop, engineUrl: resolveEngineUrl(request) });
 };
 
 export default function Index() {
-  const { modelCount, mappingCount, liveCount, usage, themeUrl } = useLoaderData();
+  const { assets, counts, usage, themeUrl } = useLoaderData();
+  const modelCount = assets.length;
+  const mappingCount = counts.all;
+  const liveCount = counts.live;
   const usagePercent = usage.unlimited || usage.limit <= 0
     ? 0
     : Math.min(100, Math.round((usage.used / usage.limit) * 100));
