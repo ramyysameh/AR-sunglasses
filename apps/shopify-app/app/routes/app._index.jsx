@@ -1,7 +1,10 @@
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import { useState } from "react";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
+import { handleProductAction } from "../productActions.server";
 import { loadWorkspace } from "../workspace.server";
+import { AddTryOnFlow } from "../components/AddTryOnFlow";
 
 function resolveEngineUrl(request) {
   return (
@@ -22,8 +25,14 @@ export const loader = async ({ request }) => {
   return loadWorkspace({ admin, shop: session.shop, engineUrl: resolveEngineUrl(request) });
 };
 
+export const action = async ({ request }) => {
+  const { session, admin } = await authenticate.admin(request);
+  return handleProductAction({ request, admin, shop: session.shop });
+};
+
 export default function Index() {
   const { assets, counts, usage, themeUrl } = useLoaderData();
+  const [addTryOnOpen, setAddTryOnOpen] = useState(false);
   const modelCount = assets.length;
   const mappingCount = counts.all;
   const liveCount = counts.live;
@@ -42,7 +51,14 @@ export default function Index() {
 
   return (
     <s-page heading="AR Try-on">
-      <s-button slot="primary-action" href="/app/products">Go to products</s-button>
+      <s-button slot="primary-action" onClick={() => setAddTryOnOpen(true)}>Add try-on</s-button>
+
+      <AddTryOnFlow
+        assets={assets}
+        open={addTryOnOpen}
+        onClose={() => setAddTryOnOpen(false)}
+        onPublished={() => window.location.reload()}
+      />
 
       <s-section heading="Set up try-on">
         <s-paragraph>{doneCount} of 3 done</s-paragraph>

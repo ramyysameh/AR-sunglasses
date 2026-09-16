@@ -1,0 +1,232 @@
+/* eslint-disable react/prop-types -- plain JSX component, no PropTypes dependency */
+import { useCallback, useEffect, useReducer, useRef } from 'react'
+import { useFetcher } from 'react-router'
+import { useAppBridge } from '@shopify/app-bridge-react'
+import { ModelUploadFlow } from './ModelUploadFlow'
+import ModelViewer from './ModelViewer'
+import PreviewPanel from './PreviewPanel'
+
+export const initialAddTryOnState = {
+  open: false,
+  step: 'model',
+  modelAsset: null,
+  product: null,
+  error: null,
+  publishing: false,
+}
+
+export function addTryOnReducer(state, action) {
+  switch (action.type) {
+    case 'open':
+      return {
+        ...initialAddTryOnState,
+        open: true,
+        modelAsset: action.asset || null,
+        step: action.asset ? 'product' : 'model',
+      }
+    case 'model-selected':
+      return { ...state, modelAsset: action.asset, step: 'product', error: null }
+    case 'product-selected':
+      return { ...state, product: action.product, step: 'review', error: null }
+    case 'next':
+      return state.modelAsset ? { ...state, step: 'product', error: null } : state
+    case 'back':
+      return {
+        ...state,
+        step: state.step === 'review' ? 'product' : 'model',
+        error: null,
+      }
+    case 'publishing':
+      return { ...state, publishing: true, error: null }
+    case 'publish-error':
+      return { ...state, publishing: false, error: action.message }
+    case 'publish-success':
+    case 'close':
+      return initialAddTryOnState
+    default:
+      return state
+  }
+}
+
+function isReady(asset) {
+  return !asset.status || asset.status.toLowerCase() === 'ready'
+}
+
+function modelName(asset) {
+  return asset.label?.trim() || asset.filename || asset.originalFilename || `Model ${asset.id.slice(0, 8)}`
+}
+
+export function initialModelAsset(assets, initialModelId) {
+  if (!initialModelId) return null
+  return assets.find((asset) => asset.id === initialModelId && isReady(asset)) ?? null
+}
+
+function productFromSelection(product) {
+  return {
+    id: product.id,
+    title: product.title,
+    handle: product.handle || '',
+    imageUrl: product.images?.[0]?.originalSrc ?? product.featuredImage?.originalSrc ?? null,
+    imageAlt: product.images?.[0]?.altText ?? product.featuredImage?.altText ?? product.title,
+  }
+}
+
+function ModelStep({ assets, onSelect }) {
+  const readyAssets = assets.filter(isReady)
+
+  return (
+    <s-stack direction="block" gap="base">
+      <s-heading>Choose a model</s-heading>
+      {readyAssets.map((asset) => (
+        <s-box key={asset.id} padding="base" borderWidth="base" borderRadius="base">
+          <s-stack direction="block" gap="small-500">
+            <ModelViewer src={`/models/${asset.id}.glb`} alt={modelName(asset)} />
+            <s-text type="strong">{modelName(asset)}</s-text>
+            <s-button onClick={() => onSelect(asset)}>Use {modelName(asset)}</s-button>
+          </s-stack>
+        </s-box>
+      ))}
+      <s-divider></s-divider>
+      <s-heading>Upload a new model</s-heading>
+      <ModelUploadFlow embedded onUploaded={onSelect} />
+    </s-stack>
+  )
+}
+
+function ProductSummary({ product }) {
+  return (
+    <s-stack direction="inline" gap="base" alignItems="center">
+      {product.imageUrl && (
+        <s-thumbnail src={product.imageUrl} alt={product.imageAlt || product.title} size="small"></s-thumbnail>
+      )}
+      <s-text type="strong">{product.title}</s-text>
+    </s-stack>
+  )
+}
+
+export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublished }) {
+  const fetcher = useFetcher()
+  const shopify = useAppBridge()
+  const modalRef = useRef(null)
+  const startingAsset = initialModelAsset(assets, initialModelId)
+  const [state, dispatch] = useReducer(
+    addTryOnReducer,
+    open
+      ? addTryOnReducer(initialAddTryOnState, { type: 'open', asset: startingAsset })
+      : initialAddTryOnState,
+  )
+
+  useEffect(() => {
+    if (open && !state.open) {
+      dispatch({ type: 'open', asset: initialModelAsset(assets, initialModelId) })
+    } else if (!open && state.open) {
+      dispatch({ type: 'close' })
+    }
+  }, [assets, initialModelId, open, state.open])
+
+  useEffect(() => {
+    if (open) shopify.modal.show('add-tryon-flow')
+    else shopify.modal.hide('add-tryon-flow')
+  }, [open, shopify])
+
+  const dismiss = useCallback(() => {
+    dispatch({ type: 'close' })
+    onClose?.()
+  }, [onClose])
+
+  useEffect(() => {
+    const modal = modalRef.current
+    if (!modal) return undefined
+    modal.addEventListener('afterhide', dismiss)
+    return () => modal.removeEventListener('afterhide', dismiss)
+  }, [dismiss])
+
+  useEffect(() => {
+    if (!state.open || !fetcher.data) return
+    if (fetcher.data.mapped) {
+      dispatch({ type: 'publish-success' })
+      shopify.modal.hide('add-tryon-flow')
+      onPublished?.()
+      onClose?.()
+    } else if (fetcher.data.error) {
+      dispatch({ type: 'publish-error', message: fetcher.data.error })
+    }
+  }, [fetcher.data, onClose, onPublished, shopify, state.open])
+
+  const close = () => {
+    dispatch({ type: 'close' })
+    shopify.modal.hide('add-tryon-flow')
+    onClose?.()
+  }
+
+  const pickProduct = async () => {
+    if (!state.modelAsset) return
+    const selection = await shopify.resourcePicker({ type: 'product', action: 'select' })
+    if (selection?.[0]) {
+      dispatch({ type: 'product-selected', product: productFromSelection(selection[0]) })
+    }
+  }
+
+  const previewMapping = state.modelAsset && state.product
+    ? {
+        modelAssetId: state.modelAsset.id,
+        product: state.product,
+        previewUrl: null,
+        qr: null,
+      }
+    : null
+
+  return (
+    <s-modal ref={modalRef} id="add-tryon-flow" heading="Add try-on">
+      {state.step === 'model' && (
+        <ModelStep assets={assets} onSelect={(asset) => dispatch({ type: 'model-selected', asset })} />
+      )}
+
+      {state.step === 'product' && state.modelAsset && (
+        <s-stack direction="block" gap="base">
+          <s-heading>Choose a product</s-heading>
+          <s-stack direction="inline" gap="base" alignItems="center">
+            <s-button onClick={pickProduct} icon="product">
+              {state.product ? 'Change product' : 'Select product'}
+            </s-button>
+            {state.product && <ProductSummary product={state.product} />}
+          </s-stack>
+        </s-stack>
+      )}
+
+      {state.step === 'review' && previewMapping && (
+        <s-stack direction="block" gap="large-100">
+          <s-heading>Review try-on</s-heading>
+          <ProductSummary product={state.product} />
+          <s-text type="strong">{modelName(state.modelAsset)}</s-text>
+          <PreviewPanel mapping={previewMapping} />
+          {state.error && (
+            <s-banner heading="Could not publish try-on" tone="critical">
+              {state.error}
+            </s-banner>
+          )}
+        </s-stack>
+      )}
+
+      <s-button slot="secondary-actions" onClick={close}>Close</s-button>
+      {state.step !== 'model' && (
+        <s-button slot="secondary-actions" onClick={() => dispatch({ type: 'back' })}>Back</s-button>
+      )}
+      {state.step === 'review' && state.modelAsset && state.product && (
+        <fetcher.Form method="post" onSubmit={() => dispatch({ type: 'publishing' })}>
+          <input type="hidden" name="intent" value="map" />
+          <input type="hidden" name="productId" value={state.product.id} />
+          <input type="hidden" name="productHandle" value={state.product.handle || ''} />
+          <input type="hidden" name="modelAssetId" value={state.modelAsset.id} />
+          <s-button
+            type="submit"
+            variant="primary"
+            loading={state.publishing || fetcher.state !== 'idle'}
+          >
+            {state.error ? 'Try again' : 'Publish try-on'}
+          </s-button>
+        </fetcher.Form>
+      )}
+    </s-modal>
+  )
+}
