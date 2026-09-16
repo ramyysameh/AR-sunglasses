@@ -1,6 +1,6 @@
 /* eslint-disable react/prop-types -- route-local modal components consume loader-shaped data */
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import { useFetcher, useLoaderData, useRevalidator } from 'react-router'
+import { useFetcher, useLoaderData } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
@@ -8,6 +8,20 @@ import prisma from '../db.server'
 import { getActivePlanName } from '../billing.server'
 import { deleteModelGlb } from '../storage.server'
 import ModelViewer from '../components/ModelViewer'
+import {
+  ModelUploadFlow,
+  createUploadCancellationCoordinator,
+  uploadModalHideBehavior,
+  uploadModalReducer,
+  uploadValidationError,
+} from '../components/ModelUploadFlow'
+
+export {
+  createUploadCancellationCoordinator,
+  uploadModalHideBehavior,
+  uploadModalReducer,
+  uploadValidationError,
+}
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
@@ -79,16 +93,8 @@ export const action = async ({ request }) => {
   return { error: 'Unknown action.' }
 }
 
-const MAX_UPLOAD_BYTES = 25 * 1048576
-
 export function modelName(asset) {
   return asset.label?.trim() || asset.filename || `Model ${asset.id.slice(0, 8)}`
-}
-
-export function uploadValidationError(file) {
-  if (!file || !file.name.toLowerCase().endsWith('.glb')) return 'Choose a .glb file'
-  if (file.size > MAX_UPLOAD_BYTES) return 'Model exceeds the 25 MB limit'
-  return null
 }
 
 export function renameSubmitDisabled({ asset, draft, currentLabel, state }) {
@@ -104,55 +110,6 @@ export function modalSessionReducer(state, action) {
     return { modelId: null, session: state.session + 1 }
   }
   return state
-}
-
-export function uploadModalReducer(state, action) {
-  if (action.type === 'select') {
-    return { pendingFile: action.file, uploadError: null }
-  }
-  if (action.type === 'reject') {
-    return { pendingFile: null, uploadError: 'Choose a .glb file' }
-  }
-  if (action.type === 'error') {
-    return { ...state, uploadError: action.message }
-  }
-  return state
-}
-
-export function uploadModalHideBehavior(busy) {
-  return busy
-    ? { reopen: true, reset: false }
-    : { reopen: false, reset: true }
-}
-
-export function createUploadCancellationCoordinator() {
-  /** @type {{ controller: AbortController, xhr: XMLHttpRequest | null } | null} */
-  // @ts-ignore -- the Shopify validator wraps this JS file as TSX and ignores JSDoc types.
-  let activeUpload = null
-
-  return {
-    begin() {
-      const controller = new AbortController()
-      activeUpload = { controller, xhr: null }
-      return controller.signal
-    },
-    attachXhr(xhr) {
-      if (!activeUpload || activeUpload.controller.signal.aborted) {
-        xhr.abort()
-        return
-      }
-      activeUpload.xhr = xhr
-    },
-    detachXhr(xhr) {
-      if (activeUpload?.xhr === xhr) activeUpload.xhr = null
-    },
-    abortForUnmount() {
-      const upload = activeUpload
-      activeUpload = null
-      upload?.controller.abort()
-      upload?.xhr?.abort()
-    },
-  }
 }
 
 function useModalEvents({ onHide = undefined, onAfterHide = undefined }) {
@@ -172,197 +129,8 @@ function useModalEvents({ onHide = undefined, onAfterHide = undefined }) {
   return modalRef
 }
 
-async function postUploadJson(body, signal) {
-  const res = await fetch('/api/model-upload', { method: 'POST', body, signal })
-  const text = await res.text()
-  let data
-  try {
-    data = JSON.parse(text)
-  } catch {
-    throw new Error(`Server error (HTTP ${res.status})`)
-  }
-  if (data.error) throw new Error(data.error)
-  return data
-}
-
-function UploadModalContent({ cancellationCoordinator, onBusyChange }) {
-  const shopify = useAppBridge()
-  const revalidator = useRevalidator()
-  const [{ pendingFile, uploadError }, dispatchUpload] = useReducer(uploadModalReducer, {
-    pendingFile: null,
-    uploadError: null,
-  })
-  const [progress, setProgress] = useState(null)
-  const uploading = progress !== null
-
-  const upload = async () => {
-    const validationError = uploadValidationError(pendingFile)
-    if (validationError) {
-      dispatchUpload({ type: 'error', message: validationError })
-      return
-    }
-
-    dispatchUpload({ type: 'select', file: pendingFile })
-    onBusyChange(true)
-    setProgress(0)
-    const signal = cancellationCoordinator.begin()
-    try {
-      const presignForm = new FormData()
-      presignForm.append('intent', 'upload-presign')
-      const { uploadUrl, storageRef } = await postUploadJson(presignForm, signal)
-      if (signal.aborted) return
-
-      await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-        cancellationCoordinator.attachXhr(xhr)
-        if (signal.aborted) {
-          reject(new DOMException('Upload canceled', 'AbortError'))
-          return
-        }
-        xhr.open('PUT', uploadUrl)
-        xhr.setRequestHeader('Content-Type', 'model/gltf-binary')
-        xhr.upload.onprogress = (event) => {
-          if (!signal.aborted && event.lengthComputable) {
-            setProgress(Math.round((event.loaded / event.total) * 100))
-          }
-        }
-        xhr.onload = () => {
-          cancellationCoordinator.detachXhr(xhr)
-          if (xhr.status >= 200 && xhr.status < 300) resolve(undefined)
-          else reject(new Error(`Upload failed (${xhr.status})`))
-        }
-        xhr.onerror = () => {
-          cancellationCoordinator.detachXhr(xhr)
-          reject(new Error('Upload failed (network/CORS)'))
-        }
-        xhr.onabort = () => reject(new DOMException('Upload canceled', 'AbortError'))
-        xhr.send(pendingFile)
-      })
-      if (signal.aborted) return
-
-      setProgress('preparing')
-      const finalizeForm = new FormData()
-      finalizeForm.append('intent', 'upload-finalize')
-      finalizeForm.append('storageRef', storageRef)
-      finalizeForm.append('filename', pendingFile.name)
-      await postUploadJson(finalizeForm, signal)
-      if (signal.aborted) return
-
-      onBusyChange(false)
-      setProgress(null)
-      shopify.toast.show('Model ready')
-      shopify.modal.hide('upload-model')
-      revalidator.revalidate()
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!signal.aborted) dispatchUpload({ type: 'error', message })
-    } finally {
-      if (!signal.aborted) {
-        onBusyChange(false)
-        setProgress(null)
-      }
-    }
-  }
-
-  return (
-    <>
-      <s-stack direction="block" gap="base">
-        <s-paragraph>
-          Choose a .glb eyewear model up to 25 MB. We&apos;ll prepare it for try-on.
-        </s-paragraph>
-        <s-drop-zone
-          label="Model file (.glb)"
-          name="model"
-          accept=".glb,model/gltf-binary"
-          accessibilityLabel="Choose a GLB model file"
-          disabled={uploading}
-          onChange={(event) => {
-            dispatchUpload({
-              type: 'select',
-              file: event.currentTarget.files?.[0] ?? null,
-            })
-          }}
-          onDropRejected={() => dispatchUpload({ type: 'reject' })}
-        ></s-drop-zone>
-        {pendingFile && (
-          <s-text color="subdued">
-            {pendingFile.name} ({(pendingFile.size / 1048576).toFixed(1)} MB)
-          </s-text>
-        )}
-        {progress !== null && (
-          <s-stack direction="block" gap="small-500">
-            {typeof progress === 'number' ? (
-              <>
-                <progress value={progress} max="100" style={{ width: '100%' }} />
-                <s-text>Uploading {progress}%</s-text>
-              </>
-            ) : (
-              <s-text>Preparing model...</s-text>
-            )}
-            <s-text color="subdued">Keep this window open while the model is uploading and preparing.</s-text>
-          </s-stack>
-        )}
-        {uploadError && (
-          <s-banner heading="Could not upload model" tone="critical">
-            {uploadError}
-          </s-banner>
-        )}
-      </s-stack>
-      {!uploading && (
-        <s-button
-          slot="secondary-actions"
-          commandFor="upload-model"
-          command="--hide"
-        >
-          Cancel
-        </s-button>
-      )}
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        onClick={upload}
-        disabled={!pendingFile || uploading}
-        {...(uploading ? { loading: true } : {})}
-      >
-        Upload model
-      </s-button>
-    </>
-  )
-}
-
 function UploadModal() {
-  const shopify = useAppBridge()
-  const [session, setSession] = useState(0)
-  const busyRef = useRef(false)
-  const cancellationCoordinator = useRef(null)
-  if (!cancellationCoordinator.current) {
-    cancellationCoordinator.current = createUploadCancellationCoordinator()
-  }
-
-  const onBusyChange = useCallback((busy) => {
-    busyRef.current = busy
-  }, [])
-  const finishHide = useCallback(() => {
-    const behavior = uploadModalHideBehavior(busyRef.current)
-    if (behavior.reopen) {
-      shopify.modal.show('upload-model')
-    } else if (behavior.reset) {
-      setSession((value) => value + 1)
-    }
-  }, [shopify])
-  const modalRef = useModalEvents({ onAfterHide: finishHide })
-
-  useEffect(() => () => cancellationCoordinator.current.abortForUnmount(), [])
-
-  return (
-    <s-modal ref={modalRef} id="upload-model" heading="Upload model">
-      <UploadModalContent
-        key={session}
-        cancellationCoordinator={cancellationCoordinator.current}
-        onBusyChange={onBusyChange}
-      />
-    </s-modal>
-  )
+  return <ModelUploadFlow onUploaded={() => window.location.reload()} />
 }
 
 function RenameModalContent({ asset }) {

@@ -64,9 +64,9 @@ describe('Models UI behavior', () => {
   })
 
   it('rejects missing, non-GLB, and oversized uploads before starting', () => {
-    expect(uploadValidationError(null)).toBe('Choose a .glb file')
-    expect(uploadValidationError({ name: 'frames.obj', size: 1024 })).toBe('Choose a .glb file')
-    expect(uploadValidationError({ name: 'frames.glb', size: 25 * 1048576 + 1 })).toBe('Model exceeds the 25 MB limit')
+    expect(uploadValidationError(null)).toBe('Choose a .glb file up to 25 MB.')
+    expect(uploadValidationError({ name: 'frames.obj', size: 1024 })).toBe('Choose a .glb file up to 25 MB.')
+    expect(uploadValidationError({ name: 'frames.glb', size: 25 * 1048576 + 1 })).toBe('Choose a .glb file up to 25 MB.')
     expect(uploadValidationError({ name: 'frames.GLB', size: 25 * 1048576 })).toBeNull()
   })
 
@@ -117,12 +117,12 @@ describe('Models UI behavior', () => {
     expect(reopened.session).not.toBe(opened.session)
   })
 
-  it('clears a rejected drop and exposes the required GLB guidance', () => {
+  it('keeps the previous file after a rejected drop and exposes the required GLB guidance', () => {
     const selected = { pendingFile: { name: 'frames.obj' }, uploadError: null }
 
     expect(uploadModalReducer(selected, { type: 'reject' })).toEqual({
-      pendingFile: null,
-      uploadError: 'Choose a .glb file',
+      pendingFile: { name: 'frames.obj' },
+      uploadError: 'Choose a .glb file up to 25 MB.',
     })
   })
 
