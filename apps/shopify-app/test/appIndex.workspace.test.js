@@ -132,7 +132,7 @@ describe('Workspace route composition', () => {
 
     expect(html).toContain('heading="Workspace"')
     expect(html).toContain('A model needs attention')
-    expect(html).toContain('heading="Add try-on"')
+    expect(html).toContain('heading="Choose a model"')
     expect(html).toContain('heading="Change model for product"')
     expect(html).toContain('heading="Remove try-on from this product?"')
     expect(html).toContain('heading="Preview try-on"')
@@ -145,7 +145,10 @@ describe('Workspace route composition', () => {
 
   it('restores Add try-on focus once when an opened modal finishes hiding', () => {
     const focus = vi.fn()
-    const page = render(baseData())
+    const page = render(baseData({
+      mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }],
+      counts: { all: 1, live: 1, needsAttention: 0 },
+    }))
     const trigger = findElements(page, 's-button')
       .find((button) => button.props.slot === 'primary-action')
     const flow = findComponent(page, AddTryOnFlow)
@@ -159,15 +162,22 @@ describe('Workspace route composition', () => {
     expect(focus).toHaveBeenCalledTimes(1)
   })
 
-  it('renders Workspace with one page-level Add try-on primary', () => {
+  it('renders the page-level Add try-on primary only when products exist to manage', () => {
     const page = render(baseData())
     expect(page.type).toBe('s-page')
     expect(page.props.heading).toBe('Workspace')
     const pagePrimaries = findElements(page, 's-button').filter((button) => button.props.slot === 'primary-action')
-    expect(pagePrimaries).toHaveLength(1)
-    expect(pagePrimaries[0].props.children).toBe('Add try-on')
-    expect(pagePrimaries[0].props.commandFor).toBe('add-tryon-flow')
-    expect(pagePrimaries[0].props.command).toBe('--show')
+    expect(pagePrimaries).toHaveLength(0)
+
+    const activePage = render(baseData({
+      mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }],
+      counts: { all: 1, live: 1, needsAttention: 0 },
+    }))
+    const activePrimaries = findElements(activePage, 's-button').filter((button) => button.props.slot === 'primary-action')
+    expect(activePrimaries).toHaveLength(1)
+    expect(activePrimaries[0].props.children).toBe('Add try-on')
+    expect(activePrimaries[0].props.commandFor).toBe('add-tryon-flow')
+    expect(activePrimaries[0].props.command).toBe('--show')
   })
 
   it.each([
@@ -259,7 +269,7 @@ describe('Workspace route composition', () => {
     const page = render(data)
     const guideAction = findComponent(page, WorkspaceGuide).props.guide.action
     const list = findComponent(page, ProductOperationsList)
-    const rowActions = list.props.mappings
+    const rowActions = (list?.props.mappings ?? [])
       .map((mapping) => primaryActionFor(mapping, list.props.pricingUrl))
       .filter(Boolean)
     const contextual = guideAction ? [guideAction] : rowActions
@@ -269,16 +279,16 @@ describe('Workspace route composition', () => {
   })
 
   it.each([
-    ['empty', baseData()],
+    ['empty', baseData(), false],
     ['live', baseData({ mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }], counts: { all: 1, live: 1, needsAttention: 0 }, guide: { kind: 'complete', title: 'Everything is live', detail: '1 product is ready', action: null } })],
     ['add-to-theme', baseData({ mappings: [{ id: 'theme', status: 'add-to-theme', product: { title: 'Lumen' }, modelAsset: readyAsset, themeUrl: 'https://shop.test/admin/themes/current/editor?previewPath=%2Fproducts%2Flumen&addAppBlockId=key%2Ftryon_button&target=mainSection' }], counts: { all: 1, live: 0, needsAttention: 1 } })],
     ['model-issue', baseData({ mappings: [{ id: 'issue', status: 'model-issue', product: { title: 'Willow' }, modelAsset: readyAsset }], counts: { all: 1, live: 0, needsAttention: 1 } })],
     ['plan-limit', baseData({ mappings: [{ id: 'limit', status: 'plan-limit', product: { title: 'Cedar' }, modelAsset: readyAsset }], counts: { all: 1, live: 0, needsAttention: 1 }, usage: { used: 1, limit: 1, atLimit: true, pricingUrl: '/plans' } })],
-  ])('composes guide, filters, operations, and flow for %s merchants', (_state, data) => {
+  ])('keeps setup focused and adds operations only when there are mapped products for %s merchants', (_state, data, hasOperations = true) => {
     const page = render(data)
     expect(findComponent(page, WorkspaceGuide)).toBeDefined()
-    expect(findComponent(page, WorkspaceFilters)).toBeDefined()
-    expect(findComponent(page, ProductOperationsList)).toBeDefined()
+    expect(Boolean(findComponent(page, WorkspaceFilters))).toBe(hasOperations)
+    expect(Boolean(findComponent(page, ProductOperationsList))).toBe(hasOperations)
     expect(findComponent(page, AddTryOnFlow)).toBeDefined()
   })
 

@@ -78,6 +78,15 @@ function productFromSelection(product) {
 function ModelStep({ assets, onSelect }) {
   const readyAssets = assets.filter(isReady)
 
+  if (readyAssets.length === 0) {
+    return (
+      <s-stack direction="block" gap="base">
+        <s-paragraph>Upload a .glb eyewear model to start setting up try-on.</s-paragraph>
+        <ModelUploadFlow embedded onUploaded={onSelect} />
+      </s-stack>
+    )
+  }
+
   return (
     <s-stack direction="block" gap="base">
       <s-heading>Choose a model</s-heading>
@@ -217,9 +226,13 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
         qr: null,
       }
     : null
+  const hasReadyModels = assets.some(isReady)
+  const heading = state.step === 'model'
+    ? (hasReadyModels ? 'Choose a model' : 'Upload a model')
+    : 'Set up try-on'
 
   return (
-    <s-modal ref={modalRef} id="add-tryon-flow" heading="Add try-on">
+    <s-modal ref={modalRef} id="add-tryon-flow" heading={heading}>
       {state.step === 'model' && (
         <ModelStep assets={assets} onSelect={(asset) => dispatch({ type: 'model-selected', asset })} />
       )}

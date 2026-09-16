@@ -22,6 +22,10 @@
   background: #fff;
 }
 
+.workspace-setup-action {
+  min-width: 160px;
+}
+
 .workspace-panel { overflow: hidden; }
 
 .workspace-summary {

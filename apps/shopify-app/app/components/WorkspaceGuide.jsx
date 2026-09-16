@@ -12,6 +12,7 @@ export default function WorkspaceGuide({ guide, onAction }) {
   }
 
   const action = guide.action
+  const isSetup = guide.kind === 'setup'
 
   return (
     <s-box
@@ -20,7 +21,12 @@ export default function WorkspaceGuide({ guide, onAction }) {
       border="base"
       borderRadius="base"
     >
-      <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+      <s-stack
+        direction={isSetup ? 'block' : 'inline'}
+        gap="base"
+        alignItems="center"
+        justifyContent={isSetup ? 'center' : 'space-between'}
+      >
         <s-stack direction="block" gap="small-200">
           <s-heading>{guide.title}</s-heading>
           {guide.detail && <s-paragraph>{guide.detail}</s-paragraph>}
@@ -28,6 +34,7 @@ export default function WorkspaceGuide({ guide, onAction }) {
         {action && (
           <s-button
             variant="primary"
+            {...(isSetup ? { className: 'workspace-setup-action' } : {})}
             {...(action.href ? { href: action.href, target: '_top' } : {})}
             onClick={() => onAction(action)}
           >

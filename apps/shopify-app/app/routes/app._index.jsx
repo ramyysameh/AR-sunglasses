@@ -213,6 +213,7 @@ export default function Workspace() {
   }
   const addTryOnFocusController = addTryOnFocusControllerRef.current
   const visibleMappings = filterWorkspaceMappings(data.mappings, { status, query })
+  const hasOperations = data.mappings.length > 0
 
   const openAddTryOn = addTryOnFocusController.open
   const handleGuideAction = (guideAction) => {
@@ -243,16 +244,18 @@ export default function Workspace() {
 
   return (
     <s-page heading="Workspace">
-      <s-button
-        ref={addTryOnTriggerRef}
-        slot="primary-action"
-        commandFor="add-tryon-flow"
-        command="--show"
-        onClick={openAddTryOn}
-        disabled={data.usage.atLimit}
-      >
-        Add try-on
-      </s-button>
+      {hasOperations && (
+        <s-button
+          ref={addTryOnTriggerRef}
+          slot="primary-action"
+          commandFor="add-tryon-flow"
+          command="--show"
+          onClick={openAddTryOn}
+          disabled={data.usage.atLimit}
+        >
+          Add try-on
+        </s-button>
+      )}
 
       <div className="workspace-shell">
         {data.usage.atLimit && data.usage.pricingUrl && (
@@ -262,17 +265,21 @@ export default function Workspace() {
           </div>
         )}
         <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />
-        <WorkspaceFilters counts={data.counts} status={status} query={query} onStatusChange={setStatus} onQueryChange={setQuery} />
-        <section className="workspace-panel" aria-label="Product operations">
-          <ProductOperationsList
-            mappings={visibleMappings}
-            totalCount={data.mappings.length}
-            pricingUrl={data.usage.pricingUrl}
-            onPreview={openPreview}
-            onChangeModel={openChangeModel}
-            onRemove={openRemove}
-          />
-        </section>
+        {hasOperations && (
+          <>
+            <WorkspaceFilters counts={data.counts} status={status} query={query} onStatusChange={setStatus} onQueryChange={setQuery} />
+            <section className="workspace-panel" aria-label="Product operations">
+              <ProductOperationsList
+                mappings={visibleMappings}
+                totalCount={data.mappings.length}
+                pricingUrl={data.usage.pricingUrl}
+                onPreview={openPreview}
+                onChangeModel={openChangeModel}
+                onRemove={openRemove}
+              />
+            </section>
+          </>
+        )}
       </div>
 
       <AddTryOnFlow assets={data.assets} initialModelId={initialModelId} open={addTryOnOpen} onClose={addTryOnFocusController.afterHide} onPublished={handlePublished} />

@@ -177,6 +177,14 @@ describe('AddTryOnFlow interactions', () => {
     expect(button(flow, 'Select product')).toBeDefined()
   })
 
+  it('uses a direct upload-first screen when the merchant has no models', () => {
+    const flow = AddTryOnFlow({ assets: [], open: true, onClose: vi.fn(), onPublished: vi.fn() })
+
+    expect(flow.props.heading).toBe('Upload a model')
+    expect(findElements(flow, 's-divider')).toHaveLength(0)
+    expect(button(flow, 'Use Ready frames')).toBeUndefined()
+  })
+
   it('auto-selects a finalized embedded upload and advances to product selection', () => {
     let flow = AddTryOnFlow({ assets, open: true, onClose: vi.fn(), onPublished: vi.fn() })
     const uploaded = { id: 'uploaded-model', filename: 'uploaded.glb', status: 'ready' }
