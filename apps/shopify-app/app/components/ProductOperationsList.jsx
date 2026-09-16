@@ -103,12 +103,21 @@ function PrimaryAction({ action, mapping, onPreview, onChangeModel }) {
 
 export default function ProductOperationsList({
   mappings,
+  totalCount = mappings.length,
   pricingUrl,
   onPreview,
   onChangeModel,
   onRemove,
 }) {
   if (mappings.length === 0) {
+    if (totalCount === 0) {
+      return (
+        <s-stack direction="block" gap="small-200">
+          <s-text type="strong">Add try-on to your first product</s-text>
+          <s-paragraph>Use Add try-on to choose frames and a product.</s-paragraph>
+        </s-stack>
+      )
+    }
     return <s-paragraph>No products match these filters.</s-paragraph>
   }
 

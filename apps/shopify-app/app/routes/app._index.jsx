@@ -1,7 +1,7 @@
 /* eslint-disable react/prop-types -- route-local dialogs consume loader-shaped data */
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { useAppBridge } from '@shopify/app-bridge-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-router'
 import { authenticate } from '../shopify.server'
 import { handleProductAction } from '../productActions.server'
@@ -25,7 +25,7 @@ function resolveEngineUrl(request) {
 }
 
 function isReady(asset) {
-  return !asset.status || asset.status.toLowerCase() === 'ready'
+  return typeof asset.status === 'string' && asset.status.toLowerCase() === 'ready'
 }
 
 export function initialAddRequest(search, assets) {
@@ -50,14 +50,18 @@ export const action = async ({ request }) => {
   return handleProductAction({ request, admin, shop: session.shop })
 }
 
-function ChangeModelDialog({ mapping, assets, onDone }) {
+export function ChangeModelDialog({ mapping, assets, onDone }) {
   const fetcher = useFetcher()
   const shopify = useAppBridge()
+  const submissionRef = useRef(null)
   const [modelAssetId, setModelAssetId] = useState(mapping?.modelAssetId ?? '')
   const unchanged = !mapping || !modelAssetId || modelAssetId === mapping.modelAssetId
 
   useEffect(() => {
-    if (!fetcher.data?.mapped) return
+    const submission = submissionRef.current
+    if (!fetcher.data || !submission || submission.priorData === fetcher.data) return
+    submissionRef.current = null
+    if (!fetcher.data.mapped) return
     shopify.toast.show('Model changed')
     shopify.modal.hide('workspace-change-model')
     onDone()
@@ -71,7 +75,10 @@ function ChangeModelDialog({ mapping, assets, onDone }) {
         {fetcher.data?.error && <s-banner tone="critical">{fetcher.data.error}</s-banner>}
       </s-stack>
       <s-button slot="secondary-actions" commandFor="workspace-change-model" command="--hide">Cancel</s-button>
-      <fetcher.Form method="post">
+      <fetcher.Form
+        method="post"
+        onSubmit={() => { submissionRef.current = { priorData: fetcher.data } }}
+      >
         <input type="hidden" name="intent" value="map" />
         <input type="hidden" name="productId" value={mapping?.productId ?? ''} />
         <input type="hidden" name="modelAssetId" value={modelAssetId} />
@@ -81,12 +88,16 @@ function ChangeModelDialog({ mapping, assets, onDone }) {
   )
 }
 
-function RemoveTryOnDialog({ mapping, onDone }) {
+export function RemoveTryOnDialog({ mapping, onDone }) {
   const fetcher = useFetcher()
   const shopify = useAppBridge()
+  const submissionRef = useRef(null)
 
   useEffect(() => {
-    if (!fetcher.data?.unmapped) return
+    const submission = submissionRef.current
+    if (!fetcher.data || !submission || submission.priorData === fetcher.data) return
+    submissionRef.current = null
+    if (!fetcher.data.unmapped) return
     shopify.toast.show('Try-on removed')
     shopify.modal.hide('workspace-remove-tryon')
     onDone()
@@ -97,7 +108,10 @@ function RemoveTryOnDialog({ mapping, onDone }) {
       <s-paragraph>Shoppers will no longer see try-on on this product page.</s-paragraph>
       {fetcher.data?.error && <s-banner tone="critical">{fetcher.data.error}</s-banner>}
       <s-button slot="secondary-actions" commandFor="workspace-remove-tryon" command="--hide">Cancel</s-button>
-      <fetcher.Form method="post">
+      <fetcher.Form
+        method="post"
+        onSubmit={() => { submissionRef.current = { priorData: fetcher.data } }}
+      >
         <input type="hidden" name="intent" value="unmap" />
         <input type="hidden" name="productId" value={mapping?.productId ?? ''} />
         <s-button slot="primary-action" type="submit" variant="primary" tone="critical" disabled={!mapping} loading={fetcher.state !== 'idle'}>Remove try-on</s-button>
@@ -124,6 +138,10 @@ export default function Workspace() {
   const openAddTryOn = () => setAddTryOnOpen(true)
   const handleGuideAction = (guideAction) => {
     if (guideAction.id === 'add-try-on') openAddTryOn()
+    if (guideAction.id === 'choose-model') {
+      const mapping = data.mappings.find((candidate) => candidate.id === guideAction.mappingId)
+      if (mapping) openChangeModel(mapping)
+    }
   }
   const openPreview = (mapping) => {
     setPreviewMapping(mapping)
@@ -154,6 +172,7 @@ export default function Workspace() {
         <section className="workspace-panel" aria-label="Product operations">
           <ProductOperationsList
             mappings={visibleMappings}
+            totalCount={data.mappings.length}
             pricingUrl={data.usage.pricingUrl}
             onPreview={openPreview}
             onChangeModel={openChangeModel}

@@ -2,7 +2,7 @@ import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import WorkspaceGuide from '../app/components/WorkspaceGuide.jsx'
 import WorkspaceFilters from '../app/components/WorkspaceFilters.jsx'
-import ProductOperationsList from '../app/components/ProductOperationsList.jsx'
+import ProductOperationsList, { primaryActionFor } from '../app/components/ProductOperationsList.jsx'
 import { AddTryOnFlow } from '../app/components/AddTryOnFlow.jsx'
 
 const harness = vi.hoisted(() => ({
@@ -107,7 +107,53 @@ describe('Workspace route composition', () => {
     })
     expect(initialAddRequest('?add=1&model=processing', [{ id: 'processing', status: 'processing' }]))
       .toEqual({ open: true, modelId: undefined })
+    expect(initialAddRequest('?add=1&model=missing-status', [{ id: 'missing-status' }]))
+      .toEqual({ open: true, modelId: undefined })
+    expect(initialAddRequest('?add=1&model=unknown', [{ id: 'unknown', status: 'unknown' }]))
+      .toEqual({ open: true, modelId: undefined })
+    expect(initialAddRequest('?add=1&model=uppercase', [{ id: 'uppercase', status: 'READY' }]))
+      .toEqual({ open: true, modelId: 'uppercase' })
     expect(initialAddRequest('?model=ready-model', [readyAsset])).toEqual({ open: false, modelId: undefined })
+  })
+
+  it('opens change model for the exact mapping selected by guide recovery', () => {
+    const first = { id: 'first', status: 'model-issue', product: { title: 'First' }, modelAsset: readyAsset }
+    const selected = { id: 'selected', status: 'model-issue', product: { title: 'Selected' }, modelAsset: readyAsset }
+    const data = baseData({
+      mappings: [first, selected],
+      counts: { all: 2, live: 0, needsAttention: 2 },
+      guide: {
+        kind: 'recovery',
+        title: 'A model needs attention',
+        detail: 'Selected',
+        action: { id: 'choose-model', mappingId: 'selected', label: 'Choose model' },
+      },
+    })
+    const page = render(data)
+    findComponent(page, WorkspaceGuide).props.onAction(data.guide.action)
+
+    expect(harness.state).toContain(selected)
+    expect(harness.state).not.toContain(first)
+    expect(harness.modalShow).toHaveBeenCalledWith('workspace-change-model')
+  })
+
+  it.each([
+    ['empty', baseData({ assets: [], guide: { kind: 'setup', title: 'Upload your first model', detail: 'Add a ready-to-use eyewear model.', action: { id: 'add-try-on', label: 'Upload model' } } }), { id: 'add-try-on', label: 'Upload model' }],
+    ['live', baseData({ mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }], counts: { all: 1, live: 1, needsAttention: 0 }, guide: { kind: 'complete', title: 'Everything is live', detail: '1 product is ready', action: null } }), { id: 'preview', label: 'Preview' }],
+    ['add-to-theme', baseData({ mappings: [{ id: 'theme', status: 'add-to-theme', product: { title: 'Lumen' }, modelAsset: readyAsset, themeUrl: 'https://shop.test/admin/themes/current/editor?previewPath=%2Fproducts%2Flumen&addAppBlockId=key%2Ftryon_button&target=mainSection' }], counts: { all: 1, live: 0, needsAttention: 1 }, guide: { kind: 'recovery', title: 'Finish storefront setup', detail: 'Lumen', action: { id: 'theme', label: 'Add to theme', href: 'https://shop.test/admin/themes/current/editor?previewPath=%2Fproducts%2Flumen&addAppBlockId=key%2Ftryon_button&target=mainSection' } } }), { id: 'theme', label: 'Add to theme', href: 'https://shop.test/admin/themes/current/editor?previewPath=%2Fproducts%2Flumen&addAppBlockId=key%2Ftryon_button&target=mainSection' }],
+    ['model-issue', baseData({ mappings: [{ id: 'issue', status: 'model-issue', product: { title: 'Willow' }, modelAsset: readyAsset }], counts: { all: 1, live: 0, needsAttention: 1 }, guide: { kind: 'recovery', title: 'A model needs attention', detail: 'Willow', action: { id: 'choose-model', mappingId: 'issue', label: 'Choose model' } } }), { id: 'choose-model', mappingId: 'issue', label: 'Choose model' }],
+    ['plan-limit', baseData({ mappings: [{ id: 'live-limit', status: 'live', product: { title: 'Cedar' }, modelAsset: readyAsset }], counts: { all: 1, live: 1, needsAttention: 0 }, usage: { used: 1, limit: 1, atLimit: true, pricingUrl: '/plans' }, guide: { kind: 'recovery', title: 'Your plan limit is reached', detail: 'Upgrade before adding another product.', action: { id: 'plans', label: 'View plans', href: '/plans' } } }), { id: 'plans', label: 'View plans', href: '/plans' }],
+  ])('exposes one merchant-safe contextual primary for %s', (_state, data, expected) => {
+    const page = render(data)
+    const guideAction = findComponent(page, WorkspaceGuide).props.guide.action
+    const list = findComponent(page, ProductOperationsList)
+    const rowActions = list.props.mappings
+      .map((mapping) => primaryActionFor(mapping, list.props.pricingUrl))
+      .filter(Boolean)
+    const contextual = guideAction ? [guideAction] : rowActions
+
+    expect(contextual).toEqual([expected])
+    expect(JSON.stringify({ guideAction, rowActions })).not.toMatch(/metafield|GLB parsing|render pipeline/i)
   })
 
   it.each([

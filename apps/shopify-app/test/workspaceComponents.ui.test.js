@@ -73,6 +73,28 @@ describe('workspace filtering and contextual actions', () => {
 })
 
 describe('workspace component accessibility contracts', () => {
+  it('distinguishes first-run setup from a filter with no matches', () => {
+    const firstRun = renderToStaticMarkup(React.createElement(ProductOperationsList, {
+      mappings: [],
+      totalCount: 0,
+      pricingUrl: '/plans',
+      onPreview: vi.fn(),
+      onChangeModel: vi.fn(),
+      onRemove: vi.fn(),
+    }))
+    const filtered = renderToStaticMarkup(React.createElement(ProductOperationsList, {
+      mappings: [],
+      totalCount: 3,
+      pricingUrl: '/plans',
+      onPreview: vi.fn(),
+      onChangeModel: vi.fn(),
+      onRemove: vi.fn(),
+    }))
+
+    expect(firstRun).toContain('Add try-on to your first product')
+    expect(firstRun).not.toContain('No products match')
+    expect(filtered).toContain('No products match these filters')
+  })
   it('exposes pressed summary buttons and a labelled product and model search', () => {
     const html = renderToStaticMarkup(React.createElement(WorkspaceFilters, {
       counts: { all: 3, live: 1, needsAttention: 2 },
