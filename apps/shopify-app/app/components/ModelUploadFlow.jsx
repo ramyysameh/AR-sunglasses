@@ -232,15 +232,26 @@ function UploadContent({ cancellationCoordinator, embedded, onBusyChange, onUplo
           Cancel
         </s-button>
       )}
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        onClick={upload}
-        disabled={!pendingFile || uploading}
-        {...(uploading ? { loading: true } : {})}
-      >
-        Upload model
-      </s-button>
+      {embedded ? (
+        <s-button
+          variant="primary"
+          onClick={upload}
+          disabled={!pendingFile || uploading}
+          {...(uploading ? { loading: true } : {})}
+        >
+          Upload model
+        </s-button>
+      ) : (
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          onClick={upload}
+          disabled={!pendingFile || uploading}
+          {...(uploading ? { loading: true } : {})}
+        >
+          Upload model
+        </s-button>
+      )}
     </>
   )
 }

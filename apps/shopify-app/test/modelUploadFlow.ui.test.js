@@ -123,7 +123,9 @@ describe('ModelUploadFlow', () => {
     })
 
     content = flow.type(flow.props)
-    const uploadPromise = findElement(content, 's-button').props.onClick()
+    const uploadButton = findElement(content, 's-button')
+    expect(uploadButton.props.slot).toBeUndefined()
+    const uploadPromise = uploadButton.props.onClick()
     content = flow.type(flow.props)
     expect(findElement(content, 'progress').props['aria-label']).toBe('Model upload progress')
     await uploadPromise
