@@ -1,4 +1,5 @@
 import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import WorkspaceGuide from '../app/components/WorkspaceGuide.jsx'
 import WorkspaceFilters from '../app/components/WorkspaceFilters.jsx'
@@ -12,6 +13,12 @@ const harness = vi.hoisted(() => ({
   toast: vi.fn(),
   modalShow: vi.fn(),
   modalHide: vi.fn(),
+  fetcher: {
+    data: null,
+    state: 'idle',
+    // eslint-disable-next-line react/prop-types -- lightweight fetcher form double
+    Form: ({ children, ...props }) => React.createElement('form', props, children),
+  },
   state: [],
   stateIndex: 0,
 }))
@@ -28,6 +35,7 @@ vi.mock('react', async (importOriginal) => ({
   },
 }))
 vi.mock('react-router', () => ({
+  useFetcher: () => harness.fetcher,
   useLoaderData: () => harness.data,
   useLocation: () => harness.location,
   useRevalidator: () => ({ revalidate: harness.revalidate }),
@@ -91,6 +99,38 @@ beforeEach(() => {
 })
 
 describe('Workspace route composition', () => {
+  it('renders merchant-safe page, guide, empty, status, and dialog copy', () => {
+    const data = baseData({
+      mappings: [{
+        id: 'issue',
+        productId: 'gid://shopify/Product/1',
+        status: 'model-issue',
+        product: { title: 'Willow' },
+        modelAsset: readyAsset,
+      }],
+      counts: { all: 1, live: 0, needsAttention: 1 },
+      guide: {
+        kind: 'recovery',
+        title: 'A model needs attention',
+        detail: 'Willow',
+        action: { id: 'choose-model', mappingId: 'issue', label: 'Choose model' },
+      },
+    })
+
+    harness.data = data
+    harness.location = { search: '' }
+    harness.stateIndex = 0
+    const html = renderToStaticMarkup(React.createElement(Workspace))
+
+    expect(html).toContain('heading="Workspace"')
+    expect(html).toContain('A model needs attention')
+    expect(html).toContain('heading="Add try-on"')
+    expect(html).toContain('heading="Change model for product"')
+    expect(html).toContain('heading="Remove try-on from this product?"')
+    expect(html).toContain('heading="Preview try-on"')
+    expect(html).not.toMatch(/metafields?|GLB parsing|storage keys?|GraphQL|render pipelines?/i)
+  })
+
   it('renders Workspace with one page-level Add try-on primary', () => {
     const page = render(baseData())
     expect(page.type).toBe('s-page')
@@ -98,6 +138,8 @@ describe('Workspace route composition', () => {
     const pagePrimaries = findElements(page, 's-button').filter((button) => button.props.slot === 'primary-action')
     expect(pagePrimaries).toHaveLength(1)
     expect(pagePrimaries[0].props.children).toBe('Add try-on')
+    expect(pagePrimaries[0].props.commandFor).toBe('add-tryon-flow')
+    expect(pagePrimaries[0].props.command).toBe('--show')
   })
 
   it('preselects only a ready model from an add deep link', () => {

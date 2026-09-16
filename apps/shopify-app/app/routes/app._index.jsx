@@ -213,7 +213,15 @@ export default function Workspace() {
 
   return (
     <s-page heading="Workspace">
-      <s-button slot="primary-action" onClick={openAddTryOn} disabled={data.usage.atLimit}>Add try-on</s-button>
+      <s-button
+        slot="primary-action"
+        commandFor="add-tryon-flow"
+        command="--show"
+        onClick={openAddTryOn}
+        disabled={data.usage.atLimit}
+      >
+        Add try-on
+      </s-button>
 
       <div className="workspace-shell">
         <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />

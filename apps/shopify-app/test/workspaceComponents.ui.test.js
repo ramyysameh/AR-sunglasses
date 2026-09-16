@@ -1,5 +1,6 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import WorkspaceGuide from '../app/components/WorkspaceGuide.jsx'
 import WorkspaceFilters from '../app/components/WorkspaceFilters.jsx'
@@ -9,6 +10,8 @@ import ProductOperationsList, {
 } from '../app/components/ProductOperationsList.jsx'
 
 global.React = React
+
+const workspaceCss = readFileSync(new URL('../app/styles/workspace.css', import.meta.url), 'utf8')
 
 function findElements(node, type) {
   if (!node || typeof node !== 'object') return []
@@ -73,6 +76,80 @@ describe('workspace filtering and contextual actions', () => {
 })
 
 describe('workspace component accessibility contracts', () => {
+  it('keeps all rendered guide, status, and empty-state copy merchant-safe', () => {
+    const guides = [
+      { kind: 'setup', title: 'Upload your first model', detail: 'Add a ready-to-use eyewear model.', action: { id: 'add-try-on', label: 'Upload model' } },
+      { kind: 'setup', title: 'Add try-on to a product', detail: 'Choose a model, then a Shopify product.', action: { id: 'add-try-on', label: 'Add try-on' } },
+      { kind: 'recovery', title: 'A model needs attention', detail: 'Gripz', action: { id: 'choose-model', label: 'Choose model' } },
+      { kind: 'recovery', title: 'Finish storefront setup', detail: 'Lumen', action: { id: 'theme', label: 'Add to theme', href: rows[2].themeUrl } },
+      { kind: 'recovery', title: 'Your plan limit is reached', detail: 'Upgrade before adding another product.', action: { id: 'plans', label: 'View plans', href: '/plans' } },
+      { kind: 'complete', title: 'Everything is live', detail: '1 product is ready', action: null },
+    ]
+    const rendered = [
+      ...guides.map((guide) => renderToStaticMarkup(React.createElement(WorkspaceGuide, { guide, onAction: vi.fn() }))),
+      renderToStaticMarkup(React.createElement(ProductOperationsList, {
+        mappings: rows,
+        pricingUrl: '/plans',
+        onPreview: vi.fn(),
+        onChangeModel: vi.fn(),
+        onRemove: vi.fn(),
+      })),
+      renderToStaticMarkup(React.createElement(ProductOperationsList, {
+        mappings: [],
+        totalCount: 0,
+        pricingUrl: '/plans',
+        onPreview: vi.fn(),
+        onChangeModel: vi.fn(),
+        onRemove: vi.fn(),
+      })),
+      renderToStaticMarkup(React.createElement(ProductOperationsList, {
+        mappings: [],
+        totalCount: 3,
+        pricingUrl: '/plans',
+        onPreview: vi.fn(),
+        onChangeModel: vi.fn(),
+        onRemove: vi.fn(),
+      })),
+    ].join(' ')
+
+    expect(rendered).toContain('Upload your first model')
+    expect(rendered).toContain('Everything is live')
+    expect(rendered).toContain('No products match these filters')
+    expect(rendered).not.toMatch(/metafields?|GLB parsing|storage keys?|GraphQL|render pipelines?/i)
+  })
+
+  it('labels search, overflow controls, product images, and dialog actions', () => {
+    const filters = renderToStaticMarkup(React.createElement(WorkspaceFilters, {
+      counts: { all: 3, live: 1, needsAttention: 2 },
+      status: 'all',
+      query: '',
+      onStatusChange: vi.fn(),
+      onQueryChange: vi.fn(),
+    }))
+    const list = renderToStaticMarkup(React.createElement(ProductOperationsList, {
+      mappings: rows,
+      pricingUrl: '/plans',
+      onPreview: vi.fn(),
+      onChangeModel: vi.fn(),
+      onRemove: vi.fn(),
+    }))
+
+    expect(filters).toContain('aria-label="Search products and models"')
+    expect(list).toContain('alt="Willow glasses"')
+    expect(list).toContain('accessibilityLabel="Actions for Willow"')
+    expect(list).toContain('accessibilityLabel="Actions for Gripz"')
+    expect(list).toContain('accessibilityLabel="Actions for Lumen"')
+  })
+
+  it('keeps focus visible, narrow rows stacked, filters scrollable, and motion reduced', () => {
+    expect(workspaceCss).toContain('@media (max-width: 640px)')
+    expect(workspaceCss).toContain('overflow-x: auto')
+    expect(workspaceCss).toContain('grid-column: 1 / -1')
+    expect(workspaceCss).toContain(':focus-visible')
+    expect(workspaceCss).toContain('@media (prefers-reduced-motion: reduce)')
+    expect(workspaceCss).not.toMatch(/\.workspace-row[^{}]*\{[^}]*\b(?:display:\s*none|order:)/s)
+  })
+
   it('distinguishes first-run setup from a filter with no matches', () => {
     const firstRun = renderToStaticMarkup(React.createElement(ProductOperationsList, {
       mappings: [],

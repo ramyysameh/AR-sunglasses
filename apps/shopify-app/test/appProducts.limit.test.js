@@ -72,9 +72,22 @@ afterAll(async () => {
 })
 
 describe('map action tier limit', () => {
-  // The Starter-cap block and the re-map-at-cap allowance are covered exactly
-  // by appProducts.map.test.js ('enforces the plan cap for a new product' and
-  // 'allows re-mapping an existing product at the cap'); not duplicated here.
+  it('allows changing an existing mapping when Starter usage is at the limit', async () => {
+    hoisted.plan = 'Starter'
+    const firstAssetId = await seedAsset()
+    const replacementAssetId = await seedAsset()
+    const productId = `gid://shopify/Product/${tag}-existing-at-limit`
+    await prisma.productMapping.create({
+      data: { shop, productId, modelAssetId: firstAssetId },
+    })
+
+    const result = await map(productId, replacementAssetId)
+
+    expect(result.mapped).toBe(true)
+    expect(await prisma.productMapping.findUnique({
+      where: { shop_productId: { shop, productId } },
+    })).toMatchObject({ modelAssetId: replacementAssetId })
+  })
 
   it('allows a new product on Pro (unlimited)', async () => {
     hoisted.plan = 'Pro'
