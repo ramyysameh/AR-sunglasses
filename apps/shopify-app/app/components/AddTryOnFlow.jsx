@@ -52,8 +52,11 @@ function isReady(asset) {
   return !asset.status || asset.status.toLowerCase() === 'ready'
 }
 
-function modelName(asset) {
-  return asset.label?.trim() || asset.filename || asset.originalFilename || `Model ${asset.id.slice(0, 8)}`
+export function modelName(asset) {
+  if (asset.label?.trim()) return asset.label.trim()
+  if (asset.filename) return asset.filename
+  if (asset.originalFilename) return asset.originalFilename
+  return asset.id ? `Model ${asset.id.slice(0, 8)}` : 'Uploaded model'
 }
 
 export function initialModelAsset(assets, initialModelId) {
@@ -108,6 +111,10 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
   const fetcher = useFetcher()
   const shopify = useAppBridge()
   const modalRef = useRef(null)
+  const sessionRef = useRef(open ? 1 : 0)
+  const previousOpenRef = useRef(open)
+  const closedSessionRef = useRef(null)
+  const submissionRef = useRef(null)
   const startingAsset = initialModelAsset(assets, initialModelId)
   const [state, dispatch] = useReducer(
     addTryOnReducer,
@@ -117,12 +124,18 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
   )
 
   useEffect(() => {
-    if (open && !state.open) {
+    const wasOpen = previousOpenRef.current
+    previousOpenRef.current = open
+    if (open && !wasOpen) {
+      sessionRef.current += 1
+      closedSessionRef.current = null
+      submissionRef.current = null
       dispatch({ type: 'open', asset: initialModelAsset(assets, initialModelId) })
-    } else if (!open && state.open) {
+    } else if (!open && wasOpen) {
+      submissionRef.current = null
       dispatch({ type: 'close' })
     }
-  }, [assets, initialModelId, open, state.open])
+  }, [assets, initialModelId, open])
 
   useEffect(() => {
     if (open) shopify.modal.show('add-tryon-flow')
@@ -130,6 +143,10 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
   }, [open, shopify])
 
   const dismiss = useCallback(() => {
+    const session = sessionRef.current
+    if (closedSessionRef.current === session) return
+    closedSessionRef.current = session
+    submissionRef.current = null
     dispatch({ type: 'close' })
     onClose?.()
   }, [onClose])
@@ -142,21 +159,35 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
   }, [dismiss])
 
   useEffect(() => {
-    if (!state.open || !fetcher.data) return
+    const submission = submissionRef.current
+    if (
+      !state.open
+      || !state.publishing
+      || !fetcher.data
+      || !submission
+      || submission.session !== sessionRef.current
+      || submission.priorData === fetcher.data
+    ) return
+    submissionRef.current = null
     if (fetcher.data.mapped) {
       dispatch({ type: 'publish-success' })
       shopify.modal.hide('add-tryon-flow')
       onPublished?.()
-      onClose?.()
     } else if (fetcher.data.error) {
       dispatch({ type: 'publish-error', message: fetcher.data.error })
     }
-  }, [fetcher.data, onClose, onPublished, shopify, state.open])
+  }, [fetcher.data, onPublished, shopify, state.open, state.publishing])
 
   const close = () => {
-    dispatch({ type: 'close' })
     shopify.modal.hide('add-tryon-flow')
-    onClose?.()
+  }
+
+  const beginPublishing = () => {
+    submissionRef.current = {
+      session: sessionRef.current,
+      priorData: fetcher.data,
+    }
+    dispatch({ type: 'publishing' })
   }
 
   const pickProduct = async () => {
@@ -213,7 +244,7 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
         <s-button slot="secondary-actions" onClick={() => dispatch({ type: 'back' })}>Back</s-button>
       )}
       {state.step === 'review' && state.modelAsset && state.product && (
-        <fetcher.Form method="post" onSubmit={() => dispatch({ type: 'publishing' })}>
+        <fetcher.Form method="post" onSubmit={beginPublishing}>
           <input type="hidden" name="intent" value="map" />
           <input type="hidden" name="productId" value={state.product.id} />
           <input type="hidden" name="productHandle" value={state.product.handle || ''} />

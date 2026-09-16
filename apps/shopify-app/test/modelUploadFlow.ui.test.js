@@ -82,7 +82,13 @@ describe('ModelUploadFlow', () => {
 
   it('uploads through presign and finalize and passes only the finalized asset to its owner', async () => {
     const onUploaded = vi.fn()
-    const asset = { id: 'asset-1', status: 'READY', originalFilename: 'frame.glb' }
+    const asset = {
+      assetId: 'asset-1',
+      status: 'pass',
+      source: 'tagged',
+      confidence: 1,
+      needsManual: false,
+    }
     const responseEnvelope = { uploaded: asset }
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
@@ -125,7 +131,7 @@ describe('ModelUploadFlow', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(xhr.open).toHaveBeenCalledWith('PUT', 'https://uploads.example.test/model')
     expect(xhr.send).toHaveBeenCalledWith(file)
-    expect(onUploaded).toHaveBeenCalledWith(asset)
+    expect(onUploaded).toHaveBeenCalledWith({ ...asset, id: 'asset-1' })
     expect(onUploaded).not.toHaveBeenCalledWith(responseEnvelope)
   })
 })

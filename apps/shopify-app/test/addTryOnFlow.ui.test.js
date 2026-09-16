@@ -42,7 +42,9 @@ const {
   addTryOnReducer,
   initialAddTryOnState,
   initialModelAsset,
+  modelName,
 } = await import('../app/components/AddTryOnFlow.jsx')
+const { normalizeUploadedAsset } = await import('../app/components/ModelUploadFlow.jsx')
 
 const assets = [
   { id: 'ready-model', label: 'Ready frames', status: 'ready' },
@@ -91,6 +93,10 @@ beforeEach(() => {
 })
 
 describe('addTryOnReducer', () => {
+  it('names malformed model descriptors without slicing an undefined id', () => {
+    expect(modelName({})).toBe('Uploaded model')
+  })
+
   it('cannot advance to product selection without a model', () => {
     expect(addTryOnReducer(initialAddTryOnState, { type: 'next' }).step).toBe('model')
   })
@@ -180,6 +186,32 @@ describe('AddTryOnFlow interactions', () => {
 
     expect(harness.reducerState).toMatchObject({ step: 'product', modelAsset: uploaded })
     expect(button(flow, 'Select product')).toBeDefined()
+  })
+
+  it('submits the normalized model id from the real finalize descriptor shape', async () => {
+    let flow = AddTryOnFlow({ assets, open: true, onClose: vi.fn(), onPublished: vi.fn() })
+    const finalized = {
+      assetId: 'uploaded-model',
+      status: 'pass',
+      source: 'tagged',
+      confidence: 1,
+      needsManual: false,
+    }
+
+    findComponent(flow, 'ModelUploadFlow').props.onUploaded(normalizeUploadedAsset(finalized))
+    harness.resourcePicker.mockResolvedValue([{
+      id: 'gid://shopify/Product/uploaded',
+      title: 'Uploaded frames',
+      handle: 'uploaded-frames',
+      images: [],
+    }])
+    flow = AddTryOnFlow({ assets, open: true, onClose: vi.fn(), onPublished: vi.fn() })
+    await button(flow, 'Select product').props.onClick()
+    flow = AddTryOnFlow({ assets, open: true, onClose: vi.fn(), onPublished: vi.fn() })
+
+    const modelAssetId = findElements(flow, 'input')
+      .find((input) => input.props.name === 'modelAssetId')
+    expect(modelAssetId.props.value).toBe('uploaded-model')
   })
 
   it('keeps the model and product step when the picker is cancelled', async () => {

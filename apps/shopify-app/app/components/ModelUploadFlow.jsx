@@ -12,6 +12,12 @@ export function uploadValidationError(file) {
   return null
 }
 
+export function normalizeUploadedAsset(uploaded) {
+  const id = uploaded?.id ?? uploaded?.assetId
+  if (!id) throw new Error('Uploaded model response is missing an asset id.')
+  return { ...uploaded, id }
+}
+
 export function uploadModalReducer(state, action) {
   if (action.type === 'select') {
     return { pendingFile: action.file, uploadError: null }
@@ -149,7 +155,8 @@ function UploadContent({ cancellationCoordinator, embedded, onBusyChange, onUplo
       finalizeForm.append('intent', 'upload-finalize')
       finalizeForm.append('storageRef', storageRef)
       finalizeForm.append('filename', pendingFile.name)
-      const { uploaded: asset } = await postUploadJson(finalizeForm, signal)
+      const { uploaded } = await postUploadJson(finalizeForm, signal)
+      const asset = normalizeUploadedAsset(uploaded)
       if (!signal.aborted) {
         onUploaded?.(asset)
         shopify.toast.show('Model uploaded')
