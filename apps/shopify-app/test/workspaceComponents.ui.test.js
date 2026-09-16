@@ -8,10 +8,26 @@ import ProductOperationsList, {
   filterWorkspaceMappings,
   primaryActionFor,
 } from '../app/components/ProductOperationsList.jsx'
+import { workspaceGuide } from '../app/workspace.server.js'
 
 global.React = React
 
 const workspaceCss = readFileSync(new URL('../app/styles/workspace.css', import.meta.url), 'utf8')
+
+function extractCssBlock(css, prelude) {
+  const preludeIndex = css.indexOf(prelude)
+  if (preludeIndex < 0) throw new Error(`Missing CSS block: ${prelude}`)
+  const openingBrace = css.indexOf('{', preludeIndex + prelude.length)
+  if (openingBrace < 0) throw new Error(`Missing opening brace: ${prelude}`)
+
+  let depth = 1
+  for (let index = openingBrace + 1; index < css.length; index += 1) {
+    if (css[index] === '{') depth += 1
+    if (css[index] === '}') depth -= 1
+    if (depth === 0) return css.slice(openingBrace + 1, index)
+  }
+  throw new Error(`Missing closing brace: ${prelude}`)
+}
 
 function findElements(node, type) {
   if (!node || typeof node !== 'object') return []
@@ -77,13 +93,15 @@ describe('workspace filtering and contextual actions', () => {
 
 describe('workspace component accessibility contracts', () => {
   it('keeps all rendered guide, status, and empty-state copy merchant-safe', () => {
+    const readyAsset = { id: 'ready', status: 'ready' }
+    const live = { ...rows[0], modelAsset: readyAsset }
     const guides = [
-      { kind: 'setup', title: 'Upload your first model', detail: 'Add a ready-to-use eyewear model.', action: { id: 'add-try-on', label: 'Upload model' } },
-      { kind: 'setup', title: 'Add try-on to a product', detail: 'Choose a model, then a Shopify product.', action: { id: 'add-try-on', label: 'Add try-on' } },
-      { kind: 'recovery', title: 'A model needs attention', detail: 'Gripz', action: { id: 'choose-model', label: 'Choose model' } },
-      { kind: 'recovery', title: 'Finish storefront setup', detail: 'Lumen', action: { id: 'theme', label: 'Add to theme', href: rows[2].themeUrl } },
-      { kind: 'recovery', title: 'Your plan limit is reached', detail: 'Upgrade before adding another product.', action: { id: 'plans', label: 'View plans', href: '/plans' } },
-      { kind: 'complete', title: 'Everything is live', detail: '1 product is ready', action: null },
+      workspaceGuide({ assets: [], mappings: [], usage: { atLimit: false } }),
+      workspaceGuide({ assets: [readyAsset], mappings: [], usage: { atLimit: false } }),
+      workspaceGuide({ assets: [readyAsset], mappings: [rows[1]], usage: { atLimit: false } }),
+      workspaceGuide({ assets: [readyAsset], mappings: [rows[2]], usage: { atLimit: false } }),
+      workspaceGuide({ assets: [readyAsset], mappings: [live], usage: { atLimit: true, pricingUrl: '/plans' } }),
+      workspaceGuide({ assets: [readyAsset], mappings: [live], usage: { atLimit: false } }),
     ]
     const rendered = [
       ...guides.map((guide) => renderToStaticMarkup(React.createElement(WorkspaceGuide, { guide, onAction: vi.fn() }))),
@@ -112,13 +130,19 @@ describe('workspace component accessibility contracts', () => {
       })),
     ].join(' ')
 
-    expect(rendered).toContain('Upload your first model')
-    expect(rendered).toContain('Everything is live')
     expect(rendered).toContain('No products match these filters')
+    expect(guides.map((guide) => [guide.kind, guide.action?.id ?? null])).toEqual([
+      ['setup', 'add-try-on'],
+      ['setup', 'add-try-on'],
+      ['recovery', 'choose-model'],
+      ['recovery', 'theme'],
+      ['recovery', 'plans'],
+      ['complete', null],
+    ])
     expect(rendered).not.toMatch(/metafields?|GLB parsing|storage keys?|GraphQL|render pipelines?/i)
   })
 
-  it('labels search, overflow controls, product images, and dialog actions', () => {
+  it('labels search, overflow controls, and product images', () => {
     const filters = renderToStaticMarkup(React.createElement(WorkspaceFilters, {
       counts: { all: 3, live: 1, needsAttention: 2 },
       status: 'all',
@@ -142,12 +166,25 @@ describe('workspace component accessibility contracts', () => {
   })
 
   it('keeps focus visible, narrow rows stacked, filters scrollable, and motion reduced', () => {
-    expect(workspaceCss).toContain('@media (max-width: 640px)')
-    expect(workspaceCss).toContain('overflow-x: auto')
-    expect(workspaceCss).toContain('grid-column: 1 / -1')
+    const narrow = extractCssBlock(workspaceCss, '@media (max-width: 640px)')
+    const summary = extractCssBlock(narrow, '.workspace-summary')
+    const row = extractCssBlock(narrow, '.workspace-row')
+    const modelAndStatus = extractCssBlock(narrow, '.workspace-row > :nth-child(2),\n  .workspace-row > :nth-child(3)')
+    const action = extractCssBlock(narrow, '.workspace-row > :last-child')
+    const reducedMotion = extractCssBlock(workspaceCss, '@media (prefers-reduced-motion: reduce)')
+    const reducedWorkspace = extractCssBlock(reducedMotion, '.workspace-shell *,\n  .workspace-shell *::before,\n  .workspace-shell *::after')
+
+    expect(summary).toMatch(/overflow-x:\s*auto/)
+    expect(row).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\) auto/)
+    expect(modelAndStatus).toMatch(/grid-column:\s*1 \/ -1/)
+    expect(action).toMatch(/grid-column:\s*2/)
+    expect(action).toMatch(/grid-row:\s*1/)
+    expect(action).not.toMatch(/display:\s*none|visibility:\s*hidden/)
     expect(workspaceCss).toContain(':focus-visible')
-    expect(workspaceCss).toContain('@media (prefers-reduced-motion: reduce)')
-    expect(workspaceCss).not.toMatch(/\.workspace-row[^{}]*\{[^}]*\b(?:display:\s*none|order:)/s)
+    expect(reducedWorkspace).toMatch(/scroll-behavior:\s*auto\s*!important/)
+    expect(reducedWorkspace).toMatch(/transition-duration:\s*0\.01ms\s*!important/)
+    expect(reducedWorkspace).toMatch(/animation-duration:\s*0\.01ms\s*!important/)
+    expect(reducedWorkspace).toMatch(/animation-iteration-count:\s*1\s*!important/)
   })
 
   it('distinguishes first-run setup from a filter with no matches', () => {

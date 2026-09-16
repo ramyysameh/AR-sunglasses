@@ -37,3 +37,32 @@ Complete. Acceptance coverage now renders the Workspace, guide variants, statuse
 - Live Admin acceptance still requires valid Shopify credentials for native product-picker behavior, actual focus trapping/restoration, theme-editor navigation, toast presentation, and authenticated `/app/products` redirect context. No live credential result is claimed.
 - The production build reports the existing large `model-viewer` chunk and React Router v8 future-flag warnings.
 - The complete suite logs expected diagnostics from tests that intentionally simulate Shopify/metafield failures and an existing Vite dynamic-import warning; all tests complete successfully with no unhandled failures.
+
+## Fix Round 1
+
+### Changes
+
+- Added a deterministic nested CSS-block extractor and scoped every narrow/reduced-motion assertion to the correct media and selector block, including explicit action visibility and placement checks.
+- Replaced duplicated guide copy fixtures with all six branches from production `workspaceGuide`, then rendered `WorkspaceGuide` before scanning merchant copy. Product-list empty states and rendered Workspace dialogs remain covered.
+- Added an explicit per-open focus controller. The Add try-on trigger retains declarative modal commands, and the modal `afterhide` path now closes React state and focuses the trigger exactly once.
+- Drove the real Workspace trigger and `AddTryOnFlow.onClose` handlers in the interaction regression, including a duplicate close notification.
+- Renamed the component-label test to match its scope and asserted actual dialog headings/actions in the rendered Workspace test.
+
+### Test-First Evidence
+
+- RED: the focus interaction failed because `createAddTryOnFocusController` did not exist.
+- GREEN: focused route/component/effect coverage passed after wiring the controller through the production handlers.
+
+### Verification
+
+- Focused acceptance: 6 files, 56 tests passed.
+- Complete Shopify app suite: 52 files, 293 tests passed; zero skipped and zero failures.
+- Targeted ESLint: passed.
+- Shopify app typecheck: passed.
+- React Router production build: passed; client and server bundles emitted.
+- Root AR engine suite: not rerun because this round changes only Shopify route/test code and does not affect shared engine code.
+- `git diff --check`: passed.
+
+### SHA
+
+- Atomic Fix Round 1 commit containing this report; exact SHA is recorded in the task handoff.

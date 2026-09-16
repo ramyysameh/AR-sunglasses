@@ -26,6 +26,11 @@ const harness = vi.hoisted(() => ({
 vi.mock('react', async (importOriginal) => ({
   ...(await importOriginal()),
   useCallback: (callback) => callback,
+  useRef: (initial) => {
+    const index = harness.stateIndex++
+    if (harness.state[index] === undefined) harness.state[index] = { current: initial }
+    return harness.state[index]
+  },
   useState: (initial) => {
     const index = harness.stateIndex++
     if (harness.state[index] === undefined) harness.state[index] = initial
@@ -55,7 +60,10 @@ vi.mock('../app/productActions.server.js', () => ({
 
 global.React = React
 
-const { default: Workspace, initialAddRequest } = await import('../app/routes/app._index.jsx')
+const {
+  default: Workspace,
+  initialAddRequest,
+} = await import('../app/routes/app._index.jsx')
 
 const readyAsset = { id: 'ready-model', label: 'Ready model', status: 'ready' }
 
@@ -99,7 +107,7 @@ beforeEach(() => {
 })
 
 describe('Workspace route composition', () => {
-  it('renders merchant-safe page, guide, empty, status, and dialog copy', () => {
+  it('renders merchant-safe page and dialog copy', () => {
     const data = baseData({
       mappings: [{
         id: 'issue',
@@ -128,7 +136,27 @@ describe('Workspace route composition', () => {
     expect(html).toContain('heading="Change model for product"')
     expect(html).toContain('heading="Remove try-on from this product?"')
     expect(html).toContain('heading="Preview try-on"')
+    expect(html).toContain('>Close</s-button>')
+    expect(html).toContain('>Cancel</s-button>')
+    expect(html).toContain('>Change model</s-button>')
+    expect(html).toContain('>Remove try-on</s-button>')
     expect(html).not.toMatch(/metafields?|GLB parsing|storage keys?|GraphQL|render pipelines?/i)
+  })
+
+  it('restores Add try-on focus once when an opened modal finishes hiding', () => {
+    const focus = vi.fn()
+    const page = render(baseData())
+    const trigger = findElements(page, 's-button')
+      .find((button) => button.props.slot === 'primary-action')
+    const flow = findComponent(page, AddTryOnFlow)
+    trigger.ref.current = { focus }
+
+    trigger.props.onClick()
+    flow.props.onClose()
+    flow.props.onClose()
+
+    expect(harness.state).toContain(false)
+    expect(focus).toHaveBeenCalledTimes(1)
   })
 
   it('renders Workspace with one page-level Add try-on primary', () => {

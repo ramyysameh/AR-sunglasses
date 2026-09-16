@@ -38,6 +38,23 @@ export function initialAddRequest(search, assets) {
   return { open: true, modelId }
 }
 
+function createAddTryOnFocusController({ setOpen, triggerRef, initiallyOpen = false }) {
+  let awaitingHide = initiallyOpen
+
+  return {
+    open() {
+      awaitingHide = true
+      setOpen(true)
+    },
+    afterHide() {
+      if (!awaitingHide) return
+      awaitingHide = false
+      setOpen(false)
+      triggerRef.current?.focus()
+    },
+  }
+}
+
 export const links = () => [{ rel: 'stylesheet', href: workspaceStyles }]
 
 export const loader = async ({ request }) => {
@@ -181,9 +198,19 @@ export default function Workspace() {
   const [changeMapping, setChangeMapping] = useState(null)
   const [changeDialogSession, setChangeDialogSession] = useState(0)
   const [removeMapping, setRemoveMapping] = useState(null)
+  const addTryOnTriggerRef = useRef(null)
+  const addTryOnFocusControllerRef = useRef(null)
+  if (!addTryOnFocusControllerRef.current) {
+    addTryOnFocusControllerRef.current = createAddTryOnFocusController({
+      setOpen: setAddTryOnOpen,
+      triggerRef: addTryOnTriggerRef,
+      initiallyOpen: initialRequest.open,
+    })
+  }
+  const addTryOnFocusController = addTryOnFocusControllerRef.current
   const visibleMappings = filterWorkspaceMappings(data.mappings, { status, query })
 
-  const openAddTryOn = () => setAddTryOnOpen(true)
+  const openAddTryOn = addTryOnFocusController.open
   const handleGuideAction = (guideAction) => {
     if (guideAction.id === 'add-try-on') openAddTryOn()
     if (guideAction.id === 'choose-model') {
@@ -206,7 +233,6 @@ export default function Workspace() {
   }
   const refreshWorkspace = useCallback(() => revalidator.revalidate(), [revalidator])
   const handlePublished = () => {
-    setAddTryOnOpen(false)
     shopify.toast.show('Try-on published')
     refreshWorkspace()
   }
@@ -214,6 +240,7 @@ export default function Workspace() {
   return (
     <s-page heading="Workspace">
       <s-button
+        ref={addTryOnTriggerRef}
         slot="primary-action"
         commandFor="add-tryon-flow"
         command="--show"
@@ -238,7 +265,7 @@ export default function Workspace() {
         </section>
       </div>
 
-      <AddTryOnFlow assets={data.assets} initialModelId={initialModelId} open={addTryOnOpen} onClose={() => setAddTryOnOpen(false)} onPublished={handlePublished} />
+      <AddTryOnFlow assets={data.assets} initialModelId={initialModelId} open={addTryOnOpen} onClose={addTryOnFocusController.afterHide} onPublished={handlePublished} />
 
       <s-modal id="workspace-preview" heading={`Preview ${previewMapping?.product?.title ?? 'try-on'}`}>
         {previewMapping && <PreviewPanel mapping={previewMapping} />}
