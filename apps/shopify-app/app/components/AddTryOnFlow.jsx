@@ -254,7 +254,7 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
           <s-heading>Review try-on</s-heading>
           <ProductSummary product={state.product} />
           <s-text type="strong">{modelName(state.modelAsset)}</s-text>
-          <PreviewPanel mapping={previewMapping} />
+          <PreviewPanel mapping={previewMapping} showPhonePreview={false} />
           {state.error && (
             <s-banner heading="Could not publish try-on" tone="critical">
               {state.error}
@@ -274,6 +274,7 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
           <input type="hidden" name="productHandle" value={state.product.handle || ''} />
           <input type="hidden" name="modelAssetId" value={state.modelAsset.id} />
           <s-button
+            slot="primary-action"
             type="submit"
             variant="primary"
             loading={state.publishing || fetcher.state !== 'idle'}

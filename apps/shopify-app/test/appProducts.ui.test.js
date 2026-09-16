@@ -43,4 +43,14 @@ describe('shared product components', () => {
     expect(html).not.toContain('fit-preview.glb')
     expect(html).not.toMatch(/reference head/i)
   })
+
+  it('can keep an unpublished review free of a broken phone-preview warning', () => {
+    const html = renderToStaticMarkup(React.createElement(PreviewPanel, {
+      mapping: { modelAssetId: 'model-a' },
+      showPhonePreview: false,
+    }))
+
+    expect(html).not.toContain('Phone preview unavailable')
+    expect(html).not.toContain('Try it on your phone')
+  })
 })

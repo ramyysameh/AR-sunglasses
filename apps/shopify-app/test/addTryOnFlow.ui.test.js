@@ -292,4 +292,19 @@ describe('AddTryOnFlow interactions', () => {
     expect(harness.reducerState.modelAsset.id).toBe('ready-model')
     expect(harness.reducerState.product.id).toBe('p1')
   })
+
+  it('keeps the unpublished review focused on fit and exposes publishing in the modal footer', () => {
+    harness.reducerState = {
+      ...initialAddTryOnState,
+      open: true,
+      step: 'review',
+      modelAsset: assets[0],
+      product: { id: 'p1', title: 'Aviator', handle: 'aviator' },
+    }
+
+    const flow = AddTryOnFlow({ assets, open: true, onClose: vi.fn(), onPublished: vi.fn() })
+
+    expect(findComponent(flow, 'PreviewPanel').props.showPhonePreview).toBe(false)
+    expect(button(flow, 'Publish try-on').props.slot).toBe('primary-action')
+  })
 })
