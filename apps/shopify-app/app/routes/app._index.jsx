@@ -214,6 +214,12 @@ export default function Workspace() {
   const addTryOnFocusController = addTryOnFocusControllerRef.current
   const visibleMappings = filterWorkspaceMappings(data.mappings, { status, query })
   const hasOperations = data.mappings.length > 0
+  const guideAction = data.guide.action
+  const guidedMappingId = guideAction?.id === 'choose-model'
+    ? guideAction.mappingId
+    : guideAction?.id === 'theme'
+      ? data.mappings.find((mapping) => mapping.themeUrl === guideAction.href)?.id ?? null
+      : null
 
   const openAddTryOn = addTryOnFocusController.open
   const handleGuideAction = (guideAction) => {
@@ -273,6 +279,7 @@ export default function Workspace() {
                 mappings={visibleMappings}
                 totalCount={data.mappings.length}
                 pricingUrl={data.usage.pricingUrl}
+                guidedMappingId={guidedMappingId}
                 onPreview={openPreview}
                 onChangeModel={openChangeModel}
                 onRemove={openRemove}

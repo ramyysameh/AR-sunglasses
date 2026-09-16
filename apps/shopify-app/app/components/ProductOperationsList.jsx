@@ -105,6 +105,7 @@ export default function ProductOperationsList({
   mappings,
   totalCount = mappings.length,
   pricingUrl,
+  guidedMappingId = null,
   onPreview,
   onChangeModel,
   onRemove,
@@ -133,12 +134,14 @@ export default function ProductOperationsList({
         {mappings.map((mapping) => {
           const title = mapping.product?.title ?? 'Product unavailable'
           const status = STATUS_DETAILS[mapping.status] ?? STATUS_DETAILS['plan-limit']
-          const primaryAction = primaryActionFor(mapping, pricingUrl)
+          const primaryAction = mapping.id === guidedMappingId
+            ? null
+            : primaryActionFor(mapping, pricingUrl)
 
           return (
             <s-table-row key={mapping.id} className="workspace-row">
               <s-table-cell>
-                <s-stack direction="inline" gap="small-500" alignItems="center">
+                <s-stack className="workspace-product-cell" direction="inline" gap="small-500" alignItems="center">
                   <ProductImage product={mapping.product} />
                   <s-text type="strong">{title}</s-text>
                 </s-stack>

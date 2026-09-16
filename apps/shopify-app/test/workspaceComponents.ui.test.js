@@ -165,21 +165,14 @@ describe('workspace component accessibility contracts', () => {
     expect(list).toContain('accessibilityLabel="Actions for Lumen"')
   })
 
-  it('keeps focus visible, narrow rows stacked, filters scrollable, and motion reduced', () => {
+  it('keeps table rows aligned with their headers, filters scrollable, and motion reduced', () => {
     const narrow = extractCssBlock(workspaceCss, '@media (max-width: 640px)')
     const summary = extractCssBlock(narrow, '.workspace-summary')
-    const row = extractCssBlock(narrow, '.workspace-row')
-    const modelAndStatus = extractCssBlock(narrow, '.workspace-row > :nth-child(2),\n  .workspace-row > :nth-child(3)')
-    const action = extractCssBlock(narrow, '.workspace-row > :last-child')
     const reducedMotion = extractCssBlock(workspaceCss, '@media (prefers-reduced-motion: reduce)')
     const reducedWorkspace = extractCssBlock(reducedMotion, '.workspace-shell *,\n  .workspace-shell *::before,\n  .workspace-shell *::after')
 
     expect(summary).toMatch(/overflow-x:\s*auto/)
-    expect(row).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\) auto/)
-    expect(modelAndStatus).toMatch(/grid-column:\s*1 \/ -1/)
-    expect(action).toMatch(/grid-column:\s*2/)
-    expect(action).toMatch(/grid-row:\s*1/)
-    expect(action).not.toMatch(/display:\s*none|visibility:\s*hidden/)
+    expect(workspaceCss).not.toMatch(/\.workspace-row\s*\{[\s\S]*?display:\s*grid/)
     expect(workspaceCss).toContain(':focus-visible')
     expect(reducedWorkspace).toMatch(/scroll-behavior:\s*auto\s*!important/)
     expect(reducedWorkspace).toMatch(/transition-duration:\s*0\.01ms\s*!important/)
@@ -298,6 +291,20 @@ describe('workspace component accessibility contracts', () => {
 
     expect(onPreview).toHaveBeenCalledWith(rows[0])
     expect(onChangeModel).toHaveBeenCalledWith(rows[1])
+  })
+
+  it('does not repeat the guide action in the matching product row', () => {
+    const list = ProductOperationsList({
+      mappings: [rows[2]],
+      pricingUrl: '/plans',
+      guidedMappingId: 'theme',
+      onPreview: vi.fn(),
+      onChangeModel: vi.fn(),
+      onRemove: vi.fn(),
+    })
+
+    expect(buttonWithLabel(list, 'Add to theme')).toBeUndefined()
+    expect(renderToStaticMarkup(list)).toContain('>Add to theme<')
   })
 
   it('links plan-limit recovery only to page pricing and never changes the model', () => {
