@@ -144,13 +144,12 @@ describe('Models UI behavior', () => {
     expect(uploadModalHideBehavior(false)).toEqual({ reopen: false, reset: true })
   })
 
-  it('renders the model library as the primary surface with valid modal targets', () => {
+  it('renders one upload action with valid modal targets', () => {
     const html = renderToStaticMarkup(React.createElement(Models))
     const targets = [...html.matchAll(/commandFor="([^"]+)"/g)].map((match) => match[1])
 
     expect(html).toContain('slot="primary-action"')
-    expect(html).toContain('commandFor="upload-model"')
-    expect(html).toContain('Upload model')
+    expect(html.match(/commandFor="upload-model" command="--show"/g)).toHaveLength(1)
     expect(html).toContain('Pelmo black')
     expect(html).toContain('pelmo.glb')
     expect(html).toContain('Used by 2 products')

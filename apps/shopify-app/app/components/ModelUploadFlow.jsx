@@ -245,7 +245,12 @@ function UploadContent({ cancellationCoordinator, embedded, onBusyChange, onUplo
   )
 }
 
-export function ModelUploadFlow({ onUploaded, triggerLabel = 'Upload model', embedded = false }) {
+export function ModelUploadFlow({
+  onUploaded,
+  triggerLabel = 'Upload model',
+  triggerSlot,
+  embedded = false,
+}) {
   const shopify = useAppBridge()
   const [session, setSession] = useState(0)
   const busyRef = useRef(false)
@@ -283,7 +288,11 @@ export function ModelUploadFlow({ onUploaded, triggerLabel = 'Upload model', emb
 
   return (
     <>
-      <s-button commandFor="upload-model" command="--show">
+      <s-button
+        {...(triggerSlot ? { slot: triggerSlot } : {})}
+        commandFor="upload-model"
+        command="--show"
+      >
         {triggerLabel}
       </s-button>
       <s-modal ref={modalRef} id="upload-model" heading="Upload model">

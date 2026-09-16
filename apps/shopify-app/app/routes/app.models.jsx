@@ -133,6 +133,7 @@ export function UploadModal() {
   const navigate = useNavigate()
   return (
     <ModelUploadFlow
+      triggerSlot="primary-action"
       onUploaded={(asset) => navigate(`/app?add=1&model=${encodeURIComponent(asset.id)}`)}
     />
   )
@@ -299,15 +300,6 @@ export default function Models() {
 
   return (
     <s-page heading="Models">
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        commandFor="upload-model"
-        command="--show"
-      >
-        Upload model
-      </s-button>
-
       <s-section heading="Model library">
         {assets.length === 0 ? (
           <s-stack direction="block" gap="base">
@@ -315,9 +307,6 @@ export default function Models() {
             <s-paragraph>
               Upload a .glb eyewear model to make it available for try-on products.
             </s-paragraph>
-            <s-button commandFor="upload-model" command="--show">
-              Upload model
-            </s-button>
           </s-stack>
         ) : (
           <s-grid
