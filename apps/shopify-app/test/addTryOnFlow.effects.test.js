@@ -180,6 +180,50 @@ describe('AddTryOnFlow lifecycle effects', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('blocks close, back, and modal dismissal while publishing, then handles success once', async () => {
+    const modalElement = createModalElement()
+    const onClose = vi.fn()
+    const onPublished = vi.fn()
+    const props = {
+      assets,
+      initialModelId: 'ready-model',
+      open: true,
+      onClose,
+      onPublished,
+    }
+    runtime.resourcePicker.mockResolvedValue([{
+      id: 'gid://shopify/Product/1',
+      title: 'Aviator',
+      handle: 'aviator',
+      images: [],
+    }])
+
+    let flow = renderFlow(props, modalElement)
+    await button(flow, 'Select product').props.onClick()
+    flow = renderFlow(props, modalElement)
+    findElements(flow, 'form')[0].props.onSubmit()
+    flow = renderFlow(props, modalElement)
+
+    expect(button(flow, 'Close').props.disabled).toBe(true)
+    expect(button(flow, 'Back').props.disabled).toBe(true)
+    button(flow, 'Close').props.onClick()
+    button(flow, 'Back').props.onClick()
+    modalElement.emit('afterhide')
+    flow = renderFlow(props, modalElement)
+
+    expect(flowState().step).toBe('review')
+    expect(flowState().publishing).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
+
+    runtime.fetcher.data = { mapped: true }
+    renderFlow(props, modalElement)
+    modalElement.emit('afterhide')
+    modalElement.emit('afterhide')
+
+    expect(onPublished).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('ignores the prior success response when a new session opens', async () => {
     const modalElement = createModalElement()
     const onClose = vi.fn()

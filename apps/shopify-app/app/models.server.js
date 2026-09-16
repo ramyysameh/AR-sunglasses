@@ -62,7 +62,7 @@ export async function finalizeUpload(prisma, shop, storageRef, filename = null) 
 
 // Task 9: map a product to a calibrated model. Upsert on (shop, productId) so
 // re-mapping a product replaces its model instead of creating a duplicate.
-export async function mapProductToModel(prisma, shop, productId, modelAssetId) {
+export async function mapProductToModel(prisma, shop, productId, modelAssetId, productHandle) {
   // The asset must belong to this shop. Without this, a client-supplied
   // modelAssetId can create a cross-shop mapping -- and because the FK is
   // ON DELETE RESTRICT, that mapping makes the owning shop's redaction throw
@@ -73,8 +73,11 @@ export async function mapProductToModel(prisma, shop, productId, modelAssetId) {
   }
   return prisma.productMapping.upsert({
     where: { shop_productId: { shop, productId } },
-    update: { modelAssetId },
-    create: { shop, productId, modelAssetId },
+    update: {
+      modelAssetId,
+      ...(productHandle ? { productHandle } : {}),
+    },
+    create: { shop, productId, productHandle: productHandle || null, modelAssetId },
   })
 }
 

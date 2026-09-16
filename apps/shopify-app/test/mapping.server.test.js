@@ -37,6 +37,21 @@ describe('mapProductToModel + listMappings', () => {
     expect(maps[0].modelAssetId).toBe(asset2.id)
   })
 
+  it('persists and refreshes the tenant mapping product handle', async () => {
+    const handleProductId = `${productId}-handle`
+    const asset = await prisma.modelAsset.create({
+      data: { shop, storageRef: 'handle-r1', fitMetadata: { version: 'eyewear-v1' }, confidence: null },
+    })
+
+    await mapProductToModel(prisma, shop, handleProductId, asset.id, 'exact-aviator')
+    await mapProductToModel(prisma, shop, handleProductId, asset.id, 'renamed-aviator')
+
+    const stored = await prisma.productMapping.findUnique({
+      where: { shop_productId: { shop, productId: handleProductId } },
+    })
+    expect(stored.productHandle).toBe('renamed-aviator')
+  })
+
   it('rejects mapping a product to another shop\'s asset (cross-tenant guard)', async () => {
     const foreignAsset = await prisma.modelAsset.create({
       data: { shop: otherShop, storageRef: 'foreign-r1', fitMetadata: { version: 'eyewear-v1' }, confidence: null },

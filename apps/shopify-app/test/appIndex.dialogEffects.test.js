@@ -206,6 +206,41 @@ describe('change model retry submission', () => {
     expect(primaryButton(reopenedDialog).props.children).toBe('Change model')
   })
 
+  it('restores the mapping current model after cancelling and reopening the same product', () => {
+    let dialog = renderChangeDialog(1)
+    selectModel(dialog, 'another-model')
+    dialog = renderChangeDialog(1)
+    expect(findElements(dialog, ModelPicker)[0].props.value).toBe('another-model')
+
+    renderChangeDialog(2)
+    dialog = renderChangeDialog(2)
+
+    expect(findElements(dialog, ModelPicker)[0].props.value).toBe(mapping.modelAssetId)
+    expect(primaryButton(dialog).props.disabled).toBe(true)
+  })
+
+  it('uses the freshly revalidated current model when a later session opens', () => {
+    const updatedMapping = { ...mapping, modelAssetId: 'current-model' }
+    let dialog = renderChangeDialog(1)
+    selectModel(dialog, 'abandoned-model')
+
+    renderDialog(ChangeModelDialog, {
+      mapping: updatedMapping,
+      assets: [{ id: 'current-model', status: 'ready' }],
+      onDone: vi.fn(),
+      session: 2,
+    })
+    dialog = renderDialog(ChangeModelDialog, {
+      mapping: updatedMapping,
+      assets: [{ id: 'current-model', status: 'ready' }],
+      onDone: vi.fn(),
+      session: 2,
+    })
+
+    expect(findElements(dialog, ModelPicker)[0].props.value).toBe('current-model')
+    expect(primaryButton(dialog).props.disabled).toBe(true)
+  })
+
   it('enables retry for a fresh matching failure in the reopened session', () => {
     receiveMatchingFailure(1)
     let dialog = renderChangeDialog(2)

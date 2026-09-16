@@ -14,6 +14,7 @@ export async function handleProductAction({ request, admin, shop }) {
 
   if (intent === 'map') {
     const productId = form.get('productId')?.toString().trim()
+    const productHandle = form.get('productHandle')?.toString().trim() || undefined
     const modelAssetId = form.get('modelAssetId')?.toString()
     if (!productId || !modelAssetId) {
       return { error: 'Pick a product and a model.' }
@@ -35,7 +36,7 @@ export async function handleProductAction({ request, admin, shop }) {
     // merchant gets the modal's banner, not a raw framework error page, and the
     // internal message stays in the log.
     try {
-      await mapProductToModel(prisma, shop, productId, modelAssetId)
+      await mapProductToModel(prisma, shop, productId, modelAssetId, productHandle)
     } catch (e) {
       console.error('mapProductToModel failed', e)
       return { error: "That model isn't available any more. Pick another one." }

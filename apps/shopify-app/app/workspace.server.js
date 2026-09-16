@@ -121,7 +121,7 @@ export async function loadWorkspace({ admin, shop, engineUrl }) {
     const merchantStatus = productStatus(mapping)
     const status = normalizeWorkspaceStatus(merchantStatus)
     const product = products.get(mapping.productId) ?? null
-    const mappingThemeUrl = themeEditorUrl(shop, product?.handle)
+    const mappingThemeUrl = themeEditorUrl(shop, product?.handle || mapping.productHandle)
     const base = {
       ...mapping,
       product,

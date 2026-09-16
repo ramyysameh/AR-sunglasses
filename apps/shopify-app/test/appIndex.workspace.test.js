@@ -170,6 +170,48 @@ describe('Workspace route composition', () => {
     expect(pagePrimaries[0].props.command).toBe('--show')
   })
 
+  it.each([
+    ['model issue', {
+      id: 'issue',
+      status: 'model-issue',
+      product: { title: 'Willow' },
+      modelAsset: readyAsset,
+    }, {
+      kind: 'recovery',
+      title: 'A model needs attention',
+      detail: 'Willow',
+      action: { id: 'choose-model', mappingId: 'issue', label: 'Choose model' },
+    }],
+    ['add to theme', {
+      id: 'theme',
+      status: 'add-to-theme',
+      product: { title: 'Lumen' },
+      modelAsset: readyAsset,
+      themeUrl: '/theme-editor',
+    }, {
+      kind: 'recovery',
+      title: 'Finish storefront setup',
+      detail: 'Lumen',
+      action: { id: 'theme', href: '/theme-editor', label: 'Add to theme' },
+    }],
+  ])('shows a compact plan route beside disabled Add while preserving the %s guide', (_case, mapping, guide) => {
+    const page = render(baseData({
+      mappings: [mapping],
+      counts: { all: 1, live: 0, needsAttention: 1 },
+      usage: { used: 1, limit: 1, atLimit: true, pricingUrl: '/plans' },
+      guide,
+    }))
+    const addButton = findElements(page, 's-button')
+      .find((candidate) => candidate.props.slot === 'primary-action')
+    const plansLink = findElements(page, 's-link')
+      .find((candidate) => candidate.props.children === 'View plans')
+
+    expect(addButton.props.disabled).toBe(true)
+    expect(plansLink.props.href).toBe('/plans')
+    expect(plansLink.props.target).toBe('_top')
+    expect(findComponent(page, WorkspaceGuide).props.guide).toEqual(guide)
+  })
+
   it('preselects only a ready model from an add deep link', () => {
     expect(initialAddRequest('?add=1&model=ready-model', [readyAsset])).toEqual({
       open: true,

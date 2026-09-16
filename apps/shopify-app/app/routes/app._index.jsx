@@ -101,6 +101,10 @@ export function ChangeModelDialog({ mapping, assets, onDone, session = 0 }) {
     || (modelAssetId === mapping.modelAssetId && !retryable)
 
   useEffect(() => {
+    setModelAssetId(mapping?.modelAssetId ?? '')
+  }, [mapping?.id, mapping?.modelAssetId, session])
+
+  useEffect(() => {
     const submission = attemptRef.current.submission
     if (!fetcher.data || !submission || submission.priorData === fetcher.data) return
     if (!fetcher.data.mapped) return
@@ -251,6 +255,12 @@ export default function Workspace() {
       </s-button>
 
       <div className="workspace-shell">
+        {data.usage.atLimit && data.usage.pricingUrl && (
+          <div className="workspace-plan-limit" role="status">
+            <s-text>Your plan limit is reached. </s-text>
+            <s-link href={data.usage.pricingUrl} target="_top">View plans</s-link>
+          </div>
+        )}
         <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />
         <WorkspaceFilters counts={data.counts} status={status} query={query} onStatusChange={setStatus} onQueryChange={setQuery} />
         <section className="workspace-panel" aria-label="Product operations">

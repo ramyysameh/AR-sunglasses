@@ -31,6 +31,7 @@ export function addTryOnReducer(state, action) {
     case 'next':
       return state.modelAsset ? { ...state, step: 'product', error: null } : state
     case 'back':
+      if (state.publishing) return state
       return {
         ...state,
         step: state.step === 'review' ? 'product' : 'model',
@@ -143,13 +144,17 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
   }, [open, shopify])
 
   const dismiss = useCallback(() => {
+    if (submissionRef.current) {
+      shopify.modal.show('add-tryon-flow')
+      return
+    }
     const session = sessionRef.current
     if (closedSessionRef.current === session) return
     closedSessionRef.current = session
     submissionRef.current = null
     dispatch({ type: 'close' })
     onClose?.()
-  }, [onClose])
+  }, [onClose, shopify])
 
   useEffect(() => {
     const modal = modalRef.current
@@ -179,7 +184,13 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
   }, [fetcher.data, onPublished, shopify, state.open, state.publishing])
 
   const close = () => {
+    if (submissionRef.current) return
     shopify.modal.hide('add-tryon-flow')
+  }
+
+  const back = () => {
+    if (submissionRef.current) return
+    dispatch({ type: 'back' })
   }
 
   const beginPublishing = () => {
@@ -239,9 +250,9 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
         </s-stack>
       )}
 
-      <s-button slot="secondary-actions" onClick={close}>Close</s-button>
+      <s-button slot="secondary-actions" onClick={close} disabled={state.publishing}>Close</s-button>
       {state.step !== 'model' && (
-        <s-button slot="secondary-actions" onClick={() => dispatch({ type: 'back' })}>Back</s-button>
+        <s-button slot="secondary-actions" onClick={back} disabled={state.publishing}>Back</s-button>
       )}
       {state.step === 'review' && state.modelAsset && state.product && (
         <fetcher.Form method="post" onSubmit={beginPublishing}>

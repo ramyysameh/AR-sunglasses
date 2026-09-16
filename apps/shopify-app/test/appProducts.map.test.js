@@ -65,6 +65,22 @@ describe('app.products map action', () => {
     expect(await prisma.productMapping.count({ where: { shop } })).toBe(1)
   })
 
+  it('stores the selected product handle through the map action', async () => {
+    const productId = `gid://shopify/Product/${tag}-handle`
+    const res = await post({
+      intent: 'map',
+      productId,
+      productHandle: 'exact-aviator',
+      modelAssetId: assetId,
+    })
+
+    expect(res).toMatchObject({ mapped: true })
+    const mapping = await prisma.productMapping.findUnique({
+      where: { shop_productId: { shop, productId } },
+    })
+    expect(mapping.productHandle).toBe('exact-aviator')
+  })
+
   it('enforces the plan cap for a new product', async () => {
     for (let i = 0; i < 10; i++) {
       await prisma.productMapping.create({
