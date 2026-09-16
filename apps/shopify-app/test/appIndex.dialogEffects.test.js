@@ -1,6 +1,7 @@
 /* eslint-disable react/prop-types -- lightweight route-dialog hook harness */
 import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import ModelPicker from '../app/components/ModelPicker.jsx'
 
 const runtime = vi.hoisted(() => ({
   cursor: 0,
@@ -136,14 +137,35 @@ describe.each([
 })
 
 describe('change model retry submission', () => {
-  const renderChangeDialog = () => renderDialog(ChangeModelDialog, {
+  const renderChangeDialog = (session = 1) => renderDialog(ChangeModelDialog, {
     mapping,
     assets: [{ id: 'old-model', status: 'ready' }],
     onDone: vi.fn(),
+    session,
   })
 
   const primaryButton = (dialog) => findElements(dialog, 's-button')
     .find((button) => button.props.slot === 'primary-action')
+
+  const matchingFailure = () => ({
+    retryable: true,
+    productId: mapping.productId,
+    modelAssetId: mapping.modelAssetId,
+    error: 'Could not update the storefront.',
+  })
+
+  const submit = (dialog) => findElements(dialog, 'form')[0].props.onSubmit()
+  const selectModel = (dialog, modelAssetId) => {
+    findElements(dialog, ModelPicker)[0].props.onChange(modelAssetId)
+  }
+
+  const receiveMatchingFailure = (session = 1) => {
+    let dialog = renderChangeDialog(session)
+    submit(dialog)
+    runtime.fetcher.data = matchingFailure()
+    dialog = renderChangeDialog(session)
+    return dialog
+  }
 
   it('disables an unchanged model during normal editing', () => {
     const button = primaryButton(renderChangeDialog())
@@ -153,19 +175,47 @@ describe('change model retry submission', () => {
   })
 
   it('enables Try again for a matching retryable publication failure', () => {
-    runtime.fetcher.data = {
-      retryable: true,
-      productId: mapping.productId,
-      modelAssetId: mapping.modelAssetId,
-      error: 'Could not update the storefront.',
-    }
-
-    const dialog = renderChangeDialog()
+    const dialog = receiveMatchingFailure()
     const button = primaryButton(dialog)
 
     expect(button.props.disabled).toBe(false)
     expect(button.props.children).toBe('Try again')
     expect(findElements(dialog, 's-banner')[0].props.children).toBe('Could not update the storefront.')
+  })
+
+  it('does not resurrect retry after selecting away from and back to the failed model', () => {
+    let dialog = receiveMatchingFailure()
+    expect(primaryButton(dialog).props.disabled).toBe(false)
+
+    selectModel(dialog, 'another-model')
+    dialog = renderChangeDialog()
+    selectModel(dialog, mapping.modelAssetId)
+    dialog = renderChangeDialog()
+
+    expect(primaryButton(dialog).props.disabled).toBe(true)
+    expect(primaryButton(dialog).props.children).toBe('Change model')
+  })
+
+  it('does not carry a retryable failure into a reopened session for the same mapping', () => {
+    const failedDialog = receiveMatchingFailure(1)
+    expect(primaryButton(failedDialog).props.disabled).toBe(false)
+
+    const reopenedDialog = renderChangeDialog(2)
+
+    expect(primaryButton(reopenedDialog).props.disabled).toBe(true)
+    expect(primaryButton(reopenedDialog).props.children).toBe('Change model')
+  })
+
+  it('enables retry for a fresh matching failure in the reopened session', () => {
+    receiveMatchingFailure(1)
+    let dialog = renderChangeDialog(2)
+    submit(dialog)
+    runtime.fetcher.data = matchingFailure()
+
+    dialog = renderChangeDialog(2)
+
+    expect(primaryButton(dialog).props.disabled).toBe(false)
+    expect(primaryButton(dialog).props.children).toBe('Try again')
   })
 
   it.each([
@@ -182,14 +232,7 @@ describe('change model retry submission', () => {
   })
 
   it('resubmits the exact mapping product and selected model values', () => {
-    runtime.fetcher.data = {
-      retryable: true,
-      productId: mapping.productId,
-      modelAssetId: mapping.modelAssetId,
-      error: 'Could not update the storefront.',
-    }
-
-    const dialog = renderChangeDialog()
+    const dialog = receiveMatchingFailure()
     const fields = Object.fromEntries(
       findElements(dialog, 'input').map((input) => [input.props.name, input.props.value]),
     )

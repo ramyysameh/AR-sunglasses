@@ -50,41 +50,81 @@ export const action = async ({ request }) => {
   return handleProductAction({ request, admin, shop: session.shop })
 }
 
-export function ChangeModelDialog({ mapping, assets, onDone }) {
+export function ChangeModelDialog({ mapping, assets, onDone, session = 0 }) {
   const fetcher = useFetcher()
   const shopify = useAppBridge()
-  const submissionRef = useRef(null)
+  const attemptRef = useRef({ session, mappingId: mapping?.id, modelAssetId: mapping?.modelAssetId, submission: null })
+  const modalRef = useRef(null)
   const [modelAssetId, setModelAssetId] = useState(mapping?.modelAssetId ?? '')
+  const attempt = attemptRef.current
+  if (
+    attempt.session !== session
+    || attempt.mappingId !== mapping?.id
+    || attempt.modelAssetId !== mapping?.modelAssetId
+  ) {
+    attemptRef.current = {
+      session,
+      mappingId: mapping?.id,
+      modelAssetId: mapping?.modelAssetId,
+      submission: null,
+    }
+  }
+  const submission = attemptRef.current.submission
   const retryable = Boolean(
-    fetcher.data?.retryable
-    && fetcher.data.productId === mapping?.productId
-    && fetcher.data.modelAssetId === modelAssetId,
+    submission
+    && submission.priorData !== fetcher.data
+    && fetcher.data?.retryable
+    && fetcher.data.productId === submission.productId
+    && fetcher.data.modelAssetId === submission.modelAssetId
+    && submission.productId === mapping?.productId
+    && submission.modelAssetId === modelAssetId,
   )
   const submitDisabled = !mapping
     || !modelAssetId
     || (modelAssetId === mapping.modelAssetId && !retryable)
 
   useEffect(() => {
-    const submission = submissionRef.current
+    const submission = attemptRef.current.submission
     if (!fetcher.data || !submission || submission.priorData === fetcher.data) return
-    submissionRef.current = null
     if (!fetcher.data.mapped) return
+    attemptRef.current.submission = null
     shopify.toast.show('Model changed')
     shopify.modal.hide('workspace-change-model')
     onDone()
   }, [fetcher.data, onDone, shopify])
 
+  useEffect(() => {
+    const modal = modalRef.current
+    if (!modal) return undefined
+    const invalidateRetry = () => { attemptRef.current.submission = null }
+    modal.addEventListener('hide', invalidateRetry)
+    return () => modal.removeEventListener('hide', invalidateRetry)
+  }, [])
+
+  const selectModel = (selectedModelAssetId) => {
+    attemptRef.current.submission = null
+    setModelAssetId(selectedModelAssetId)
+  }
+
+  const beginSubmit = () => {
+    attemptRef.current.submission = {
+      priorData: fetcher.data,
+      productId: mapping?.productId,
+      modelAssetId,
+    }
+  }
+
   return (
-    <s-modal id="workspace-change-model" heading={`Change model for ${mapping?.product?.title ?? 'product'}`}>
+    <s-modal ref={modalRef} id="workspace-change-model" heading={`Change model for ${mapping?.product?.title ?? 'product'}`}>
       <s-stack direction="block" gap="base">
         <s-paragraph>Choose the frames shoppers should see for this product.</s-paragraph>
-        {mapping && <ModelPicker assets={assets} value={modelAssetId} onChange={setModelAssetId} />}
+        {mapping && <ModelPicker assets={assets} value={modelAssetId} onChange={selectModel} />}
         {fetcher.data?.error && <s-banner tone="critical">{fetcher.data.error}</s-banner>}
       </s-stack>
       <s-button slot="secondary-actions" commandFor="workspace-change-model" command="--hide">Cancel</s-button>
       <fetcher.Form
         method="post"
-        onSubmit={() => { submissionRef.current = { priorData: fetcher.data } }}
+        onSubmit={beginSubmit}
       >
         <input type="hidden" name="intent" value="map" />
         <input type="hidden" name="productId" value={mapping?.productId ?? ''} />
@@ -139,6 +179,7 @@ export default function Workspace() {
   const [initialModelId] = useState(initialRequest.modelId)
   const [previewMapping, setPreviewMapping] = useState(null)
   const [changeMapping, setChangeMapping] = useState(null)
+  const [changeDialogSession, setChangeDialogSession] = useState(0)
   const [removeMapping, setRemoveMapping] = useState(null)
   const visibleMappings = filterWorkspaceMappings(data.mappings, { status, query })
 
@@ -156,6 +197,7 @@ export default function Workspace() {
   }
   const openChangeModel = (mapping) => {
     setChangeMapping(mapping)
+    setChangeDialogSession((current) => current + 1)
     shopify.modal.show('workspace-change-model')
   }
   const openRemove = (mapping) => {
@@ -193,7 +235,7 @@ export default function Workspace() {
       <s-modal id="workspace-preview" heading={`Preview ${previewMapping?.product?.title ?? 'try-on'}`}>
         {previewMapping && <PreviewPanel mapping={previewMapping} />}
       </s-modal>
-      <ChangeModelDialog key={changeMapping?.id ?? 'no-change'} mapping={changeMapping} assets={data.assets} onDone={refreshWorkspace} />
+      <ChangeModelDialog key={changeMapping?.id ?? 'no-change'} mapping={changeMapping} assets={data.assets} onDone={refreshWorkspace} session={changeDialogSession} />
       <RemoveTryOnDialog key={removeMapping?.id ?? 'no-remove'} mapping={removeMapping} onDone={refreshWorkspace} />
 
       <s-section slot="aside" heading="Support">

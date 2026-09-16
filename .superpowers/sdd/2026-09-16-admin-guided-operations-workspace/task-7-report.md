@@ -41,3 +41,16 @@ Regression coverage was added at the Workspace dialog boundary for normal unchan
 - `npm run build`: passed for client and SSR production bundles.
 - Fix Round 1 SHA: the commit containing this report section (recorded in the final handoff).
 - Concerns: no Fix Round 1 blockers; existing build/test warnings are unchanged from Task 7.
+
+## Fix Round 2
+
+Made change-model retry eligibility session-scoped and submit-attempt-scoped. The dialog records the exact product/model pair and prior fetcher response at submit time, and only a newer matching retryable response can enable `Try again`. The attempt is invalidated on model selection, mapping change, dialog session change, native modal hide, successful completion, and every new submit. Workspace increments the dialog session on every open, including reopening the same mapping while the component remains mounted.
+
+Lifecycle regression coverage now proves that selecting away and back cannot resurrect a failure, reopening the same mapping rejects stale data, a fresh matching failure in the reopened session enables retry, and exact product/model resubmission remains intact.
+
+- Focused Workspace/action suite: 6 files, 45 tests passed.
+- Full suite: 52 files, 287 tests passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed for client and SSR production bundles.
+- Fix Round 2 SHA: the commit containing this report section (recorded in the final handoff).
+- Concerns: no Fix Round 2 blockers; existing build/test warnings are unchanged.
