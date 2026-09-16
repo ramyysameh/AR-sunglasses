@@ -1,6 +1,6 @@
 /* eslint-disable react/prop-types -- route-local modal components consume loader-shaped data */
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import { useFetcher, useLoaderData, useNavigate } from 'react-router'
+import { useFetcher, useLoaderData } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
@@ -9,7 +9,6 @@ import { getActivePlanName } from '../billing.server'
 import { deleteModelGlb } from '../storage.server'
 import ModelViewer from '../components/ModelViewer'
 import {
-  ModelUploadFlow,
   createUploadCancellationCoordinator,
   uploadModalHideBehavior,
   uploadModalReducer,
@@ -127,15 +126,6 @@ function useModalEvents({ onHide = undefined, onAfterHide = undefined }) {
   }, [onAfterHide, onHide])
 
   return modalRef
-}
-
-export function UploadModal() {
-  const navigate = useNavigate()
-  return (
-    <ModelUploadFlow
-      onUploaded={(asset) => navigate(`/app?add=1&model=${encodeURIComponent(asset.id)}`)}
-    />
-  )
 }
 
 function RenameModalContent({ asset }) {
@@ -299,17 +289,14 @@ export default function Models() {
 
   return (
     <s-page heading="Models">
-      <s-stack className="models-upload-action" direction="block" alignItems="center">
-        <UploadModal />
-      </s-stack>
-
       <s-section heading="Model library">
         {assets.length === 0 ? (
           <s-stack direction="block" gap="base">
-            <s-text type="strong">Add your first model</s-text>
+            <s-text type="strong">Your model library is empty</s-text>
             <s-paragraph>
-              Upload a .glb eyewear model to make it available for try-on products.
+              Upload a model while setting up try-on for a product.
             </s-paragraph>
+            <s-link href="/app">Set up try-on</s-link>
           </s-stack>
         ) : (
           <s-grid

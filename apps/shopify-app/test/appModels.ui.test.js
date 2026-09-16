@@ -2,11 +2,10 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const routeState = vi.hoisted(() => ({ loaderData: null, navigate: vi.fn() }))
+const routeState = vi.hoisted(() => ({ loaderData: null }))
 
 vi.mock('react-router', () => ({
   useLoaderData: () => routeState.loaderData,
-  useNavigate: () => routeState.navigate,
   useFetcher: () => ({ data: null, state: 'idle', submit: vi.fn() }),
   useRevalidator: () => ({ revalidate: vi.fn() }),
 }))
@@ -31,14 +30,12 @@ const {
   modelName,
   modalSessionReducer,
   renameSubmitDisabled,
-  UploadModal,
   uploadModalReducer,
   uploadModalHideBehavior,
   uploadValidationError,
 } = await import('../app/routes/app.models.jsx')
 
 beforeEach(() => {
-  routeState.navigate.mockReset()
   routeState.loaderData = {
     assets: [
       {
@@ -60,16 +57,6 @@ beforeEach(() => {
 })
 
 describe('Models UI behavior', () => {
-  it('hands an uploaded model directly to the Workspace add flow', () => {
-    const modal = UploadModal()
-
-    modal.props.onUploaded({ id: 'gid://ar/Model Asset/black & gold' })
-
-    expect(routeState.navigate).toHaveBeenCalledWith(
-      '/app?add=1&model=gid%3A%2F%2Far%2FModel%20Asset%2Fblack%20%26%20gold',
-    )
-  })
-
   it('uses the merchant label before the filename and short id fallbacks', () => {
     expect(modelName({ id: '123456789', label: '  Pelmo black  ', filename: 'pelmo.glb' })).toBe('Pelmo black')
     expect(modelName({ id: '123456789', label: null, filename: 'pelmo.glb' })).toBe('pelmo.glb')
@@ -144,14 +131,11 @@ describe('Models UI behavior', () => {
     expect(uploadModalHideBehavior(false)).toEqual({ reopen: false, reset: true })
   })
 
-  it('renders one upload action with valid modal targets', () => {
+  it('keeps Models as a library without a second upload action', () => {
     const html = renderToStaticMarkup(React.createElement(Models))
     const targets = [...html.matchAll(/commandFor="([^"]+)"/g)].map((match) => match[1])
 
-    expect(html).not.toMatch(/<s-button slot="primary-action" commandFor="upload-model" command="--show"/)
-    expect(html.match(/commandFor="upload-model" command="--show"/g)).toHaveLength(1)
-    expect(html).toContain('className="models-upload-action"')
-    expect(html).toContain('alignItems="center"')
+    expect(html).not.toContain('upload-model')
     expect(html).toContain('Pelmo black')
     expect(html).toContain('pelmo.glb')
     expect(html).toContain('Used by 2 products')
@@ -161,8 +145,6 @@ describe('Models UI behavior', () => {
     expect(html.match(/id="rename-model"/g)).toHaveLength(1)
     expect(html.match(/id="delete-model"/g)).toHaveLength(1)
     expect(html.match(/commandFor="delete-model"/g)).toHaveLength(2)
-    expect(html).toContain('accessibilityLabel="Choose a GLB model file"')
-
     for (const target of new Set(targets)) {
       const escapedTarget = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       expect(html.match(new RegExp(`id="${escapedTarget}"`, 'g'))).toHaveLength(1)
