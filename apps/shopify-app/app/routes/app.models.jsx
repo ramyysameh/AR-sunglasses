@@ -133,7 +133,6 @@ export function UploadModal() {
   const navigate = useNavigate()
   return (
     <ModelUploadFlow
-      triggerSlot="primary-action"
       onUploaded={(asset) => navigate(`/app?add=1&model=${encodeURIComponent(asset.id)}`)}
     />
   )
@@ -300,6 +299,10 @@ export default function Models() {
 
   return (
     <s-page heading="Models">
+      <s-stack className="models-upload-action" direction="block" alignItems="center">
+        <UploadModal />
+      </s-stack>
+
       <s-section heading="Model library">
         {assets.length === 0 ? (
           <s-stack direction="block" gap="base">
@@ -374,7 +377,6 @@ export default function Models() {
         )}
       </s-section>
 
-      <UploadModal />
       <RenameModal
         asset={renameAsset}
         session={renameModal.session}

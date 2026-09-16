@@ -148,8 +148,10 @@ describe('Models UI behavior', () => {
     const html = renderToStaticMarkup(React.createElement(Models))
     const targets = [...html.matchAll(/commandFor="([^"]+)"/g)].map((match) => match[1])
 
-    expect(html).toContain('slot="primary-action"')
+    expect(html).not.toMatch(/<s-button slot="primary-action" commandFor="upload-model" command="--show"/)
     expect(html.match(/commandFor="upload-model" command="--show"/g)).toHaveLength(1)
+    expect(html).toContain('className="models-upload-action"')
+    expect(html).toContain('alignItems="center"')
     expect(html).toContain('Pelmo black')
     expect(html).toContain('pelmo.glb')
     expect(html).toContain('Used by 2 products')
