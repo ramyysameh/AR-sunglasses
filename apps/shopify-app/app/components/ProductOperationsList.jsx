@@ -30,7 +30,14 @@ export function primaryActionFor(mapping, pricingUrl) {
     return { id: 'theme', label: 'Add to theme', href: mapping.themeUrl }
   }
   if (mapping.status === 'model-issue') return { id: 'choose-model', label: 'Choose model' }
-  return { id: 'plans', label: 'View plans', href: pricingUrl }
+  if (
+    mapping.status === 'plan-limit'
+    && typeof pricingUrl === 'string'
+    && pricingUrl.trim()
+  ) {
+    return { id: 'plans', label: 'View plans', href: pricingUrl }
+  }
+  return null
 }
 
 function modelName(modelAsset) {
@@ -65,7 +72,25 @@ function ProductImage({ product }) {
 }
 
 function PrimaryAction({ action, mapping, onPreview, onChangeModel }) {
-  if (action.href) {
+  if (!action) return null
+
+  if (action.id === 'preview') {
+    return (
+      <s-button variant="primary" onClick={() => onPreview(mapping)}>
+        {action.label}
+      </s-button>
+    )
+  }
+
+  if (action.id === 'choose-model') {
+    return (
+      <s-button variant="primary" onClick={() => onChangeModel(mapping)}>
+        {action.label}
+      </s-button>
+    )
+  }
+
+  if ((action.id === 'theme' || action.id === 'plans') && action.href) {
     return (
       <s-button variant="primary" href={action.href} target="_top" icon="external">
         {action.label}
@@ -73,11 +98,7 @@ function PrimaryAction({ action, mapping, onPreview, onChangeModel }) {
     )
   }
 
-  const onClick = action.id === 'preview'
-    ? () => onPreview(mapping)
-    : () => onChangeModel(mapping)
-
-  return <s-button variant="primary" onClick={onClick}>{action.label}</s-button>
+  return null
 }
 
 export default function ProductOperationsList({

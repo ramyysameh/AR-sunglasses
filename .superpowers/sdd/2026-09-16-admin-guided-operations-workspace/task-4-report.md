@@ -33,3 +33,35 @@ Complete. Added standalone Workspace guide, status/search filters, and product o
 ## Concerns
 
 None.
+
+## Fix Round 1
+
+Commit: this atomic fix-round commit; exact SHA is reported in the task result because a commit cannot contain its own hash.
+
+### Changes
+
+- Replaced the generic non-link primary-action fallback with explicit dispatch by action ID.
+- Preview calls `onPreview(mapping)` and Choose model calls `onChangeModel(mapping)`; theme and plan actions are destination-only links.
+- Plan-limit recovery renders View plans only when the page supplies a non-empty `pricingUrl`. Without it, the row retains its plain Plan limit status and no misleading primary action is rendered.
+- Added `role="group"` and an accessible label to the status-filter controls.
+- Added direct production-handler interaction coverage for exact status/search callback values, Preview and Change model mapping payloads, plan destinations and missing-pricing behavior, and guide callbacks/links.
+
+### TDD And Verification
+
+- RED: focused tests failed because the filter container lacked group semantics and a missing-pricing View plans button called `onChangeModel`.
+- GREEN: `npm test -- workspaceComponents.ui.test.js` passed, 9 tests.
+- Adjacent verification: `npm test -- workspaceComponents.ui.test.js workspace.server.test.js appProducts.ui.test.js` passed, 3 files and 25 tests.
+- Targeted ESLint passed for all Task 4 components and tests.
+- `npm run typecheck` passed.
+- `git diff --check` passed.
+
+### Self-review
+
+- Every primary action ID now has an explicit rendering/dispatch branch; unknown or unavailable actions render nothing.
+- A missing plan URL has no callable path to model selection.
+- Tests invoke real component handlers rather than asserting markup alone, while retaining focused accessibility/render contracts for custom elements.
+- No route composition, dependencies, unrelated files, or prior-task behavior changed.
+
+### Concerns
+
+None.

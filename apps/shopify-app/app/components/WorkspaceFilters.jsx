@@ -15,7 +15,11 @@ export default function WorkspaceFilters({
 }) {
   return (
     <s-stack direction="block" gap="base">
-      <div className="workspace-summary" aria-label="Filter products by status">
+      <div
+        className="workspace-summary"
+        role="group"
+        aria-label="Filter products by status"
+      >
         {FILTERS.map((filter) => (
           <button
             key={filter.id}
