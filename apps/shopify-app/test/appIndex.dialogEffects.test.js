@@ -134,3 +134,70 @@ describe.each([
     expect(onDone).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('change model retry submission', () => {
+  const renderChangeDialog = () => renderDialog(ChangeModelDialog, {
+    mapping,
+    assets: [{ id: 'old-model', status: 'ready' }],
+    onDone: vi.fn(),
+  })
+
+  const primaryButton = (dialog) => findElements(dialog, 's-button')
+    .find((button) => button.props.slot === 'primary-action')
+
+  it('disables an unchanged model during normal editing', () => {
+    const button = primaryButton(renderChangeDialog())
+
+    expect(button.props.disabled).toBe(true)
+    expect(button.props.children).toBe('Change model')
+  })
+
+  it('enables Try again for a matching retryable publication failure', () => {
+    runtime.fetcher.data = {
+      retryable: true,
+      productId: mapping.productId,
+      modelAssetId: mapping.modelAssetId,
+      error: 'Could not update the storefront.',
+    }
+
+    const dialog = renderChangeDialog()
+    const button = primaryButton(dialog)
+
+    expect(button.props.disabled).toBe(false)
+    expect(button.props.children).toBe('Try again')
+    expect(findElements(dialog, 's-banner')[0].props.children).toBe('Could not update the storefront.')
+  })
+
+  it.each([
+    ['another product', { retryable: true, productId: 'gid://shopify/Product/stale', modelAssetId: mapping.modelAssetId }],
+    ['another model', { retryable: true, productId: mapping.productId, modelAssetId: 'stale-model' }],
+    ['a non-retryable response', { retryable: false, productId: mapping.productId, modelAssetId: mapping.modelAssetId }],
+  ])('keeps the unchanged model disabled for %s', (_case, response) => {
+    runtime.fetcher.data = response
+
+    const button = primaryButton(renderChangeDialog())
+
+    expect(button.props.disabled).toBe(true)
+    expect(button.props.children).toBe('Change model')
+  })
+
+  it('resubmits the exact mapping product and selected model values', () => {
+    runtime.fetcher.data = {
+      retryable: true,
+      productId: mapping.productId,
+      modelAssetId: mapping.modelAssetId,
+      error: 'Could not update the storefront.',
+    }
+
+    const dialog = renderChangeDialog()
+    const fields = Object.fromEntries(
+      findElements(dialog, 'input').map((input) => [input.props.name, input.props.value]),
+    )
+
+    expect(fields).toEqual({
+      intent: 'map',
+      productId: mapping.productId,
+      modelAssetId: mapping.modelAssetId,
+    })
+  })
+})

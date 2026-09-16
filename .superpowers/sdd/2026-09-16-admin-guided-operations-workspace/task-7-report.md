@@ -28,3 +28,16 @@ The legacy Products route is redirect-only and does not export an action. No pro
 ## Concerns
 
 No Task 7 blockers. Existing non-failing build warnings remain for the large `model-viewer` chunk and React Router v8 future flags. The full test run also emits expected stderr from error-path tests and an existing partial-mock warning in `tryonConfig.billing.test.js`.
+
+## Fix Round 1
+
+Restored retrying the same model after a retryable storefront publication failure. The Workspace change-model dialog now enables an unchanged selection only when the current fetcher response is retryable and exactly matches both the mapping product id and selected model asset id. Matching failures retain the selected model and error banner, label the submit action `Try again`, and resubmit the exact product/model pair. Normal unchanged selections and nonmatching or stale retry payloads remain disabled.
+
+Regression coverage was added at the Workspace dialog boundary for normal unchanged editing, exact retry matches, product/model/non-retryable mismatches, retained error output, and exact submitted hidden values.
+
+- Focused Workspace/action suite: 6 files, 42 tests passed.
+- Full suite: 52 files, 284 tests passed.
+- `npm run typecheck`: passed.
+- `npm run build`: passed for client and SSR production bundles.
+- Fix Round 1 SHA: the commit containing this report section (recorded in the final handoff).
+- Concerns: no Fix Round 1 blockers; existing build/test warnings are unchanged from Task 7.

@@ -55,7 +55,14 @@ export function ChangeModelDialog({ mapping, assets, onDone }) {
   const shopify = useAppBridge()
   const submissionRef = useRef(null)
   const [modelAssetId, setModelAssetId] = useState(mapping?.modelAssetId ?? '')
-  const unchanged = !mapping || !modelAssetId || modelAssetId === mapping.modelAssetId
+  const retryable = Boolean(
+    fetcher.data?.retryable
+    && fetcher.data.productId === mapping?.productId
+    && fetcher.data.modelAssetId === modelAssetId,
+  )
+  const submitDisabled = !mapping
+    || !modelAssetId
+    || (modelAssetId === mapping.modelAssetId && !retryable)
 
   useEffect(() => {
     const submission = submissionRef.current
@@ -82,7 +89,7 @@ export function ChangeModelDialog({ mapping, assets, onDone }) {
         <input type="hidden" name="intent" value="map" />
         <input type="hidden" name="productId" value={mapping?.productId ?? ''} />
         <input type="hidden" name="modelAssetId" value={modelAssetId} />
-        <s-button slot="primary-action" type="submit" variant="primary" disabled={unchanged} loading={fetcher.state !== 'idle'}>Change model</s-button>
+        <s-button slot="primary-action" type="submit" variant="primary" disabled={submitDisabled} loading={fetcher.state !== 'idle'}>{retryable ? 'Try again' : 'Change model'}</s-button>
       </fetcher.Form>
     </s-modal>
   )
