@@ -1,8 +1,7 @@
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
-import { getActivePlanName } from "../billing.server";
-import { emptyWorkspace, loadWorkspace } from "../workspace.server";
+import { loadWorkspace } from "../workspace.server";
 
 function resolveEngineUrl(request) {
   return (
@@ -20,8 +19,6 @@ export const loader = async ({ request }) => {
   // content, so this loader must NOT throw its own redirect: a /app -> /app
   // redirect loops forever and renders a dead, control-less page (App Store
   // rejection Ref 127328). On no plan, do no gated DB work and return zeros.
-  const activePlan = await getActivePlanName(admin, session.shop);
-  if (!activePlan) return emptyWorkspace(session.shop);
   return loadWorkspace({ admin, shop: session.shop, engineUrl: resolveEngineUrl(request) });
 };
 

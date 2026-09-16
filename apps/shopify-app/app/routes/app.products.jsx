@@ -4,12 +4,11 @@ import { useFetcher, useLoaderData } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
-import { getActivePlanName } from '../billing.server'
 import { handleProductAction } from '../productActions.server'
 import ModelPicker from '../components/ModelPicker'
 import PreviewPanel from '../components/PreviewPanel'
 import StatusBadge from '../components/StatusBadge'
-import { emptyWorkspace, loadWorkspace } from '../workspace.server'
+import { loadWorkspace, normalizeWorkspaceStatus } from '../workspace.server'
 
 // Resolved per-request, not at module load: the last resort must be an
 // absolute URL, and only the incoming request reliably gives us one. Neither
@@ -27,13 +26,10 @@ function resolveEngineUrl(request) {
 }
 
 export const loader = async ({ request }) => {
-  const engineUrl = resolveEngineUrl(request)
   const { session, admin } = await authenticate.admin(request)
   // app.jsx owns the no-subscription screen; this loader must NOT redirect
   // (App Store rejection Ref 127328). Return empty and do no gated work.
-  const activePlan = await getActivePlanName(admin, session.shop)
-  if (!activePlan) return { ...emptyWorkspace(session.shop), engineUrl }
-  return { ...await loadWorkspace({ admin, shop: session.shop, engineUrl }), engineUrl }
+  return loadWorkspace({ admin, shop: session.shop, engineUrl: resolveEngineUrl(request) })
 }
 
 export const action = async ({ request }) => {
@@ -65,6 +61,17 @@ export function mappingSubmitDisabled({
   if (retryable) return false
   if (currentModelAssetId) return currentModelAssetId === modelAssetId
   return atLimit
+}
+
+function workspaceMapping(mapping) {
+  const status = normalizeWorkspaceStatus(mapping.status)
+  const displayStatus = mapping.merchantStatus
+    ?? (typeof mapping.status === 'object' ? mapping.status : {
+      live: { label: 'Live', tone: 'success' },
+      'add-to-theme': { label: 'Not on your theme yet', tone: 'warning' },
+      'model-issue': { label: 'Check fit', tone: 'warning' },
+    }[status])
+  return { ...mapping, workspaceStatus: status, displayStatus }
 }
 
 export function mappingModalReducer(state, action) {
@@ -225,7 +232,8 @@ function RemoveTryOnModal({ mapping, session, onDismiss }) {
 }
 
 export default function Products() {
-  const { mappings, assets, usage, themeUrl } = useLoaderData()
+  const { mappings: loadedMappings, assets, usage, themeUrl } = useLoaderData()
+  const mappings = loadedMappings.map(workspaceMapping)
   const shopify = useAppBridge()
 
   const mapFetcher = useFetcher()
@@ -286,7 +294,7 @@ export default function Products() {
     mapFetcher.submit({ intent: 'map', productId: picked.id, modelAssetId }, { method: 'POST' })
   }
 
-  const liveCount = mappings.filter((mapping) => mapping.status === 'live').length
+  const liveCount = mappings.filter((mapping) => mapping.workspaceStatus === 'live').length
   const attentionCount = mappings.length - liveCount
   const usageText = usage.unlimited
     ? `${usage.used} product${usage.used === 1 ? '' : 's'} using try-on`
@@ -383,8 +391,8 @@ export default function Products() {
                   <s-table-cell>{modelName(m.modelAsset)}</s-table-cell>
                   <s-table-cell>
                     <s-stack direction="inline" gap="small-500" alignItems="center">
-                      <StatusBadge status={m.merchantStatus ?? m.status} />
-                      {(m.status === 'add-to-theme' || m.status?.id === 'not_on_theme') && (
+                      <StatusBadge status={m.displayStatus} />
+                      {m.workspaceStatus === 'add-to-theme' && (
                         <s-button
                           href={m.themeUrl ?? themeUrl}
                           target="_top"

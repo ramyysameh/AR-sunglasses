@@ -162,4 +162,20 @@ describe('Products working surface', () => {
     expect(html).toContain('variant="primary"')
     expect(html).toContain('icon="external"')
   })
+
+  it('uses legacy status objects consistently for counts, badges, and actions', () => {
+    routeState.loaderData.mappings = [
+      mapping('live'),
+      {
+        ...mapping('theme'),
+        status: { id: 'not_on_theme', label: 'Not on theme', tone: 'warning' },
+      },
+    ]
+
+    const html = renderToStaticMarkup(React.createElement(Products))
+    expect(html).toContain('1 live, 1 needs attention')
+    expect(html).toContain('>Live</s-badge>')
+    expect(html).toContain('>Not on theme</s-badge>')
+    expect(html).toContain('previewPath=%2Fproducts%2Fproduct-theme')
+  })
 })

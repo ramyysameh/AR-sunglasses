@@ -4,10 +4,11 @@ import { randomUUID } from 'node:crypto'
 const tag = randomUUID().slice(0, 8)
 const shop = `limit-${tag}.myshopify.com`
 
-const hoisted = vi.hoisted(() => ({ plan: 'Starter' }))
+const hoisted = vi.hoisted(() => ({ plan: 'Starter', billingLookups: 0 }))
 const admin = {
-  graphql: async () =>
-    new Response(
+  graphql: async () => {
+    hoisted.billingLookups += 1
+    return new Response(
       JSON.stringify({
         data: {
           currentAppInstallation: {
@@ -17,7 +18,8 @@ const admin = {
           },
         },
       }),
-    ),
+    )
+  },
 }
 // Fake the Admin GraphQL response itself (rather than mocking
 // getActivePlanName) so that requireActivePlanForLoader -- which calls
@@ -59,6 +61,7 @@ const map = (productId, modelAssetId) => handleProductAction({
 // Each case controls its own mapping count, so clear mappings first. Assets
 // persist (harmless, referenced by id) and are removed in afterAll.
 beforeEach(async () => {
+  hoisted.billingLookups = 0
   await prisma.productMapping.deleteMany({ where: { shop } })
 })
 
@@ -96,21 +99,25 @@ describe('map action tier limit', () => {
 })
 
 describe('products loader subscription gate', () => {
+  it('loads normally with an active subscription', async () => {
+    hoisted.plan = 'Starter'
+    const result = await loader({ request: new Request('https://x/app/products') })
+    expect(result).toHaveProperty('assets')
+    expect(result).toHaveProperty('mappings')
+    expect(hoisted.billingLookups).toBe(1)
+  })
+
   it('does NOT redirect and returns empty data when there is no active subscription', async () => {
     hoisted.plan = null
     // Throwing redirect('/app') here looped forever (/app/products -> /app ->
     // /app...), rendering a dead, control-less page (App Store rejection Ref
     // 127328). The app.jsx layout owns the no-subscription screen, so this
     // loader must resolve without a redirect and do no gated DB work.
+    const findAssets = vi.spyOn(prisma.modelAsset, 'findMany')
     const result = await loader({ request: new Request('https://x/app/products') })
     expect(result.assets).toEqual([])
     expect(result.mappings).toEqual([])
-  })
-
-  it('loads normally with an active subscription', async () => {
-    hoisted.plan = 'Starter'
-    const result = await loader({ request: new Request('https://x/app/products') })
-    expect(result).toHaveProperty('assets')
-    expect(result).toHaveProperty('mappings')
+    expect(hoisted.billingLookups).toBe(1)
+    expect(findAssets).not.toHaveBeenCalled()
   })
 })

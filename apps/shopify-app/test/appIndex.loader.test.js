@@ -3,15 +3,19 @@ import { randomUUID } from 'node:crypto'
 
 const tag = randomUUID().slice(0, 8)
 const shop = `home-${tag}.myshopify.com`
+const billingState = vi.hoisted(() => ({ lookups: 0 }))
 
 vi.mock('../app/shopify.server.js', () => ({
   authenticate: {
     admin: async () => ({
       session: { shop },
       admin: {
-        graphql: async () => new Response(JSON.stringify({
-          data: { currentAppInstallation: { activeSubscriptions: [{ name: 'Pro', status: 'ACTIVE' }] } },
-        })),
+        graphql: async () => {
+          billingState.lookups += 1
+          return new Response(JSON.stringify({
+            data: { currentAppInstallation: { activeSubscriptions: [{ name: 'Pro', status: 'ACTIVE' }] } },
+          }))
+        },
       },
     }),
   },
@@ -25,6 +29,7 @@ const prisma = (await import('../app/db.server.js')).default
 const { loader } = await import('../app/routes/app._index.jsx')
 
 beforeEach(async () => {
+  billingState.lookups = 0
   await prisma.productMapping.deleteMany({ where: { shop } })
   await prisma.modelAsset.deleteMany({ where: { shop } })
 })
@@ -35,6 +40,11 @@ afterAll(async () => {
 })
 
 describe('app._index workspace loader', () => {
+  it('performs one billing lookup for an active-plan request', async () => {
+    await loader({ request: new Request('https://x/app') })
+    expect(billingState.lookups).toBe(1)
+  })
+
   it('returns assets, enriched mappings, and counts for the shop', async () => {
     const asset = await prisma.modelAsset.create({ data: { shop, storageRef: `${tag}/m.glb`, fitMetadata: {} } })
     await prisma.productMapping.create({ data: { shop, productId: `gid://shopify/Product/${tag}`, modelAssetId: asset.id } })
