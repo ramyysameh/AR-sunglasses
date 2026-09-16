@@ -200,7 +200,12 @@ function UploadContent({ cancellationCoordinator, embedded, onBusyChange, onUplo
           <s-stack direction="block" gap="small-500">
             {typeof progress === 'number' ? (
               <>
-                <progress value={progress} max="100" style={{ width: '100%' }} />
+                <progress
+                  aria-label="Model upload progress"
+                  value={progress}
+                  max="100"
+                  style={{ width: '100%' }}
+                />
                 <s-text>Uploading {progress}%</s-text>
               </>
             ) : (
