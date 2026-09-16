@@ -35,7 +35,7 @@ vi.mock('../app/shopify.server.js', () => ({
 }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { loader } = await import('../app/routes/app.products.jsx')
+const { loader } = await import('../app/routes/app._index.jsx')
 const { handleProductAction } = await import('../app/productActions.server.js')
 
 async function seedAsset() {
@@ -101,7 +101,7 @@ describe('map action tier limit', () => {
 describe('products loader subscription gate', () => {
   it('loads normally with an active subscription', async () => {
     hoisted.plan = 'Starter'
-    const result = await loader({ request: new Request('https://x/app/products') })
+    const result = await loader({ request: new Request('https://x/app') })
     expect(result).toHaveProperty('assets')
     expect(result).toHaveProperty('mappings')
     expect(hoisted.billingLookups).toBe(1)
@@ -114,7 +114,7 @@ describe('products loader subscription gate', () => {
     // 127328). The app.jsx layout owns the no-subscription screen, so this
     // loader must resolve without a redirect and do no gated DB work.
     const findAssets = vi.spyOn(prisma.modelAsset, 'findMany')
-    const result = await loader({ request: new Request('https://x/app/products') })
+    const result = await loader({ request: new Request('https://x/app') })
     expect(result.assets).toEqual([])
     expect(result.mappings).toEqual([])
     expect(hoisted.billingLookups).toBe(1)

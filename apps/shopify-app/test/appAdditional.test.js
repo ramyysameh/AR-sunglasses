@@ -43,7 +43,7 @@ describe('Help recovery actions', () => {
     expect(html).not.toMatch(
       /<s-page[^>]*inlineSize="small"[^>]*>[\s\S]*<s-section[^>]*slot="aside"/,
     )
-    expect(html).toContain('href="/app/products"')
+    expect(html).toContain('href="/app"')
     expect(html).toContain('href="/app/models"')
     expect(html).toContain('href="/privacy" target="_blank"')
     expect(html).toContain('href="mailto:ramy.sameh2@gmail.com"')

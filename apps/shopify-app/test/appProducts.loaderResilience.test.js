@@ -41,7 +41,7 @@ vi.mock('../app/shopify.server.js', () => {
 })
 
 const prisma = (await import('../app/db.server.js')).default
-const { loader } = await import('../app/routes/app.products.jsx')
+const { loader } = await import('../app/routes/app._index.jsx')
 const shopifyServer = await import('../app/shopify.server.js')
 const state = shopifyServer.__testState
 
@@ -66,7 +66,7 @@ describe('app.products loader resilience (fallback and error handling)', () => {
     })
     await prisma.productMapping.create({ data: { shop, productId: productGid, modelAssetId: asset.id } })
 
-    const result = await loader({ request: new Request('https://x/app/products') })
+    const result = await loader({ request: new Request('https://x/app') })
     const mapping = result.mappings.find((m) => m.productId === productGid)
     expect(mapping.product).toBeNull()
   })
@@ -78,7 +78,7 @@ describe('app.products loader resilience (fallback and error handling)', () => {
     })
     await prisma.productMapping.create({ data: { shop, productId: productGid, modelAssetId: asset.id } })
 
-    const result = await loader({ request: new Request('https://x/app/products') })
+    const result = await loader({ request: new Request('https://x/app') })
     // Loader does not throw; it gracefully degrades
     expect(result).toHaveProperty('assets')
     expect(result).toHaveProperty('mappings')

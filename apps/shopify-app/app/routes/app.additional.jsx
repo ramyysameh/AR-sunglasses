@@ -26,7 +26,7 @@ export default function HelpPage() {
 
       <s-section heading="Try on button is missing">
         <s-paragraph>
-          Assign a model to the product in <s-link href="/app/products">Products</s-link>,
+          Assign a model to the product in <s-link href="/app">Workspace</s-link>,
           then add the AR Try-On block to the product template in the{' '}
           <a href={themeEditorUrl} target="_top" rel="noreferrer">
             theme editor

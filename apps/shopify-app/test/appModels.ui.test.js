@@ -2,10 +2,11 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const routeState = vi.hoisted(() => ({ loaderData: null }))
+const routeState = vi.hoisted(() => ({ loaderData: null, navigate: vi.fn() }))
 
 vi.mock('react-router', () => ({
   useLoaderData: () => routeState.loaderData,
+  useNavigate: () => routeState.navigate,
   useFetcher: () => ({ data: null, state: 'idle', submit: vi.fn() }),
   useRevalidator: () => ({ revalidate: vi.fn() }),
 }))
@@ -30,12 +31,14 @@ const {
   modelName,
   modalSessionReducer,
   renameSubmitDisabled,
+  UploadModal,
   uploadModalReducer,
   uploadModalHideBehavior,
   uploadValidationError,
 } = await import('../app/routes/app.models.jsx')
 
 beforeEach(() => {
+  routeState.navigate.mockReset()
   routeState.loaderData = {
     assets: [
       {
@@ -57,6 +60,16 @@ beforeEach(() => {
 })
 
 describe('Models UI behavior', () => {
+  it('hands an uploaded model directly to the Workspace add flow', () => {
+    const modal = UploadModal()
+
+    modal.props.onUploaded({ id: 'gid://ar/Model Asset/black & gold' })
+
+    expect(routeState.navigate).toHaveBeenCalledWith(
+      '/app?add=1&model=gid%3A%2F%2Far%2FModel%20Asset%2Fblack%20%26%20gold',
+    )
+  })
+
   it('uses the merchant label before the filename and short id fallbacks', () => {
     expect(modelName({ id: '123456789', label: '  Pelmo black  ', filename: 'pelmo.glb' })).toBe('Pelmo black')
     expect(modelName({ id: '123456789', label: null, filename: 'pelmo.glb' })).toBe('pelmo.glb')
@@ -141,7 +154,7 @@ describe('Models UI behavior', () => {
     expect(html).toContain('Pelmo black')
     expect(html).toContain('pelmo.glb')
     expect(html).toContain('Used by 2 products')
-    expect(html).toContain('href="/app/products"')
+    expect(html).toContain('href="/app"')
     expect(html).toContain('Check fit')
     expect(html).not.toMatch(/A1 pipeline|calibrat|manual anchor|geometric confidence/i)
     expect(html.match(/id="rename-model"/g)).toHaveLength(1)

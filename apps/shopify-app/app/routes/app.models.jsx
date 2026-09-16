@@ -1,6 +1,6 @@
 /* eslint-disable react/prop-types -- route-local modal components consume loader-shaped data */
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import { useFetcher, useLoaderData } from 'react-router'
+import { useFetcher, useLoaderData, useNavigate } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
@@ -129,8 +129,13 @@ function useModalEvents({ onHide = undefined, onAfterHide = undefined }) {
   return modalRef
 }
 
-function UploadModal() {
-  return <ModelUploadFlow onUploaded={() => window.location.reload()} />
+export function UploadModal() {
+  const navigate = useNavigate()
+  return (
+    <ModelUploadFlow
+      onUploaded={(asset) => navigate(`/app?add=1&model=${encodeURIComponent(asset.id)}`)}
+    />
+  )
 }
 
 function RenameModalContent({ asset }) {
@@ -344,7 +349,7 @@ export default function Models() {
                     {asset.mappingCount > 0 ? (
                       <s-text color="subdued">
                         Used by {asset.mappingCount} product{asset.mappingCount === 1 ? '' : 's'}.{' '}
-                        <s-link href="/app/products">View products</s-link>
+                        <s-link href="/app">View products</s-link>
                       </s-text>
                     ) : (
                       <s-text color="subdued">Not used by any products</s-text>
