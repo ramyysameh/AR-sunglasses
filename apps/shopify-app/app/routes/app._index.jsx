@@ -1,10 +1,18 @@
-import { boundary } from "@shopify/shopify-app-react-router/server";
-import { useState } from "react";
-import { useLoaderData } from "react-router";
-import { authenticate } from "../shopify.server";
-import { handleProductAction } from "../productActions.server";
-import { loadWorkspace } from "../workspace.server";
-import { AddTryOnFlow } from "../components/AddTryOnFlow";
+/* eslint-disable react/prop-types -- route-local dialogs consume loader-shaped data */
+import { boundary } from '@shopify/shopify-app-react-router/server'
+import { useAppBridge } from '@shopify/app-bridge-react'
+import { useCallback, useEffect, useState } from 'react'
+import { useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-router'
+import { authenticate } from '../shopify.server'
+import { handleProductAction } from '../productActions.server'
+import { loadWorkspace } from '../workspace.server'
+import { AddTryOnFlow } from '../components/AddTryOnFlow'
+import ModelPicker from '../components/ModelPicker'
+import PreviewPanel from '../components/PreviewPanel'
+import ProductOperationsList, { filterWorkspaceMappings } from '../components/ProductOperationsList'
+import WorkspaceFilters from '../components/WorkspaceFilters'
+import WorkspaceGuide from '../components/WorkspaceGuide'
+import workspaceStyles from '../styles/workspace.css?url'
 
 function resolveEngineUrl(request) {
   return (
@@ -13,146 +21,161 @@ function resolveEngineUrl(request) {
     // eslint-disable-next-line no-undef
     || (process.env.SHOPIFY_APP_URL && `${process.env.SHOPIFY_APP_URL}/tryon/index.html`)
     || new URL('/tryon/index.html', request.url).toString()
-  );
+  )
 }
 
+function isReady(asset) {
+  return !asset.status || asset.status.toLowerCase() === 'ready'
+}
+
+export function initialAddRequest(search, assets) {
+  const params = new URLSearchParams(search)
+  if (params.get('add') !== '1') return { open: false, modelId: undefined }
+  const requestedId = params.get('model')
+  const modelId = assets.some((asset) => asset.id === requestedId && isReady(asset))
+    ? requestedId
+    : undefined
+  return { open: true, modelId }
+}
+
+export const links = () => [{ rel: 'stylesheet', href: workspaceStyles }]
+
 export const loader = async ({ request }) => {
-  const { session, admin } = await authenticate.admin(request);
-  // The app.jsx layout owns the no-subscription screen and hides this route's
-  // content, so this loader must NOT throw its own redirect: a /app -> /app
-  // redirect loops forever and renders a dead, control-less page (App Store
-  // rejection Ref 127328). On no plan, do no gated DB work and return zeros.
-  return loadWorkspace({ admin, shop: session.shop, engineUrl: resolveEngineUrl(request) });
-};
+  const { session, admin } = await authenticate.admin(request)
+  return loadWorkspace({ admin, shop: session.shop, engineUrl: resolveEngineUrl(request) })
+}
 
 export const action = async ({ request }) => {
-  const { session, admin } = await authenticate.admin(request);
-  return handleProductAction({ request, admin, shop: session.shop });
-};
+  const { session, admin } = await authenticate.admin(request)
+  return handleProductAction({ request, admin, shop: session.shop })
+}
 
-export default function Index() {
-  const { assets, counts, usage, themeUrl } = useLoaderData();
-  const [addTryOnOpen, setAddTryOnOpen] = useState(false);
-  const modelCount = assets.length;
-  const mappingCount = counts.all;
-  const liveCount = counts.live;
-  const usagePercent = usage.unlimited || usage.limit <= 0
-    ? 0
-    : Math.min(100, Math.round((usage.used / usage.limit) * 100));
-  const openPricing = () => {
-    if (usage.pricingUrl) window.open(usage.pricingUrl, "_top");
-  };
-  const steps = [
-    { done: modelCount > 0, text: "Upload a model", note: modelCount > 0 ? `${modelCount} uploaded` : null },
-    { done: mappingCount > 0, text: "Add try-on to a product", note: mappingCount > 0 ? `${mappingCount} products` : null },
-    { done: liveCount > 0, text: "Add the button to your theme", note: null },
-  ];
-  const doneCount = steps.filter((s) => s.done).length;
+function ChangeModelDialog({ mapping, assets, onDone }) {
+  const fetcher = useFetcher()
+  const shopify = useAppBridge()
+  const [modelAssetId, setModelAssetId] = useState(mapping?.modelAssetId ?? '')
+  const unchanged = !mapping || !modelAssetId || modelAssetId === mapping.modelAssetId
+
+  useEffect(() => {
+    if (!fetcher.data?.mapped) return
+    shopify.toast.show('Model changed')
+    shopify.modal.hide('workspace-change-model')
+    onDone()
+  }, [fetcher.data, onDone, shopify])
 
   return (
-    <s-page heading="AR Try-on">
-      <s-button slot="primary-action" onClick={() => setAddTryOnOpen(true)}>Add try-on</s-button>
+    <s-modal id="workspace-change-model" heading={`Change model for ${mapping?.product?.title ?? 'product'}`}>
+      <s-stack direction="block" gap="base">
+        <s-paragraph>Choose the frames shoppers should see for this product.</s-paragraph>
+        {mapping && <ModelPicker assets={assets} value={modelAssetId} onChange={setModelAssetId} />}
+        {fetcher.data?.error && <s-banner tone="critical">{fetcher.data.error}</s-banner>}
+      </s-stack>
+      <s-button slot="secondary-actions" commandFor="workspace-change-model" command="--hide">Cancel</s-button>
+      <fetcher.Form method="post">
+        <input type="hidden" name="intent" value="map" />
+        <input type="hidden" name="productId" value={mapping?.productId ?? ''} />
+        <input type="hidden" name="modelAssetId" value={modelAssetId} />
+        <s-button slot="primary-action" type="submit" variant="primary" disabled={unchanged} loading={fetcher.state !== 'idle'}>Change model</s-button>
+      </fetcher.Form>
+    </s-modal>
+  )
+}
 
-      <AddTryOnFlow
-        assets={assets}
-        open={addTryOnOpen}
-        onClose={() => setAddTryOnOpen(false)}
-        onPublished={() => window.location.reload()}
-      />
+function RemoveTryOnDialog({ mapping, onDone }) {
+  const fetcher = useFetcher()
+  const shopify = useAppBridge()
 
-      <s-section heading="Set up try-on">
-        <s-paragraph>{doneCount} of 3 done</s-paragraph>
-        <s-stack direction="block" gap="base">
-          {steps.map((step) => (
-            <s-stack key={step.text} direction="inline" gap="base" alignItems="center">
-              <s-badge tone={step.done ? "success" : "neutral"} icon={step.done ? "check-circle" : "circle"}>
-                {step.done ? "Done" : "To do"}
-              </s-badge>
-              <s-text>{step.text}</s-text>
-              {step.note && <s-text tone="subdued">{step.note}</s-text>}
-            </s-stack>
-          ))}
-        </s-stack>
-        {/* Top-level: the theme editor is an admin URL and cannot be embedded
-            in this app's iframe, the same reason app.jsx breaks out for
-            pricing. Always rendered: liveCount is a lastSeenLiveAt signal, not
-            proof the block is absent, so hiding this on liveCount > 0 would
-            strand a low-traffic store whose block is installed but unseen. */}
-        <s-paragraph>
-          <a href={themeUrl} target="_top" rel="noreferrer">
-            {liveCount === 0 ? "Add to theme" : "Manage in theme editor"}
-          </a>
-        </s-paragraph>
-      </s-section>
+  useEffect(() => {
+    if (!fetcher.data?.unmapped) return
+    shopify.toast.show('Try-on removed')
+    shopify.modal.hide('workspace-remove-tryon')
+    onDone()
+  }, [fetcher.data, onDone, shopify])
 
-      <s-section heading="Your plan">
-        <s-stack direction="block" gap="base">
-          {usage.unlimited ? (
-            <>
-              <s-text type="strong">{usage.planName ?? "No plan"}</s-text>
-              <s-text tone="subdued">{usage.used} products using try-on</s-text>
-            </>
-          ) : (
-            <>
-              <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
-                <s-stack direction="block" gap="small-200">
-                  <s-text type="strong">{usage.planName ?? "No plan"}</s-text>
-                  <s-text tone="subdued">{usage.used} / {usage.limit} products</s-text>
-                </s-stack>
-                {usage.pricingUrl && (
-                  <s-button
-                    variant="secondary"
-                    accessibilityLabel="Upgrade plan"
-                    onClick={openPricing}
-                  >
-                    Upgrade plan
-                  </s-button>
-                )}
-              </s-stack>
-              <div
-                role="progressbar"
-                aria-label={`${usage.used} of ${usage.limit} products used`}
-                aria-valuemin="0"
-                aria-valuemax={usage.limit}
-                aria-valuenow={Math.min(usage.used, usage.limit)}
-                style={{
-                  width: "100%",
-                  height: "8px",
-                  overflow: "hidden",
-                  borderRadius: "4px",
-                  background: "#e3e3e3",
-                }}
-              >
-                <div
-                  style={{
-                    width: `${usagePercent}%`,
-                    height: "100%",
-                    borderRadius: "4px",
-                    background: "#008060",
-                  }}
-                />
-              </div>
-              <s-text tone="subdued">
-                {usage.limit - usage.used > 0
-                  ? `${usage.limit - usage.used} product${usage.limit - usage.used === 1 ? "" : "s"} remaining`
-                  : "Upgrade to add more products"}
-              </s-text>
-            </>
-          )}
-        </s-stack>
-      </s-section>
+  return (
+    <s-modal id="workspace-remove-tryon" heading={`Remove try-on from ${mapping?.product?.title ?? 'this product'}?`}>
+      <s-paragraph>Shoppers will no longer see try-on on this product page.</s-paragraph>
+      {fetcher.data?.error && <s-banner tone="critical">{fetcher.data.error}</s-banner>}
+      <s-button slot="secondary-actions" commandFor="workspace-remove-tryon" command="--hide">Cancel</s-button>
+      <fetcher.Form method="post">
+        <input type="hidden" name="intent" value="unmap" />
+        <input type="hidden" name="productId" value={mapping?.productId ?? ''} />
+        <s-button slot="primary-action" type="submit" variant="primary" tone="critical" disabled={!mapping} loading={fetcher.state !== 'idle'}>Remove try-on</s-button>
+      </fetcher.Form>
+    </s-modal>
+  )
+}
+
+export default function Workspace() {
+  const data = useLoaderData()
+  const location = useLocation()
+  const revalidator = useRevalidator()
+  const shopify = useAppBridge()
+  const initialRequest = initialAddRequest(location.search, data.assets)
+  const [status, setStatus] = useState('all')
+  const [query, setQuery] = useState('')
+  const [addTryOnOpen, setAddTryOnOpen] = useState(initialRequest.open)
+  const [initialModelId] = useState(initialRequest.modelId)
+  const [previewMapping, setPreviewMapping] = useState(null)
+  const [changeMapping, setChangeMapping] = useState(null)
+  const [removeMapping, setRemoveMapping] = useState(null)
+  const visibleMappings = filterWorkspaceMappings(data.mappings, { status, query })
+
+  const openAddTryOn = () => setAddTryOnOpen(true)
+  const handleGuideAction = (guideAction) => {
+    if (guideAction.id === 'add-try-on') openAddTryOn()
+  }
+  const openPreview = (mapping) => {
+    setPreviewMapping(mapping)
+    shopify.modal.show('workspace-preview')
+  }
+  const openChangeModel = (mapping) => {
+    setChangeMapping(mapping)
+    shopify.modal.show('workspace-change-model')
+  }
+  const openRemove = (mapping) => {
+    setRemoveMapping(mapping)
+    shopify.modal.show('workspace-remove-tryon')
+  }
+  const refreshWorkspace = useCallback(() => revalidator.revalidate(), [revalidator])
+  const handlePublished = () => {
+    setAddTryOnOpen(false)
+    shopify.toast.show('Try-on published')
+    refreshWorkspace()
+  }
+
+  return (
+    <s-page heading="Workspace">
+      <s-button slot="primary-action" onClick={openAddTryOn} disabled={data.usage.atLimit}>Add try-on</s-button>
+
+      <div className="workspace-shell">
+        <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />
+        <WorkspaceFilters counts={data.counts} status={status} query={query} onStatusChange={setStatus} onQueryChange={setQuery} />
+        <section className="workspace-panel" aria-label="Product operations">
+          <ProductOperationsList
+            mappings={visibleMappings}
+            pricingUrl={data.usage.pricingUrl}
+            onPreview={openPreview}
+            onChangeModel={openChangeModel}
+            onRemove={openRemove}
+          />
+        </section>
+      </div>
+
+      <AddTryOnFlow assets={data.assets} initialModelId={initialModelId} open={addTryOnOpen} onClose={() => setAddTryOnOpen(false)} onPublished={handlePublished} />
+
+      <s-modal id="workspace-preview" heading={`Preview ${previewMapping?.product?.title ?? 'try-on'}`}>
+        {previewMapping && <PreviewPanel mapping={previewMapping} />}
+      </s-modal>
+      <ChangeModelDialog key={changeMapping?.id ?? 'no-change'} mapping={changeMapping} assets={data.assets} onDone={refreshWorkspace} />
+      <RemoveTryOnDialog key={removeMapping?.id ?? 'no-remove'} mapping={removeMapping} onDone={refreshWorkspace} />
 
       <s-section slot="aside" heading="Support">
         <s-paragraph><s-link href="/privacy" target="_blank">Privacy policy</s-link></s-paragraph>
-        <s-paragraph>
-          Questions or issues? Reach out at{" "}
-          <s-link href="mailto:ramy.sameh2@gmail.com">ramy.sameh2@gmail.com</s-link>.
-        </s-paragraph>
+        <s-paragraph>Need help? <s-link href="mailto:ramy.sameh2@gmail.com">Contact support</s-link>.</s-paragraph>
       </s-section>
     </s-page>
-  );
+  )
 }
 
-export const headers = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};
+export const headers = (headersArgs) => boundary.headers(headersArgs)
