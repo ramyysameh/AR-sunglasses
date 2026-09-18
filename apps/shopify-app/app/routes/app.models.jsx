@@ -7,15 +7,23 @@ import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
 import { getActivePlanName } from '../billing.server'
 import { deleteModelGlb } from '../storage.server'
+import { themeEditorUrl } from '../adminLinks.server'
 import ModelViewer from '../components/ModelViewer'
+import ModelFitReview from '../components/ModelFitReview'
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
+  // Derived unconditionally, in both branches below: the review modal (every
+  // "Review fit" action beside a model that needs one) offers a direct
+  // theme-editor action, and a merchant on the no-plan screen must not be
+  // silently missing it if app.jsx's gate is ever bypassed or this route is
+  // reached mid-downgrade.
+  const themeUrl = themeEditorUrl(session.shop)
   // app.jsx owns the no-subscription screen; this loader must NOT redirect
   // (App Store rejection Ref 127328).
   const activePlan = await getActivePlanName(admin, session.shop)
   if (!activePlan) {
-    return { assets: [] }
+    return { assets: [], themeUrl }
   }
   const assets = await prisma.modelAsset.findMany({
     where: { shop: session.shop },
@@ -24,6 +32,7 @@ export const loader = async ({ request }) => {
   })
   return {
     assets: assets.map(({ _count, ...a }) => ({ ...a, mappingCount: _count.mappings })),
+    themeUrl,
   }
 }
 
@@ -276,7 +285,17 @@ function UploadModalContent({ cancellationCoordinator, onBusyChange }) {
           accept=".glb,model/gltf-binary"
           accessibilityLabel="Choose a GLB model file"
           disabled={uploading}
-          onChange={(event) => {
+          // Not onChange: React 18's ChangeEventPlugin only special-cases a
+          // real <select>/<input type=file> when deciding whether to
+          // dispatch a synthetic `change` event -- s-drop-zone is a custom
+          // element, so onChange here was silently never firing (a file
+          // chosen via the drop zone never reached dispatchUpload). `input`
+          // is a simple, type-agnostic DOM event React forwards regardless
+          // of tag name, and Shopify's polaris-types IDL documents onInput
+          // for s-drop-zone alongside onChange -- see ModelPicker.jsx's
+          // search field / ProductIndex.jsx's search field for the same
+          // reasoning already applied elsewhere in this app.
+          onInput={(event) => {
             dispatchUpload({
               type: 'select',
               file: event.currentTarget.files?.[0] ?? null,
@@ -397,7 +416,12 @@ function RenameModalContent({ asset }) {
           label="Model name"
           value={draft}
           placeholder={asset?.filename ?? 'Model name'}
-          onChange={(event) => setDraft(event.currentTarget.value)}
+          // Not onChange -- same React 18 custom-element dispatch gap as the
+          // drop zone above: typing into the rename field never updated
+          // `draft`, so Save stayed disabled (renameSubmitDisabled compares
+          // draft to the current label) no matter what was typed. onInput is
+          // the per-keystroke event this field already needs.
+          onInput={(event) => setDraft(event.currentTarget.value)}
         ></s-text-field>
         <s-paragraph color="subdued">
           Leave the name blank to use the filename in your model library.
@@ -504,8 +528,35 @@ function DeleteModal({ asset, modelId, session, onDismiss }) {
   )
 }
 
+// One shared modal for every "Review fit" action in the grid, not one modal
+// per card -- same route-owned-selected-id session pattern as Rename/Delete
+// above. `asset` is null until a card's action opens it (and again after
+// dismissal), so this renders nothing until then; ModelFitReview itself is
+// the shared surface also used by PreviewPanel.jsx for the product preview.
+function ReviewFitModalContent({ asset, themeUrl }) {
+  if (!asset) return null
+  return <ModelFitReview modelAssetId={asset.id} themeUrl={themeUrl} />
+}
+
+function ReviewFitModal({ asset, themeUrl, session, onDismiss }) {
+  const modalRef = useModalEvents({ onAfterHide: onDismiss })
+
+  return (
+    <s-modal
+      ref={modalRef}
+      id="review-model-fit"
+      heading={asset ? `Review fit for ${modelName(asset)}` : 'Review fit'}
+    >
+      <ReviewFitModalContent key={session} asset={asset} themeUrl={themeUrl} />
+      <s-button slot="secondary-actions" commandFor="review-model-fit" command="--hide">
+        Close
+      </s-button>
+    </s-modal>
+  )
+}
+
 export default function Models() {
-  const { assets } = useLoaderData()
+  const { assets, themeUrl } = useLoaderData()
   const shopify = useAppBridge()
   const [renameModal, dispatchRenameModal] = useReducer(modalSessionReducer, {
     modelId: null,
@@ -515,10 +566,16 @@ export default function Models() {
     modelId: null,
     session: 0,
   })
+  const [reviewModal, dispatchReviewModal] = useReducer(modalSessionReducer, {
+    modelId: null,
+    session: 0,
+  })
   const renameAsset = assets.find((asset) => asset.id === renameModal.modelId) ?? null
   const deleteAsset = assets.find((asset) => asset.id === deleteModal.modelId) ?? null
+  const reviewAsset = assets.find((asset) => asset.id === reviewModal.modelId) ?? null
   const dismissRename = useCallback(() => dispatchRenameModal({ type: 'dismiss' }), [])
   const dismissDelete = useCallback(() => dispatchDeleteModal({ type: 'dismiss' }), [])
+  const dismissReview = useCallback(() => dispatchReviewModal({ type: 'dismiss' }), [])
 
   useEffect(() => {
     if (renameModal.modelId) shopify.modal.show('rename-model')
@@ -569,8 +626,19 @@ export default function Models() {
                     <s-stack direction="inline" gap="small-500" alignItems="center">
                       <s-heading>{displayName}</s-heading>
                       <s-badge tone={asset.status === 'ready' ? 'success' : 'warning'}>
-                        {asset.status === 'ready' ? 'Ready' : 'Check fit'}
+                        {asset.status === 'ready' ? 'Ready' : 'Review fit'}
                       </s-badge>
+                      {asset.status !== 'ready' && (
+                        <s-button
+                          variant="tertiary"
+                          commandFor="review-model-fit"
+                          command="--show"
+                          accessibilityLabel={`Review fit for ${displayName}`}
+                          onClick={() => dispatchReviewModal({ type: 'open', modelId: asset.id })}
+                        >
+                          Review fit
+                        </s-button>
+                      )}
                     </s-stack>
                     {showFilename && <s-text color="subdued">{asset.filename}</s-text>}
                     {asset.mappingCount > 0 ? (
@@ -623,6 +691,12 @@ export default function Models() {
         modelId={deleteModal.modelId}
         session={deleteModal.session}
         onDismiss={dismissDelete}
+      />
+      <ReviewFitModal
+        asset={reviewAsset}
+        themeUrl={themeUrl}
+        session={reviewModal.session}
+        onDismiss={dismissReview}
       />
     </s-page>
   )

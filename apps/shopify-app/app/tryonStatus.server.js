@@ -14,9 +14,13 @@ export function productStatus(mapping) {
   const asset = mapping.modelAsset ?? {}
   const lowConfidence = typeof asset.confidence === 'number' && asset.confidence < LOW_CONFIDENCE
 
-  // Order is load-bearing; see the precedence test.
+  // Order is load-bearing; see the precedence test. The id stays `check_fit`
+  // (ProductIndex.jsx's filter/sort keys off it) -- only the merchant-facing
+  // label changed, to match the action every "review this" surface now
+  // offers (ModelFitReview via the Models review modal and the product
+  // preview panel).
   if (asset.status !== 'ready' || lowConfidence) {
-    return { id: 'check_fit', label: 'Check fit', tone: 'warning' }
+    return { id: 'check_fit', label: 'Review fit', tone: 'warning' }
   }
   if (!mapping.lastSeenLiveAt) {
     return { id: 'not_on_theme', label: 'Not on your theme yet', tone: 'warning' }

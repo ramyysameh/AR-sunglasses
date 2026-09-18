@@ -6,6 +6,7 @@ import { planUsage } from "../planUsage.server";
 import { themeEditorUrl } from "../adminLinks.server";
 import prisma from "../db.server";
 import SetupGuide, { buildSetupSteps, nextSetupAction } from "../components/SetupGuide";
+import TopLevelAdminAction from "../components/TopLevelAdminAction";
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request);
@@ -49,26 +50,33 @@ export default function Index() {
   const usagePercent = usage.unlimited || usage.limit <= 0
     ? 0
     : Math.min(100, Math.round((usage.used / usage.limit) * 100));
-  const openPricing = () => {
-    if (usage.pricingUrl) window.open(usage.pricingUrl, "_top");
-  };
   const steps = buildSetupSteps({ modelCount, mappingCount, liveCount, themeUrl });
   const primaryAction = nextSetupAction(steps);
 
   return (
     <s-page heading="AR Try-on">
-      {/* Contextual primary action: always the next useful thing to do.
-          The theme destination is an admin URL and cannot be embedded in
-          this app's iframe (same reason app.jsx breaks out for pricing),
-          so it keeps target="_top" until Task 6's TopLevelAdminAction lands. */}
-      <s-button
-        slot="primary-action"
-        href={primaryAction.href}
-        target={primaryAction.target}
-        accessibilityLabel={primaryAction.actionLabel}
-      >
-        {primaryAction.actionLabel}
-      </s-button>
+      {/* Contextual primary action: always the next useful thing to do. Only
+          the theme step's target is "_top" -- an admin URL that cannot be
+          embedded in this app's iframe (same reason app.jsx breaks out for
+          pricing) -- so that's the only case that needs the top-level
+          break-out; every other step is a plain in-app route. */}
+      {primaryAction.target === "_top" ? (
+        <TopLevelAdminAction
+          slot="primary-action"
+          href={primaryAction.href}
+          accessibilityLabel={primaryAction.actionLabel}
+        >
+          {primaryAction.actionLabel}
+        </TopLevelAdminAction>
+      ) : (
+        <s-button
+          slot="primary-action"
+          href={primaryAction.href}
+          accessibilityLabel={primaryAction.actionLabel}
+        >
+          {primaryAction.actionLabel}
+        </s-button>
+      )}
 
       <SetupGuide steps={steps} />
 
@@ -87,13 +95,9 @@ export default function Index() {
                   <s-text color="subdued">{usage.used} / {usage.limit} products</s-text>
                 </s-stack>
                 {usage.pricingUrl && (
-                  <s-button
-                    variant="secondary"
-                    accessibilityLabel="Upgrade plan"
-                    onClick={openPricing}
-                  >
+                  <TopLevelAdminAction href={usage.pricingUrl} accessibilityLabel="Upgrade plan">
                     Upgrade plan
-                  </s-button>
+                  </TopLevelAdminAction>
                 )}
               </s-stack>
               <div

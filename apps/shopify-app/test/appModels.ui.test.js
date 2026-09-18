@@ -54,6 +54,7 @@ beforeEach(() => {
         mappingCount: 0,
       },
     ],
+    themeUrl: 'https://admin.shopify.com/theme',
   }
 })
 
@@ -143,17 +144,49 @@ describe('Models UI behavior', () => {
     expect(html).toContain('pelmo.glb')
     expect(html).toContain('Used by 2 products')
     expect(html).toContain('href="/app/products"')
-    expect(html).toContain('Check fit')
+    expect(html).toContain('Review fit')
+    expect(html).not.toMatch(/Check fit/)
     expect(html).not.toMatch(/A1 pipeline|calibrat|manual anchor|geometric confidence/i)
     expect(html.match(/id="rename-model"/g)).toHaveLength(1)
     expect(html.match(/id="delete-model"/g)).toHaveLength(1)
     expect(html.match(/commandFor="delete-model"/g)).toHaveLength(2)
+    expect(html.match(/id="review-model-fit"/g)).toHaveLength(1)
+    // One card action (--show) plus the modal's own Close button (--hide).
+    expect(html.match(/commandFor="review-model-fit"/g)).toHaveLength(2)
     expect(html).toContain('accessibilityLabel="Choose a GLB model file"')
 
     for (const target of new Set(targets)) {
       const escapedTarget = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       expect(html.match(new RegExp(`id="${escapedTarget}"`, 'g'))).toHaveLength(1)
     }
+  })
+
+  // Brief's Step 1 requirement, made explicit with two review-required
+  // models (the fixture above only has one, which can't distinguish "one
+  // shared modal" from "one modal per card" -- see the code comment below).
+  it('gives every review-required model a Review fit action against one shared modal, not one per card', () => {
+    routeState.loaderData = {
+      assets: [
+        { id: 'used-model', label: 'Pelmo black', filename: 'pelmo.glb', status: 'ready', mappingCount: 2 },
+        { id: 'unused-model', label: null, filename: 'aviator.glb', status: 'needs_review', mappingCount: 0 },
+        { id: 'third-model', label: 'Third frame', filename: 'third.glb', status: 'needs_review', mappingCount: 0 },
+      ],
+      themeUrl: 'https://admin.shopify.com/theme',
+    }
+
+    const html = renderToStaticMarkup(React.createElement(Models))
+
+    // Both review-required models expose their own action, plus the modal's
+    // own Close button (--hide) beside them...
+    expect(html.match(/commandFor="review-model-fit"/g)).toHaveLength(3)
+    expect(html).toContain('accessibilityLabel="Review fit for aviator.glb"')
+    expect(html).toContain('accessibilityLabel="Review fit for Third frame"')
+    // ...but every one of those actions targets the SAME single modal --
+    // a per-card implementation (id={`review-model-fit-${asset.id}`}) would
+    // make this fail with a match length of 2, not 1.
+    expect(html.match(/id="review-model-fit"/g)).toHaveLength(1)
+    // The Ready model gets neither the badge text nor the action.
+    expect(html).not.toMatch(/accessibilityLabel="Review fit for Pelmo black"/)
   })
 })
 

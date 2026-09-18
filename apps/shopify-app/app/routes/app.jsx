@@ -31,11 +31,18 @@ export default function App() {
   }, [pricingUrl]);
 
   if (pricingUrl) {
-    // A plain <a target="_top"> (not an s-link) guarantees an interactable
-    // control that survives even if the auto-redirect above is popup-blocked:
-    // App Bridge only intercepts navigation from Polaris s-* components, and a
-    // user click on target="_top" performs the top-level break-out the admin
+    // A plain <a target="_top"> (not an s-link, and deliberately not
+    // TopLevelAdminAction either) guarantees an interactable control that
+    // survives even if the auto-redirect above is popup-blocked: App Bridge
+    // only intercepts navigation from Polaris s-* components, and a user
+    // click on target="_top" performs the top-level break-out the admin
     // pricing page needs (it can't be embedded in this app's iframe).
+    // TopLevelAdminAction (app/components/TopLevelAdminAction.jsx) is an
+    // <s-button>, i.e. exactly the kind of Polaris component this comment
+    // says to avoid here -- every OTHER admin destination in this app uses
+    // it, but this is the one recovery path a merchant with no subscription
+    // has if App Bridge itself is misbehaving, so it keeps the more
+    // primitive, harder-to-intercept control on purpose.
     return (
       <AppProvider embedded apiKey={apiKey}>
         <s-page heading="Choose a plan">

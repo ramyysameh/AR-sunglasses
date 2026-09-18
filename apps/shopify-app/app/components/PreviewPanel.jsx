@@ -1,5 +1,5 @@
 /* eslint-disable react/prop-types -- plain JSX component, no PropTypes lib in use elsewhere */
-import ModelViewer from './ModelViewer'
+import ModelFitReview from './ModelFitReview'
 
 // Try-on is a phone experience and the merchant is at a desktop, so the QR is
 // the primary affordance. Camera cannot work inside the admin iframe -- Shopify
@@ -8,6 +8,14 @@ import ModelViewer from './ModelViewer'
 // The loader treats QR/URL generation as best-effort (same posture as its
 // metafield sync and product enrichment), so mapping.qr and mapping.previewUrl
 // can be null here -- render the explanation without them rather than break.
+//
+// The fit-review section below is the shared ModelFitReview component, not
+// a second copy of it -- see app/routes/app.models.jsx's review modal for
+// the other caller. mapping.themeUrl is stamped onto every mapping by
+// app.products.jsx's loader (alongside the route-level themeUrl it already
+// returns for ProductIndex.jsx) specifically so this component can stay a
+// single-prop `{ mapping }` component instead of needing its own themeUrl
+// threaded in from callers.
 export default function PreviewPanel({ mapping }) {
   return (
     <s-stack direction="block" gap="large-100">
@@ -28,19 +36,7 @@ export default function PreviewPanel({ mapping }) {
         )}
       </s-stack>
 
-      <s-stack direction="block" gap="base">
-        <s-heading>Check the fit</s-heading>
-        <ModelViewer
-          // The GLB response is immutable, so bump this version whenever the
-          // composition changes to bypass existing browser and edge caches.
-          src={`/models/${mapping.modelAssetId}/fit-preview.glb?v=2`}
-          alt="Your frames on a reference head"
-        />
-        <s-paragraph color="subdued">
-          If the frames look too small or too large here, adjust Glasses size in the
-          block settings in your theme editor.
-        </s-paragraph>
-      </s-stack>
+      <ModelFitReview modelAssetId={mapping.modelAssetId} themeUrl={mapping.themeUrl ?? null} />
     </s-stack>
   )
 }

@@ -20,6 +20,14 @@ describe('productStatus', () => {
       .toMatchObject({ id: 'check_fit' })
   })
 
+  // The id stays `check_fit` (ProductIndex.jsx's STATUS_SORT_PRIORITY and its
+  // status filter key off it), but the merchant-facing label reads "Review
+  // fit" everywhere now -- it names the action every review surface offers.
+  it('surfaces the check-fit status with the "Review fit" label merchants act on', () => {
+    expect(productStatus({ lastSeenLiveAt: seen, modelAsset: { status: 'ready', confidence: 0.4 } }))
+      .toEqual({ id: 'check_fit', label: 'Review fit', tone: 'warning' })
+  })
+
   it('is check-fit when confidence is low', () => {
     expect(productStatus({ lastSeenLiveAt: seen, modelAsset: { status: 'ready', confidence: 0.4 } }))
       .toMatchObject({ id: 'check_fit' })

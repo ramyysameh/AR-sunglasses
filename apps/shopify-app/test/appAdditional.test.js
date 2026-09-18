@@ -45,8 +45,17 @@ describe('Help recovery actions', () => {
     expect(html).toContain('href="/app/models"')
     expect(html).toContain('href="/privacy" target="_blank"')
     expect(html).toContain('href="mailto:ramy.sameh2@gmail.com"')
-    expect(html).toContain(
-      'href="https://admin.shopify.com/store/help-recovery/themes/current/editor?template=product" target="_top" rel="noreferrer"',
-    )
+    // Theme editor destinations use the shared TopLevelAdminAction control
+    // (an <s-button icon="external"> whose onClick does window.open(href,
+    // '_top') -- see topLevelAdminAction.ui.test.js for that behavior's own
+    // coverage), not a raw admin.shopify.com anchor: App Bridge can intercept
+    // navigation from a Polaris s-* component's href/target, so the actual
+    // top-level break-out has to happen imperatively.
+    expect(html).not.toMatch(/<a[^>]+href="https:\/\/admin\.shopify\.com[^>]*>/)
+    expect(html.match(/icon="external"/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
+    expect(html).toContain('accessibilityLabel="Open theme editor to adjust glasses size"')
+    expect(html).toContain('accessibilityLabel="Open theme editor to add the AR Try-On block"')
+    expect(html).not.toMatch(/Check fit/)
+    expect(html).toContain('Review fit')
   })
 })

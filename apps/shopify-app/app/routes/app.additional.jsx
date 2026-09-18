@@ -1,6 +1,7 @@
 import { useLoaderData } from 'react-router'
 import { themeEditorUrl } from '../adminLinks.server.js'
 import { authenticate } from '../shopify.server.js'
+import TopLevelAdminAction from '../components/TopLevelAdminAction.jsx'
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request)
@@ -17,21 +18,27 @@ export default function HelpPage() {
           Open the theme editor, select the AR Try-On block on the product page,
           and adjust Glasses size. Start at 1, then preview the product.
         </s-paragraph>
-        <s-paragraph>
-          <a href={themeEditorUrl} target="_top" rel="noreferrer">
-            Open theme editor
-          </a>
-        </s-paragraph>
+        <TopLevelAdminAction
+          href={themeEditorUrl}
+          accessibilityLabel="Open theme editor to adjust glasses size"
+        >
+          Open theme editor
+        </TopLevelAdminAction>
       </s-section>
 
       <s-section heading="Try on button is missing">
         <s-paragraph>
           Assign a model to the product in <s-link href="/app/products">Products</s-link>,
-          then add the AR Try-On block to the product template in the{' '}
-          <a href={themeEditorUrl} target="_top" rel="noreferrer">
-            theme editor
-          </a>. The button stays hidden until both are ready.
+          then add the AR Try-On block to the product template in the theme editor.
+          The button stays hidden until both are ready.
         </s-paragraph>
+        <TopLevelAdminAction
+          href={themeEditorUrl}
+          accessibilityLabel="Open theme editor to add the AR Try-On block"
+          variant="tertiary"
+        >
+          Open theme editor
+        </TopLevelAdminAction>
       </s-section>
 
       <s-section heading="Camera is blocked">
@@ -47,8 +54,10 @@ export default function HelpPage() {
 
       <s-section heading="Model won't upload">
         <s-paragraph>
-          Use a .glb file no larger than 25 MB. If the upload finishes with Check
-          fit, preview it before assigning it to products.
+          Use a .glb file no larger than 25 MB. If the upload finishes with a
+          Review fit status instead of Ready, open it on the Models page and use
+          Review fit to check it on a reference head before assigning it to
+          products.
         </s-paragraph>
         <s-paragraph>
           <s-link href="/app/models">Open Models</s-link>

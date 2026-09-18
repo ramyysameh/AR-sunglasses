@@ -13,6 +13,7 @@ import { getActivePlanName, planLimit } from '../billing.server'
 import { planUsage } from '../planUsage.server'
 import ModelPicker from '../components/ModelPicker'
 import ProductIndex from '../components/ProductIndex'
+import TopLevelAdminAction from '../components/TopLevelAdminAction'
 import { fetchProductsByIds } from '../products.server'
 import { productStatus } from '../tryonStatus.server'
 import { themeEditorUrl, previewUrl } from '../adminLinks.server'
@@ -73,6 +74,12 @@ export const loader = async ({ request }) => {
           ...m,
           product: products.get(m.productId) ?? null,
           status: productStatus(m),
+          // Stamped per-mapping (in addition to the route-level `themeUrl`
+          // below, which ProductIndex.jsx/ProductRow already consume) so
+          // PreviewPanel's ModelFitReview can offer a direct theme-editor
+          // action without needing a themeUrl prop threaded through
+          // ProductIndex.jsx, which this task does not otherwise touch.
+          themeUrl,
         }
         // Best-effort, like the metafield sync and product enrichment above: a
         // preview convenience must never take down the primary page. A row
@@ -443,14 +450,23 @@ export default function Products() {
         <s-button slot="primary-action" commandFor={primaryAction.commandFor} command="--show">
           {primaryAction.label}
         </s-button>
+      ) : primaryAction.kind === 'upgrade' ? (
+        // The admin pricing page is never embeddable in this app's iframe --
+        // TopLevelAdminAction breaks out reliably (window.open, not a
+        // Polaris href/target App Bridge can intercept).
+        <TopLevelAdminAction
+          slot="primary-action"
+          href={primaryAction.href}
+          accessibilityLabel={primaryAction.label}
+        >
+          {primaryAction.label}
+        </TopLevelAdminAction>
       ) : (
-        // upload/upgrade both navigate away from the embedded add-tryon flow:
-        // upload goes to another in-app route, upgrade must break out to the
-        // top-level admin pricing page (never inside this app's iframe).
+        // 'upload': in-app navigation to another route, not a Shopify admin
+        // destination -- stays a plain in-app link.
         <s-button
           slot="primary-action"
           href={primaryAction.href}
-          target={primaryAction.kind === 'upgrade' ? '_top' : undefined}
           accessibilityLabel={primaryAction.label}
         >
           {primaryAction.label}
@@ -469,7 +485,9 @@ export default function Products() {
             )}
             {usage.atLimit && <s-badge tone="warning">Limit reached</s-badge>}
             {usage.pricingUrl && (
-              <a href={usage.pricingUrl} target="_top" rel="noreferrer">Upgrade</a>
+              <TopLevelAdminAction href={usage.pricingUrl} accessibilityLabel="Upgrade plan" variant="tertiary">
+                Upgrade
+              </TopLevelAdminAction>
             )}
           </s-stack>
         </s-box>
@@ -484,7 +502,11 @@ export default function Products() {
             {usage.atLimit && (
               <s-banner tone="warning">
                 You&apos;re using all {usage.limit} products on your plan.{' '}
-                {usage.pricingUrl && <a href={usage.pricingUrl} target="_top" rel="noreferrer">Upgrade</a>} to add more.
+                {usage.pricingUrl && (
+                  <TopLevelAdminAction href={usage.pricingUrl} accessibilityLabel="Upgrade plan" variant="tertiary">
+                    Upgrade
+                  </TopLevelAdminAction>
+                )} to add more.
               </s-banner>
             )}
             <s-stack direction="inline" gap="base" alignItems="center">
