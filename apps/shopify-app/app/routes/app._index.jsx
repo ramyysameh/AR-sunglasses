@@ -70,12 +70,7 @@ export default function Index() {
         {primaryAction.actionLabel}
       </s-button>
 
-      <SetupGuide
-        modelCount={modelCount}
-        mappingCount={mappingCount}
-        liveCount={liveCount}
-        themeUrl={themeUrl}
-      />
+      <SetupGuide steps={steps} />
 
       <s-section heading="Your plan">
         <s-stack direction="block" gap="base">

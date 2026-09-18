@@ -41,8 +41,11 @@ export function nextSetupAction(steps) {
   }
 }
 
-export default function SetupGuide({ modelCount, mappingCount, liveCount, themeUrl }) {
-  const steps = buildSetupSteps({ modelCount, mappingCount, liveCount, themeUrl })
+export default function SetupGuide({ modelCount, mappingCount, liveCount, themeUrl, steps: stepsProp }) {
+  // The route already derives `steps` once (for buildSetupSteps + nextSetupAction
+  // together); accept a precomputed `steps` prop to avoid recomputing it here,
+  // while still accepting raw counts directly (e.g. from tests).
+  const steps = stepsProp ?? buildSetupSteps({ modelCount, mappingCount, liveCount, themeUrl })
   const doneCount = steps.filter((step) => step.done).length
   const currentStep = steps.find((step) => !step.done)
 
@@ -51,9 +54,14 @@ export default function SetupGuide({ modelCount, mappingCount, liveCount, themeU
       <s-paragraph color="subdued">
         {doneCount} out of {steps.length} steps completed.
       </s-paragraph>
-      <s-grid gap="base">
+      <s-stack direction="block" gap="base">
         {steps.map((step) => {
           const isCurrent = currentStep?.id === step.id
+          // The theme step's action stays reachable even once "done": liveCount
+          // is a "seen at least once" signal, not proof the app block is still
+          // installed, so a merchant whose block was later removed from the
+          // theme must still have a way back into the theme editor from here.
+          const showAction = !step.done || step.id === 'theme'
           return (
             <s-box
               key={step.id}
@@ -71,7 +79,7 @@ export default function SetupGuide({ modelCount, mappingCount, liveCount, themeU
                     {!step.done && <s-text color="subdued">{step.description}</s-text>}
                   </s-stack>
                 </s-stack>
-                {!step.done && (
+                {showAction && (
                   <s-button
                     variant={isCurrent ? 'primary' : 'secondary'}
                     href={step.href}
@@ -86,7 +94,7 @@ export default function SetupGuide({ modelCount, mappingCount, liveCount, themeU
             </s-box>
           )
         })}
-      </s-grid>
+      </s-stack>
     </s-section>
   )
 }
