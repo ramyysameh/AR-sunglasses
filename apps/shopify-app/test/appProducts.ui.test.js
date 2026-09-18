@@ -334,5 +334,14 @@ describe('Products dead-end states', () => {
 
     expect(html).toMatch(/Upgrade plan/)
     expect(html).not.toMatch(/slot="primary-action"[^>]*commandFor="add-tryon"/)
+    // Minor-9 coverage gap: assert the actual control, not just its visible
+    // text -- every upgrade/theme-editor destination on this page now goes
+    // through TopLevelAdminAction (icon="external", accessibilityLabel,
+    // onClick-driven window.open), and no raw admin.shopify.com anchor
+    // should remain anywhere on the page (primary action, the usage-box
+    // Upgrade link, and the at-limit modal banner's Upgrade link all convert).
+    expect(html).toContain('accessibilityLabel="Upgrade plan"')
+    expect(html.match(/icon="external"/g)?.length ?? 0).toBeGreaterThanOrEqual(1)
+    expect(html).not.toMatch(/<a[^>]+href="https:\/\/admin\.shopify\.com[^>]*>/)
   })
 })

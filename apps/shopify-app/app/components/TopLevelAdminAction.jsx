@@ -26,6 +26,16 @@ export default function TopLevelAdminAction({
   variant = 'secondary',
   slot,
 }) {
+  // Every current call site always has a truthy href by the time it renders
+  // this (each is already gated by its own `usage.pricingUrl && (...)` /
+  // `themeUrl && (...)` check upstream), but nothing enforces that here --
+  // and window.open(undefined, '_top') would navigate the whole top-level
+  // frame to "about:blank". The pre-TopLevelAdminAction version of the
+  // Upgrade-plan button (app._index.jsx's old `openPricing` closure) had an
+  // explicit `if (usage.pricingUrl)` guard; this restores that guarantee
+  // inside the shared component itself instead of trusting every future
+  // caller to repeat it.
+  if (!href) return null
   return (
     <s-button
       slot={slot}

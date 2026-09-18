@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import PreviewPanel from './PreviewPanel'
 import StatusBadge from './StatusBadge'
+import TopLevelAdminAction from './TopLevelAdminAction'
 
 // Loader-provided pages (10/40 except Pro) are small enough that
 // client-side pagination is the right call here -- see the plan's ambiguity
@@ -92,7 +93,9 @@ function ProductRow({ mapping: m, themeUrl, onChangeModel, onRemove }) {
         <s-stack direction="inline" gap="small-500" alignItems="center">
           <StatusBadge status={m.status} />
           {m.status.id === 'not_on_theme' && (
-            <a href={themeUrl} target="_top" rel="noreferrer">Add to theme</a>
+            <TopLevelAdminAction href={themeUrl} variant="tertiary" accessibilityLabel="Add try-on to your theme">
+              Add to theme
+            </TopLevelAdminAction>
           )}
         </s-stack>
       </s-table-cell>

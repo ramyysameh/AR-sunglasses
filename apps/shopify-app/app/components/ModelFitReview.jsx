@@ -7,12 +7,19 @@ import TopLevelAdminAction from './TopLevelAdminAction'
 // guidance and (when a theme URL is available) a direct way into the block
 // settings that control it. Used from both the product preview panel
 // (PreviewPanel, one mapping at a time) and the Models review modal (one
-// selected asset at a time) -- never render more than one of these per page,
-// the same "exactly one ModelViewer" rule ModelPicker.jsx already follows.
+// selected asset at a time).
+//
+// "One at a time" means one per open modal, not one in the whole DOM tree:
+// ProductIndex.jsx's ProductIndexView still mounts one preview <s-modal> (and
+// so one ModelFitReview, each with its own lazy ModelViewer) per visible row
+// -- that per-row modal cost pre-dates this component and is a ProductIndex
+// concern, not a violation of it. The invariant this component actually
+// guards is ModelPicker.jsx's: never more than one ModelViewer rendered for
+// the SAME selection/target at once (e.g. never one per choice in a list).
 export default function ModelFitReview({ modelAssetId, themeUrl = null }) {
   return (
     <s-stack direction="block" gap="base">
-      <s-heading>Check the fit</s-heading>
+      <s-heading>Review the fit</s-heading>
       <s-paragraph color="subdued">
         This shows your frames on a reference head so you can judge scale before a
         shopper sees them.

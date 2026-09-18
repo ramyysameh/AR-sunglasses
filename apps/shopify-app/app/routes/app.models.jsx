@@ -8,6 +8,14 @@ import prisma from '../db.server'
 import { getActivePlanName } from '../billing.server'
 import { deleteModelGlb } from '../storage.server'
 import { themeEditorUrl } from '../adminLinks.server'
+// A .server.js import used only inside the loader below (never referenced
+// from the component body) is stripped from the client bundle by the
+// `.server.js` naming convention -- same pattern app.products.jsx already
+// uses for `productStatus`. This keeps the "does this asset need review"
+// predicate single-sourced in tryonStatus.server.js instead of re-deriving
+// the confidence threshold here, so "ready but low confidence" can't read as
+// needing review on Products but not on Models (or vice versa).
+import { needsFitReview } from '../tryonStatus.server'
 import ModelViewer from '../components/ModelViewer'
 import ModelFitReview from '../components/ModelFitReview'
 
@@ -31,7 +39,11 @@ export const loader = async ({ request }) => {
     include: { _count: { select: { mappings: true } } },
   })
   return {
-    assets: assets.map(({ _count, ...a }) => ({ ...a, mappingCount: _count.mappings })),
+    assets: assets.map(({ _count, ...a }) => ({
+      ...a,
+      mappingCount: _count.mappings,
+      needsReview: needsFitReview(a),
+    })),
     themeUrl,
   }
 }
@@ -625,10 +637,18 @@ export default function Models() {
                     <ModelViewer src={`/models/${asset.id}.glb`} alt={displayName} />
                     <s-stack direction="inline" gap="small-500" alignItems="center">
                       <s-heading>{displayName}</s-heading>
-                      <s-badge tone={asset.status === 'ready' ? 'success' : 'warning'}>
-                        {asset.status === 'ready' ? 'Ready' : 'Review fit'}
+                      {/* Keyed on the loader's needsReview (status OR low
+                          confidence, tryonStatus.server.js's single-sourced
+                          needsFitReview), not raw asset.status -- a
+                          status:'ready', low-confidence asset must read the
+                          same way here as it does as Products' "Review fit"
+                          status, or Help's "open Models and use Review fit"
+                          guidance walks a merchant into a Models card that
+                          just says "Ready" with no action. */}
+                      <s-badge tone={asset.needsReview ? 'warning' : 'success'}>
+                        {asset.needsReview ? 'Review fit' : 'Ready'}
                       </s-badge>
-                      {asset.status !== 'ready' && (
+                      {asset.needsReview && (
                         <s-button
                           variant="tertiary"
                           commandFor="review-model-fit"

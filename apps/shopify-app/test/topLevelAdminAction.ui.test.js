@@ -77,4 +77,23 @@ describe('TopLevelAdminAction', () => {
 
     expect(element.props.slot).toBe('primary-action')
   })
+
+  // Minor-10: every current call site already gates its own href (e.g.
+  // `usage.pricingUrl && (<TopLevelAdminAction href={usage.pricingUrl} ...>`),
+  // but the component itself had no guard -- unlike the old `openPricing`
+  // closure it replaced in app._index.jsx, which had an explicit
+  // `if (usage.pricingUrl)` before calling window.open. Without this,
+  // window.open(undefined, '_top') would navigate the whole top-level frame
+  // to "about:blank" if any future caller forgot that upstream check.
+  it('renders nothing and never calls window.open for a falsy href', () => {
+    const open = vi.fn()
+    vi.stubGlobal('window', { open })
+
+    expect(TopLevelAdminAction({ href: null, children: 'Upgrade plan', accessibilityLabel: 'Upgrade plan' })).toBeNull()
+    expect(TopLevelAdminAction({ href: undefined, children: 'Upgrade plan', accessibilityLabel: 'Upgrade plan' })).toBeNull()
+    expect(TopLevelAdminAction({ href: '', children: 'Upgrade plan', accessibilityLabel: 'Upgrade plan' })).toBeNull()
+    expect(open).not.toHaveBeenCalled()
+
+    vi.unstubAllGlobals()
+  })
 })

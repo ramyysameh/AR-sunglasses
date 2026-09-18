@@ -293,6 +293,31 @@ describe('ProductIndex responsive markup', () => {
     }
   })
 
+  // Important-2 fix: the "Add to theme" recovery link used to be a raw
+  // <a href target="_top" rel="noreferrer">, carrying no icon and no
+  // accessibilityLabel. It's now TopLevelAdminAction, for consistency with
+  // every other Shopify-admin destination in this app (Minor-9 coverage:
+  // assert the actual control, not just its visible text).
+  it('renders a not-on-theme row\'s "Add to theme" action as TopLevelAdminAction, not a raw anchor', () => {
+    const notOnTheme = {
+      ...mapping(undefined, 0),
+      status: { id: 'not_on_theme', label: 'Not on your theme yet', tone: 'warning' },
+    }
+    const html = renderToStaticMarkup(
+      React.createElement(ProductIndex, {
+        mappings: [notOnTheme],
+        themeUrl: 'https://admin.shopify.com/theme',
+        onChangeModel: vi.fn(),
+        onRemove: vi.fn(),
+      }),
+    )
+
+    expect(html).toContain('Add to theme')
+    expect(html).toContain('accessibilityLabel="Add try-on to your theme"')
+    expect(html).toContain('icon="external"')
+    expect(html).not.toMatch(/<a[^>]+href="https:\/\/admin\.shopify\.com[^>]*>/)
+  })
+
   it('does not render pagination controls when everything fits on one page', () => {
     const mappings = Array.from({ length: 5 }, mapping)
     const html = renderToStaticMarkup(

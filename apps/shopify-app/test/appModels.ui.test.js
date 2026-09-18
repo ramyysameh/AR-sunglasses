@@ -45,6 +45,11 @@ beforeEach(() => {
         filename: 'pelmo.glb',
         status: 'ready',
         mappingCount: 2,
+        // Loader-computed (tryonStatus.server.js's needsFitReview), not
+        // derived here from status -- this test mocks useLoaderData
+        // directly, bypassing the real loader, so the fixture has to supply
+        // what the loader would have computed.
+        needsReview: false,
       },
       {
         id: 'unused-model',
@@ -52,6 +57,7 @@ beforeEach(() => {
         filename: 'aviator.glb',
         status: 'needs_review',
         mappingCount: 0,
+        needsReview: true,
       },
     ],
     themeUrl: 'https://admin.shopify.com/theme',
@@ -167,9 +173,9 @@ describe('Models UI behavior', () => {
   it('gives every review-required model a Review fit action against one shared modal, not one per card', () => {
     routeState.loaderData = {
       assets: [
-        { id: 'used-model', label: 'Pelmo black', filename: 'pelmo.glb', status: 'ready', mappingCount: 2 },
-        { id: 'unused-model', label: null, filename: 'aviator.glb', status: 'needs_review', mappingCount: 0 },
-        { id: 'third-model', label: 'Third frame', filename: 'third.glb', status: 'needs_review', mappingCount: 0 },
+        { id: 'used-model', label: 'Pelmo black', filename: 'pelmo.glb', status: 'ready', mappingCount: 2, needsReview: false },
+        { id: 'unused-model', label: null, filename: 'aviator.glb', status: 'needs_review', mappingCount: 0, needsReview: true },
+        { id: 'third-model', label: 'Third frame', filename: 'third.glb', status: 'needs_review', mappingCount: 0, needsReview: true },
       ],
       themeUrl: 'https://admin.shopify.com/theme',
     }
@@ -181,12 +187,47 @@ describe('Models UI behavior', () => {
     expect(html.match(/commandFor="review-model-fit"/g)).toHaveLength(3)
     expect(html).toContain('accessibilityLabel="Review fit for aviator.glb"')
     expect(html).toContain('accessibilityLabel="Review fit for Third frame"')
-    // ...but every one of those actions targets the SAME single modal --
-    // a per-card implementation (id={`review-model-fit-${asset.id}`}) would
-    // make this fail with a match length of 2, not 1.
+    // ...but every one of those actions targets the SAME single modal. A
+    // per-card implementation could break this two different ways: reusing
+    // the literal id "review-model-fit" on more than one <s-modal> (this
+    // match would then be length 2, not 1), or giving each modal its own
+    // suffixed id like `review-model-fit-${asset.id}` (no element would have
+    // the exact id "review-model-fit" any more, so this match would be
+    // null/length 0) -- either way, not the single match a shared modal
+    // produces.
     expect(html.match(/id="review-model-fit"/g)).toHaveLength(1)
     // The Ready model gets neither the badge text nor the action.
     expect(html).not.toMatch(/accessibilityLabel="Review fit for Pelmo black"/)
+  })
+
+  // Important-3 regression guard: needsReview (loader-computed from
+  // tryonStatus.server.js's single-sourced needsFitReview) must gate the
+  // badge/action, not raw asset.status -- an asset can be status:'ready' and
+  // still need review on low confidence. Before this fix, Models keyed off
+  // asset.status alone, so this exact shape rendered "Ready" with no action
+  // while Products (via productStatus, same confidence threshold) showed
+  // "Review fit" for the identical asset -- and app.additional.jsx's Help
+  // copy sends a merchant here expecting to find that action.
+  it('offers Review fit for a status:"ready", low-confidence asset', () => {
+    routeState.loaderData = {
+      assets: [
+        {
+          id: 'low-confidence-ready',
+          label: 'Low confidence',
+          filename: 'low-confidence.glb',
+          status: 'ready',
+          confidence: 0.4,
+          mappingCount: 0,
+          needsReview: true,
+        },
+      ],
+      themeUrl: 'https://admin.shopify.com/theme',
+    }
+
+    const html = renderToStaticMarkup(React.createElement(Models))
+
+    expect(html).toContain('accessibilityLabel="Review fit for Low confidence"')
+    expect(html).not.toMatch(/>Ready</)
   })
 })
 

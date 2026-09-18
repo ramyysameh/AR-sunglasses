@@ -1,4 +1,5 @@
 /* eslint-disable react/prop-types -- plain JSX component, no PropTypes lib in use elsewhere */
+import TopLevelAdminAction from './TopLevelAdminAction'
 
 // Pure derivation: no React, no loader access. Counts and themeUrl are
 // loader-owned and passed in by the route.
@@ -80,14 +81,30 @@ export default function SetupGuide({ modelCount, mappingCount, liveCount, themeU
                   </s-stack>
                 </s-stack>
                 {showAction && (
-                  <s-button
-                    variant={isCurrent ? 'primary' : 'secondary'}
-                    href={step.href}
-                    target={step.target}
-                    accessibilityLabel={step.actionLabel}
-                  >
-                    {step.actionLabel}
-                  </s-button>
+                  // Only the theme step's target is "_top" -- an admin URL
+                  // that cannot be embedded in this app's iframe. A plain
+                  // <s-button href target="_top"> is not a reliable break-out
+                  // (App Bridge intercepts navigation from Polaris s-*
+                  // components -- see TopLevelAdminAction.jsx's own comment),
+                  // so that case gets the shared control instead; every other
+                  // step is a plain in-app route and stays a plain <s-button>.
+                  step.target === '_top' ? (
+                    <TopLevelAdminAction
+                      variant={isCurrent ? 'primary' : 'secondary'}
+                      href={step.href}
+                      accessibilityLabel={step.actionLabel}
+                    >
+                      {step.actionLabel}
+                    </TopLevelAdminAction>
+                  ) : (
+                    <s-button
+                      variant={isCurrent ? 'primary' : 'secondary'}
+                      href={step.href}
+                      accessibilityLabel={step.actionLabel}
+                    >
+                      {step.actionLabel}
+                    </s-button>
+                  )
                 )}
               </s-stack>
               {step.id !== 'theme' && <s-divider />}

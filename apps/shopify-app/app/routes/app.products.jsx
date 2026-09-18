@@ -501,12 +501,20 @@ export default function Products() {
           <s-stack direction="block" gap="base">
             {usage.atLimit && (
               <s-banner tone="warning">
-                You&apos;re using all {usage.limit} products on your plan.{' '}
+                {/* Prose + block action, not an inline link: TopLevelAdminAction
+                    renders an <s-button>, which is inline-block, not inline --
+                    embedding it mid-sentence (the previous "...plan.
+                    <button>Upgrade</button> to add more." shape) orphans the
+                    trailing text onto its own line and fragments the sentence
+                    at narrow widths (Global Constraint: usable at 320px). */}
+                <s-paragraph>
+                  You&apos;re using all {usage.limit} products on your plan. Upgrade to add more.
+                </s-paragraph>
                 {usage.pricingUrl && (
                   <TopLevelAdminAction href={usage.pricingUrl} accessibilityLabel="Upgrade plan" variant="tertiary">
                     Upgrade
                   </TopLevelAdminAction>
-                )} to add more.
+                )}
               </s-banner>
             )}
             <s-stack direction="inline" gap="base" alignItems="center">

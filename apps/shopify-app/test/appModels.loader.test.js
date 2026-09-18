@@ -71,23 +71,35 @@ describe('app.models loader product enrichment', () => {
 // reached without a subscription (app.jsx owns the redirect gate, not this
 // loader; see the "must NOT redirect" comment in app.models.jsx).
 describe('app.models loader themeUrl', () => {
-  it('returns a theme editor URL on the subscribed branch', async () => {
+  it('returns a theme editor URL on the subscribed branch, alongside the real assets that exist', async () => {
     subscriptionState.active = true
+    const asset = await prisma.modelAsset.create({
+      data: { shop, storageRef: `${tag}/themeurl-sub.glb`, fitMetadata: { version: 'eyewear-v1' }, status: 'ready' },
+    })
+
     const result = await loader({ request: new Request('https://x/app/models') })
 
-    // Subscribed branch: assets is a real (possibly empty) query result, not
-    // the unsubscribed branch's hardcoded [] -- distinguished here by
-    // asserting the shape (an array) rather than its length, since this
-    // test's beforeEach clears the shop's models and doesn't reseed one.
-    expect(Array.isArray(result.assets)).toBe(true)
+    // Pinned by data, not just "an array" (which [] also satisfies, and
+    // would make this indistinguishable from the unsubscribed branch below
+    // if the mock's `active` flag were ever wired wrong): the subscribed
+    // branch must return the asset that actually exists for this shop.
+    expect(result.assets.map((a) => a.id)).toEqual([asset.id])
     expect(typeof result.themeUrl).toBe('string')
     const url = new URL(result.themeUrl)
     expect(url.host).toBe('admin.shopify.com')
     expect(url.searchParams.get('addAppBlockId')).toMatch(/\/tryon_button$/)
   })
 
-  it('returns the same theme editor URL on the unsubscribed branch, alongside empty assets', async () => {
+  it('returns the same theme editor URL on the unsubscribed branch, even though a model asset exists for the shop', async () => {
     subscriptionState.active = false
+    // Seeded so an empty result here can only come from the unsubscribed
+    // short-circuit actually running, not from a coincidentally-unseeded
+    // beforeEach producing the same []. Without this, "assets equals []"
+    // would be true for the wrong reason too.
+    await prisma.modelAsset.create({
+      data: { shop, storageRef: `${tag}/themeurl-unsub.glb`, fitMetadata: { version: 'eyewear-v1' }, status: 'ready' },
+    })
+
     const result = await loader({ request: new Request('https://x/app/models') })
 
     expect(result.assets).toEqual([])
@@ -95,5 +107,48 @@ describe('app.models loader themeUrl', () => {
     const url = new URL(result.themeUrl)
     expect(url.host).toBe('admin.shopify.com')
     expect(url.searchParams.get('addAppBlockId')).toMatch(/\/tryon_button$/)
+  })
+})
+
+// Important-3 fix: the loader must fold confidence into needsReview, the
+// same single-sourced predicate (tryonStatus.server.js's needsFitReview)
+// Products' productStatus uses -- a status:'ready', low-confidence asset has
+// to read as "needs review" here too, or Help's "open Models and use Review
+// fit" guidance (app.additional.jsx) walks a merchant into a dead end.
+describe('app.models loader needsReview', () => {
+  it('flags a status:"ready" asset with low confidence as needing review', async () => {
+    const asset = await prisma.modelAsset.create({
+      data: {
+        shop,
+        storageRef: `${tag}/low-confidence.glb`,
+        fitMetadata: { version: 'eyewear-v1' },
+        status: 'ready',
+        confidence: 0.4,
+      },
+    })
+
+    const result = await loader({ request: new Request('https://x/app/models') })
+    const found = result.assets.find((a) => a.id === asset.id)
+
+    expect(found).toBeTruthy()
+    expect(found.needsReview).toBe(true)
+  })
+
+  it('does not flag a status:"ready" asset with high confidence', async () => {
+    const asset = await prisma.modelAsset.create({
+      data: {
+        shop,
+        storageRef: `${tag}/high-confidence.glb`,
+        fitMetadata: { version: 'eyewear-v1' },
+        status: 'ready',
+        confidence: 0.9,
+      },
+    })
+
+    const result = await loader({ request: new Request('https://x/app/models') })
+    const found = result.assets.find((a) => a.id === asset.id)
+
+    expect(found).toBeTruthy()
+    expect(found.needsReview).toBe(false)
   })
 })
