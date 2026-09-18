@@ -5,6 +5,7 @@ import { getActivePlanName, hasFreeAccess } from "../billing.server";
 import { planUsage } from "../planUsage.server";
 import { themeEditorUrl } from "../adminLinks.server";
 import prisma from "../db.server";
+import SetupGuide, { buildSetupSteps, nextSetupAction } from "../components/SetupGuide";
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request);
@@ -51,41 +52,30 @@ export default function Index() {
   const openPricing = () => {
     if (usage.pricingUrl) window.open(usage.pricingUrl, "_top");
   };
-  const steps = [
-    { done: modelCount > 0, text: "Upload a model", note: modelCount > 0 ? `${modelCount} uploaded` : null },
-    { done: mappingCount > 0, text: "Add try-on to a product", note: mappingCount > 0 ? `${mappingCount} products` : null },
-    { done: liveCount > 0, text: "Add the button to your theme", note: null },
-  ];
-  const doneCount = steps.filter((s) => s.done).length;
+  const steps = buildSetupSteps({ modelCount, mappingCount, liveCount, themeUrl });
+  const primaryAction = nextSetupAction(steps);
 
   return (
     <s-page heading="AR Try-on">
-      <s-button slot="primary-action" href="/app/products">Go to products</s-button>
+      {/* Contextual primary action: always the next useful thing to do.
+          The theme destination is an admin URL and cannot be embedded in
+          this app's iframe (same reason app.jsx breaks out for pricing),
+          so it keeps target="_top" until Task 6's TopLevelAdminAction lands. */}
+      <s-button
+        slot="primary-action"
+        href={primaryAction.href}
+        target={primaryAction.target}
+        accessibilityLabel={primaryAction.actionLabel}
+      >
+        {primaryAction.actionLabel}
+      </s-button>
 
-      <s-section heading="Set up try-on">
-        <s-paragraph>{doneCount} of 3 done</s-paragraph>
-        <s-stack direction="block" gap="base">
-          {steps.map((step) => (
-            <s-stack key={step.text} direction="inline" gap="base" alignItems="center">
-              <s-badge tone={step.done ? "success" : "neutral"} icon={step.done ? "check-circle" : "circle"}>
-                {step.done ? "Done" : "To do"}
-              </s-badge>
-              <s-text>{step.text}</s-text>
-              {step.note && <s-text color="subdued">{step.note}</s-text>}
-            </s-stack>
-          ))}
-        </s-stack>
-        {/* Top-level: the theme editor is an admin URL and cannot be embedded
-            in this app's iframe, the same reason app.jsx breaks out for
-            pricing. Always rendered: liveCount is a lastSeenLiveAt signal, not
-            proof the block is absent, so hiding this on liveCount > 0 would
-            strand a low-traffic store whose block is installed but unseen. */}
-        <s-paragraph>
-          <a href={themeUrl} target="_top" rel="noreferrer">
-            {liveCount === 0 ? "Add to theme" : "Manage in theme editor"}
-          </a>
-        </s-paragraph>
-      </s-section>
+      <SetupGuide
+        modelCount={modelCount}
+        mappingCount={mappingCount}
+        liveCount={liveCount}
+        themeUrl={themeUrl}
+      />
 
       <s-section heading="Your plan">
         <s-stack direction="block" gap="base">
