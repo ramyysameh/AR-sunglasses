@@ -163,44 +163,60 @@ export function ProductTable({
         hasPreviousPage={hasPreviousPage ? '' : undefined}
         hasNextPage={hasNextPage ? '' : undefined}
       >
-        <s-grid
-          slot="filters"
-          gap="small-200"
-          // Responsive value syntax per Shopify's docs (using-polaris-web-components
-          // #responsive-values / the query-container padding example):
-          // `@container (<condition>) <value-if-true>, <value-if-false>`.
-          // Below ~700px the two selects next to a search field are too
-          // cramped (Global Constraint: usable at 320px), so stack to a
-          // single column; above it, use the brief's 3-column row.
-          gridTemplateColumns="@container (inline-size < 700px) 1fr, minmax(0, 1fr) auto auto"
-        >
-          <s-search-field
-            label="Search products"
-            labelAccessibilityVisibility="exclusive"
-            placeholder="Search products or models"
-            value={query}
-            // Not onChange: React 18 only dispatches synthetic `change` for
-            // native <select>/<input type=file> elements (ChangeEventPlugin's
-            // shouldUseChangeEvent), so it never fires on a custom element.
-            // `input` is a simple, type-agnostic DOM event that React
-            // forwards regardless of tag name, and Shopify's own "Handling
-            // events" guide (using-polaris-web-components#handling-events)
-            // documents onInput as the per-keystroke event on form
-            // components -- exactly what live search needs anyway.
-            onInput={(event) => onQueryChange(event.currentTarget.value)}
-          ></s-search-field>
-          <s-select label="Status" value={status} onInput={(event) => onStatusChange(event.currentTarget.value)}>
-            <s-option value="all">All statuses</s-option>
-            <s-option value="live">Live</s-option>
-            <s-option value="check_fit">Review fit</s-option>
-            <s-option value="not_on_theme">Not on theme</s-option>
-          </s-select>
-          <s-select label="Sort" value={sort} onInput={(event) => onSortChange(event.currentTarget.value)}>
-            <s-option value="newest">Newest</s-option>
-            <s-option value="title">Product title</s-option>
-            <s-option value="status">Status</s-option>
-          </s-select>
-        </s-grid>
+        {/* Every responsive-value example in Shopify's docs (the Query
+            container page, and the Grid/Box property docs it's linked from)
+            wraps the querying element in <s-query-container> -- "Wrap your
+            content in <s-query-container> to enable responsive value
+            queries. By default, queries target the closest container."
+            QueryContainer is the only component in polaris.d.ts that sets
+            the `s-default` container-name an @container condition resolves
+            against, so the grid can't carry a working @container value
+            without this wrapper. `slot` moved here from the grid --
+            ReactBaseElementProps (which every generated React element type,
+            including QueryContainer's, extends via
+            ReactBaseElementPropsWithChildren) declares `slot`, and Table's
+            `filters` slot is typed as a generic ComponentChildren with no
+            element-type restriction, so a query-container is a valid
+            slotted child. */}
+        <s-query-container slot="filters">
+          <s-grid
+            gap="small-200"
+            // Responsive value syntax per Shopify's docs (using-polaris-web-components
+            // #responsive-values / the query-container padding example):
+            // `@container (<condition>) <value-if-true>, <value-if-false>`.
+            // Below ~700px the two selects next to a search field are too
+            // cramped (Global Constraint: usable at 320px), so stack to a
+            // single column; above it, use the brief's 3-column row.
+            gridTemplateColumns="@container (inline-size < 700px) 1fr, minmax(0, 1fr) auto auto"
+          >
+            <s-search-field
+              label="Search products"
+              labelAccessibilityVisibility="exclusive"
+              placeholder="Search products or models"
+              value={query}
+              // Not onChange: React 18 only dispatches synthetic `change` for
+              // native <select>/<input type=file> elements (ChangeEventPlugin's
+              // shouldUseChangeEvent), so it never fires on a custom element.
+              // `input` is a simple, type-agnostic DOM event that React
+              // forwards regardless of tag name, and Shopify's own "Handling
+              // events" guide (using-polaris-web-components#handling-events)
+              // documents onInput as the per-keystroke event on form
+              // components -- exactly what live search needs anyway.
+              onInput={(event) => onQueryChange(event.currentTarget.value)}
+            ></s-search-field>
+            <s-select label="Status" value={status} onInput={(event) => onStatusChange(event.currentTarget.value)}>
+              <s-option value="all">All statuses</s-option>
+              <s-option value="live">Live</s-option>
+              <s-option value="check_fit">Review fit</s-option>
+              <s-option value="not_on_theme">Not on theme</s-option>
+            </s-select>
+            <s-select label="Sort" value={sort} onInput={(event) => onSortChange(event.currentTarget.value)}>
+              <s-option value="newest">Newest</s-option>
+              <s-option value="title">Product title</s-option>
+              <s-option value="status">Status</s-option>
+            </s-select>
+          </s-grid>
+        </s-query-container>
         <s-table-header-row>
           <s-table-header listSlot="primary">Product</s-table-header>
           <s-table-header listSlot="labeled">Model</s-table-header>

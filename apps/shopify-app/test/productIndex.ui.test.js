@@ -233,6 +233,36 @@ describe('ProductIndex responsive markup', () => {
     expect(html).not.toContain('s-empty-state')
   })
 
+  it('wraps the responsive filters grid in a query container', () => {
+    // Every responsive-value example in Shopify's docs wraps the querying
+    // element in <s-query-container> ("Wrap your content in
+    // <s-query-container> to enable responsive value queries. By default,
+    // queries target the closest container.") QueryContainer is the only
+    // component that sets the `s-default` container-name an @container
+    // condition resolves against -- without this wrapper the grid's
+    // @container query has no container to match, and per CSS containment
+    // semantics neither branch value reliably applies (i.e. the filters row
+    // silently breaks at every width, not just under 700px). This asserts
+    // on the element tree, not the string.toContain('slot="filters"')
+    // check above, because that substring matches regardless of which
+    // element in the tree carries the slot -- it would pass identically if
+    // this wrapper were removed and `slot="filters"` moved back onto the
+    // grid directly.
+    const tree = ProductTable(tableProps())
+    const children = Array.isArray(tree.props.children) ? tree.props.children : [tree.props.children]
+    const tableElement = children.find((child) => child && child.type === 's-table')
+    const queryContainer = findElement(tableElement, (node) => node.type === 's-query-container')
+
+    expect(queryContainer).toBeTruthy()
+    expect(queryContainer.props.slot).toBe('filters')
+
+    const grid = findElement(queryContainer, (node) => node.type === 's-grid')
+    expect(grid).toBeTruthy()
+    // The slot assignment lives on the query-container now, not the grid.
+    expect(grid.props.slot).toBeUndefined()
+    expect(grid.props.gridTemplateColumns).toContain('@container')
+  })
+
   it('binds search and select filters with onInput, not onChange (React 18 dispatch)', () => {
     // React never serializes event-handler props into SSR markup (neither
     // onChange nor onInput appears in the HTML string either way), so this
