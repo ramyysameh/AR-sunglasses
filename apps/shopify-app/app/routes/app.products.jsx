@@ -12,11 +12,10 @@ import { deleteMappingWithRecovery } from '../productMappingRecovery.server'
 import { getActivePlanName, planLimit } from '../billing.server'
 import { planUsage } from '../planUsage.server'
 import ModelPicker from '../components/ModelPicker'
-import PreviewPanel from '../components/PreviewPanel'
+import ProductIndex from '../components/ProductIndex'
 import { fetchProductsByIds } from '../products.server'
 import { productStatus } from '../tryonStatus.server'
 import { themeEditorUrl, previewUrl } from '../adminLinks.server'
-import StatusBadge from '../components/StatusBadge'
 
 // Resolved per-request, not at module load: the last resort must be an
 // absolute URL, and only the incoming request reliably gives us one. Neither
@@ -177,10 +176,6 @@ export const action = async ({ request }) => {
   })
   if (deleteError) return deleteError
   return { unmapped: true }
-}
-
-function modelName(a) {
-  return a.label || a.filename || `Model ${a.id.slice(0, 8)}`
 }
 
 function retryMatches(data, productId, modelAssetId) {
@@ -521,12 +516,14 @@ export default function Products() {
         </s-modal>
       )}
 
-      <s-section heading="Products with try-on">
-        {assets.length === 0 ? (
-          // True empty state: no models exist yet, so there is nothing to map
-          // a product to. Distinct from the "models exist, nothing mapped"
-          // case below -- conflating the two would send merchants into the
-          // Add try-on modal before it has anything to offer.
+      {assets.length === 0 ? (
+        // True empty state: no models exist yet, so there is nothing to map
+        // a product to. Distinct from the "models exist, nothing mapped"
+        // case below -- conflating the two would send merchants into the
+        // Add try-on modal before it has anything to offer. Owned here, not
+        // by ProductIndex, which only renders once there's a collection to
+        // filter/sort/paginate.
+        <s-section heading="Products with try-on">
           <s-stack direction="block" gap="base">
             <s-text type="strong">Upload a model to get started</s-text>
             <s-paragraph color="subdued">
@@ -534,7 +531,9 @@ export default function Products() {
             </s-paragraph>
             <s-button href="/app/models">Upload model</s-button>
           </s-stack>
-        ) : mappings.length === 0 ? (
+        </s-section>
+      ) : mappings.length === 0 ? (
+        <s-section heading="Products with try-on">
           <s-stack direction="block" gap="base">
             <s-text type="strong">Add try-on to your first product</s-text>
             <s-paragraph>
@@ -542,84 +541,26 @@ export default function Products() {
               pick the product it belongs to.
             </s-paragraph>
           </s-stack>
-        ) : (
-          <s-table variant="auto">
-            <s-table-header-row>
-              <s-table-header listSlot="primary">Product</s-table-header>
-              <s-table-header>Model</s-table-header>
-              <s-table-header>Status</s-table-header>
-              <s-table-header>Actions</s-table-header>
-            </s-table-header-row>
-            <s-table-body>
-              {mappings.map((m) => (
-                <s-table-row key={m.id}>
-                  <s-table-cell>
-                    <s-stack direction="inline" gap="small-500" alignItems="center">
-                      {m.product?.imageUrl && (
-                        <s-thumbnail src={m.product.imageUrl} alt={m.product.imageAlt ?? m.product.title} size="small"></s-thumbnail>
-                      )}
-                      <s-text type="strong">{m.product?.title ?? 'Product unavailable'}</s-text>
-                    </s-stack>
-                  </s-table-cell>
-                  <s-table-cell>{modelName(m.modelAsset)}</s-table-cell>
-                  <s-table-cell>
-                    <s-stack direction="inline" gap="small-500" alignItems="center">
-                      <StatusBadge status={m.status} />
-                      {m.status.id === 'not_on_theme' && (
-                        <a href={themeUrl} target="_top" rel="noreferrer">Add to theme</a>
-                      )}
-                    </s-stack>
-                  </s-table-cell>
-                  <s-table-cell>
-                    <s-stack direction="inline" gap="small-500">
-                      <s-button commandFor={`preview-${m.id}`} command="--show">
-                        Preview
-                      </s-button>
-                      <s-button
-                        variant="tertiary"
-                        icon="menu-vertical"
-                        accessibilityLabel={`Actions for ${m.product?.title ?? 'product'}`}
-                        commandFor={`actions-${m.id}`}
-                      ></s-button>
-                      <s-menu id={`actions-${m.id}`} accessibilityLabel={`Actions for ${m.product?.title ?? 'product'}`}>
-                        <s-button
-                          icon="edit"
-                          onClick={() => dispatchChangeModal({ type: 'open', mappingId: m.id })}
-                        >
-                          Change model
-                        </s-button>
-                        <s-button
-                          icon="delete"
-                          tone="critical"
-                          onClick={() => dispatchRemoveModal({ type: 'open', mappingId: m.id })}
-                        >
-                          Remove try-on
-                        </s-button>
-                      </s-menu>
-                    </s-stack>
-                  </s-table-cell>
-                </s-table-row>
-              ))}
-            </s-table-body>
-          </s-table>
-        )}
-        {mappings.map((m) => (
-          <s-modal key={m.id} id={`preview-${m.id}`} heading={`Preview ${m.product?.title ?? 'try-on'}`}>
-            <PreviewPanel mapping={m} />
-          </s-modal>
-        ))}
-        <ChangeModelModal
-          mapping={changeMapping}
-          assets={assets}
-          session={changeModal.session}
-          onDismiss={dismissChangeModal}
+        </s-section>
+      ) : (
+        <ProductIndex
+          mappings={mappings}
+          themeUrl={themeUrl}
+          onChangeModel={(mappingId) => dispatchChangeModal({ type: 'open', mappingId })}
+          onRemove={(mappingId) => dispatchRemoveModal({ type: 'open', mappingId })}
         />
-        <RemoveTryOnModal
-          mapping={removeMapping}
-          session={removeModal.session}
-          onDismiss={dismissRemoveModal}
-        />
-      </s-section>
+      )}
+      <ChangeModelModal
+        mapping={changeMapping}
+        assets={assets}
+        session={changeModal.session}
+        onDismiss={dismissChangeModal}
+      />
+      <RemoveTryOnModal
+        mapping={removeMapping}
+        session={removeModal.session}
+        onDismiss={dismissRemoveModal}
+      />
     </s-page>
   )
 }
