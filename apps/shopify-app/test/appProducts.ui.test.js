@@ -23,6 +23,7 @@ const {
   default: Products,
   mappingModalReducer,
   mappingSubmitDisabled,
+  productPrimaryAction,
 } = await import('../app/routes/app.products.jsx')
 const { default: ModelPicker } = await import('../app/components/ModelPicker.jsx')
 
@@ -138,5 +139,80 @@ describe('Products working surface', () => {
       const escapedTarget = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       expect(html.match(new RegExp(`id="${escapedTarget}"`, 'g'))).toHaveLength(1)
     }
+  })
+})
+
+describe('productPrimaryAction', () => {
+  it.each([
+    [{ assetCount: 0, usage: { atLimit: false } }, 'upload', 'Upload model'],
+    [{ assetCount: 2, usage: { atLimit: false } }, 'add', 'Add try-on'],
+    [{ assetCount: 2, usage: { atLimit: true, pricingUrl: 'https://admin.shopify.com/pricing' } }, 'upgrade', 'Upgrade plan'],
+  ])('chooses a completable primary action', (input, kind, label) => {
+    expect(productPrimaryAction(input)).toMatchObject({ kind, label })
+  })
+})
+
+describe('Products dead-end states', () => {
+  it('shows the true zero-model empty state with no reachable Add try-on modal', () => {
+    routeState.loaderData = {
+      mappings: [],
+      assets: [],
+      usage: {
+        planName: 'Starter',
+        used: 0,
+        limit: 10,
+        unlimited: false,
+        atLimit: false,
+        pricingUrl: 'https://admin.shopify.com/pricing',
+      },
+      themeUrl: 'https://admin.shopify.com/theme',
+    }
+
+    const html = renderToStaticMarkup(React.createElement(Products))
+
+    expect(html).toMatch(/Upload model/)
+    expect(html).toMatch(/href="\/app\/models"/)
+    // Not just "not the primary action" -- the modal must not exist in the
+    // tree at all, so there is no way (button, command, or otherwise) to
+    // reach a modal that would open onto an empty model picker.
+    expect(html).not.toMatch(/commandFor="add-tryon"/)
+    expect(html).not.toMatch(/id="add-tryon"/)
+    // This is the true zero-model state, not the "models exist but no
+    // products mapped yet" state -- conflating the two would still say
+    // "Upload model" (from the primary action) even if the section body
+    // wrongly showed the mapped-products empty-state copy instead.
+    expect(html).not.toMatch(/Add try-on to your first product/)
+  })
+
+  it('keeps the mapped-products empty state distinct from the zero-model state', () => {
+    routeState.loaderData = {
+      mappings: [],
+      assets: [{ id: 'model-a', label: 'Aviator' }],
+      usage: {
+        planName: 'Starter',
+        used: 0,
+        limit: 10,
+        unlimited: false,
+        atLimit: false,
+        pricingUrl: 'https://admin.shopify.com/pricing',
+      },
+      themeUrl: 'https://admin.shopify.com/theme',
+    }
+
+    const html = renderToStaticMarkup(React.createElement(Products))
+
+    // Models exist, so the real "add a product" path must stay reachable...
+    expect(html).toMatch(/Add try-on to your first product/)
+    expect(html).toMatch(/commandFor="add-tryon"/)
+    // ...and this is NOT the zero-model message.
+    expect(html).not.toMatch(/Upload a model to get started/)
+  })
+
+  it('offers an upgrade action instead of Add try-on when the plan is at its limit', () => {
+    // routeState.loaderData default (beforeEach) already has assets and atLimit: true.
+    const html = renderToStaticMarkup(React.createElement(Products))
+
+    expect(html).toMatch(/Upgrade plan/)
+    expect(html).not.toMatch(/slot="primary-action"[^>]*commandFor="add-tryon"/)
   })
 })

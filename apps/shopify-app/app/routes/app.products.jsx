@@ -191,6 +191,17 @@ function retryMatches(data, productId, modelAssetId) {
   )
 }
 
+// Pure derivation: which page primary action is completable right now. The
+// route must never offer a control that leads nowhere -- an Add try-on modal
+// with no models to pick from, or a mapping request that will just bounce
+// off the plan limit -- so this always resolves to something the merchant
+// can actually finish.
+export function productPrimaryAction({ assetCount, usage }) {
+  if (assetCount === 0) return { kind: 'upload', label: 'Upload model', href: '/app/models' }
+  if (usage.atLimit) return { kind: 'upgrade', label: 'Upgrade plan', href: usage.pricingUrl }
+  return { kind: 'add', label: 'Add try-on', commandFor: 'add-tryon' }
+}
+
 export function mappingSubmitDisabled({
   productId,
   modelAssetId,
@@ -429,12 +440,27 @@ export default function Products() {
   const usageText = usage.unlimited
     ? `${usage.used} product${usage.used === 1 ? '' : 's'} using try-on`
     : `${usage.used} of ${usage.limit} products using try-on`
+  const primaryAction = productPrimaryAction({ assetCount: assets.length, usage })
 
   return (
     <s-page heading="Products">
-      <s-button slot="primary-action" commandFor="add-tryon" command="--show" disabled={usage.atLimit}>
-        Add try-on
-      </s-button>
+      {primaryAction.kind === 'add' ? (
+        <s-button slot="primary-action" commandFor={primaryAction.commandFor} command="--show">
+          {primaryAction.label}
+        </s-button>
+      ) : (
+        // upload/upgrade both navigate away from the embedded add-tryon flow:
+        // upload goes to another in-app route, upgrade must break out to the
+        // top-level admin pricing page (never inside this app's iframe).
+        <s-button
+          slot="primary-action"
+          href={primaryAction.href}
+          target={primaryAction.kind === 'upgrade' ? '_top' : undefined}
+          accessibilityLabel={primaryAction.label}
+        >
+          {primaryAction.label}
+        </s-button>
+      )}
 
       <s-section>
         <s-box padding="base" background="subdued" borderRadius="base">
@@ -454,44 +480,61 @@ export default function Products() {
         </s-box>
       </s-section>
 
-      <s-modal id="add-tryon" heading="Add try-on to a product">
-        <s-stack direction="block" gap="base">
-          {usage.atLimit && (
-            <s-banner tone="warning">
-              You&apos;re using all {usage.limit} products on your plan.{' '}
-              {usage.pricingUrl && <a href={usage.pricingUrl} target="_top" rel="noreferrer">Upgrade</a>} to add more.
-            </s-banner>
-          )}
-          <s-stack direction="inline" gap="base" alignItems="center">
-            <s-button onClick={pickProduct} icon="product">
-              {picked ? 'Change product' : 'Select product'}
-            </s-button>
-            {picked && (
-              <s-stack direction="inline" gap="small-500" alignItems="center">
-                {picked.imageUrl && <s-thumbnail src={picked.imageUrl} alt={picked.title} size="small"></s-thumbnail>}
-                <s-text type="strong">{picked.title}</s-text>
-              </s-stack>
+      {/* Unmounted (not just hidden) with zero models: there is nothing for
+          ModelPicker to offer, and no page-level control opens this modal in
+          that state -- see productPrimaryAction's 'upload' branch. */}
+      {assets.length > 0 && (
+        <s-modal id="add-tryon" heading="Add try-on to a product">
+          <s-stack direction="block" gap="base">
+            {usage.atLimit && (
+              <s-banner tone="warning">
+                You&apos;re using all {usage.limit} products on your plan.{' '}
+                {usage.pricingUrl && <a href={usage.pricingUrl} target="_top" rel="noreferrer">Upgrade</a>} to add more.
+              </s-banner>
             )}
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <s-button onClick={pickProduct} icon="product">
+                {picked ? 'Change product' : 'Select product'}
+              </s-button>
+              {picked && (
+                <s-stack direction="inline" gap="small-500" alignItems="center">
+                  {picked.imageUrl && <s-thumbnail src={picked.imageUrl} alt={picked.title} size="small"></s-thumbnail>}
+                  <s-text type="strong">{picked.title}</s-text>
+                </s-stack>
+              )}
+            </s-stack>
+            <ModelPicker assets={assets} value={modelAssetId} onChange={setModelAssetId} />
+            {mapError && <s-banner heading="Could not add try-on" tone="critical">{mapError}</s-banner>}
           </s-stack>
-          <ModelPicker assets={assets} value={modelAssetId} onChange={setModelAssetId} />
-          {mapError && <s-banner heading="Could not add try-on" tone="critical">{mapError}</s-banner>}
-        </s-stack>
-        <s-button slot="secondary-actions" commandFor="add-tryon" command="--hide">
-          Cancel
-        </s-button>
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          onClick={submitMapping}
-          disabled={mapDisabled}
-          {...(mapFetcher.state !== 'idle' ? { loading: true } : {})}
-        >
-          {mapRetryable ? 'Try again' : 'Add try-on'}
-        </s-button>
-      </s-modal>
+          <s-button slot="secondary-actions" commandFor="add-tryon" command="--hide">
+            Cancel
+          </s-button>
+          <s-button
+            slot="primary-action"
+            variant="primary"
+            onClick={submitMapping}
+            disabled={mapDisabled}
+            {...(mapFetcher.state !== 'idle' ? { loading: true } : {})}
+          >
+            {mapRetryable ? 'Try again' : 'Add try-on'}
+          </s-button>
+        </s-modal>
+      )}
 
       <s-section heading="Products with try-on">
-        {mappings.length === 0 ? (
+        {assets.length === 0 ? (
+          // True empty state: no models exist yet, so there is nothing to map
+          // a product to. Distinct from the "models exist, nothing mapped"
+          // case below -- conflating the two would send merchants into the
+          // Add try-on modal before it has anything to offer.
+          <s-stack direction="block" gap="base">
+            <s-text type="strong">Upload a model to get started</s-text>
+            <s-paragraph color="subdued">
+              You need at least one 3D model before you can add try-on to a product.
+            </s-paragraph>
+            <s-button href="/app/models">Upload model</s-button>
+          </s-stack>
+        ) : mappings.length === 0 ? (
           <s-stack direction="block" gap="base">
             <s-text type="strong">Add try-on to your first product</s-text>
             <s-paragraph>
