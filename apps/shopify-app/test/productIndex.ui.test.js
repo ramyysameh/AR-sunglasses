@@ -6,6 +6,7 @@ global.React = React
 
 import ProductIndex, {
   ProductIndexView,
+  ProductTable,
   filterMappings,
   sortMappings,
   paginateMappings,
@@ -34,6 +35,46 @@ function statusOf(id) {
     check_fit: { id: 'check_fit', label: 'Check fit', tone: 'warning' },
     not_on_theme: { id: 'not_on_theme', label: 'Not on your theme yet', tone: 'warning' },
   }[id]
+}
+
+// Minimal props a ProductTable/ProductIndexView call needs beyond the ones a
+// given test cares about -- kept in one place so each test only spells out
+// what it's actually exercising.
+function tableProps(overrides = {}) {
+  return {
+    items: [],
+    totalPages: 1,
+    hasPreviousPage: false,
+    hasNextPage: false,
+    query: '',
+    status: 'all',
+    sort: 'newest',
+    onQueryChange: vi.fn(),
+    onStatusChange: vi.fn(),
+    onSortChange: vi.fn(),
+    onClearFilters: vi.fn(),
+    themeUrl: 'https://admin.shopify.com/theme',
+    onChangeModel: vi.fn(),
+    onRemove: vi.fn(),
+    ...overrides,
+  }
+}
+
+// Walks a returned React element tree (plain objects with .type/.props, as
+// returned by calling a hook-free component function directly -- same
+// pattern the codebase already uses for ModelPicker) looking for the first
+// element matching `predicate`.
+function findElement(node, predicate) {
+  if (!node || typeof node !== 'object') return null
+  if (predicate(node)) return node
+  const children = node.props?.children
+  if (children === undefined) return null
+  const list = Array.isArray(children) ? children : [children]
+  for (const child of list) {
+    const found = findElement(child, predicate)
+    if (found) return found
+  }
+  return null
 }
 
 describe('filterMappings', () => {
@@ -187,6 +228,39 @@ describe('ProductIndex responsive markup', () => {
     expect(html).toContain('listSlot="labeled"')
     expect(html).toContain('listSlot="secondary"')
     expect(html).toContain('heading="Products with try-on"')
+    // s-empty-state is not a registered component in this app's pinned
+    // Polaris version -- must never appear in the output (Critical 1 fix).
+    expect(html).not.toContain('s-empty-state')
+  })
+
+  it('binds search and select filters with onInput, not onChange (React 18 dispatch)', () => {
+    // React never serializes event-handler props into SSR markup (neither
+    // onChange nor onInput appears in the HTML string either way), so this
+    // has to be checked on the element tree itself, not by string-matching
+    // rendered output.
+    const tree = ProductTable(tableProps())
+    const children = Array.isArray(tree.props.children) ? tree.props.children : [tree.props.children]
+    const tableElement = children.find((child) => child && child.type === 's-table')
+    const grid = findElement(tableElement, (node) => node.type === 's-grid')
+    const searchField = findElement(grid, (node) => node.type === 's-search-field')
+    const selects = []
+    findElement(grid, (node) => {
+      if (node.type === 's-select') selects.push(node)
+      return false
+    })
+
+    // React 18's ChangeEventPlugin only special-cases native <select> and
+    // <input type=file> when deciding whether to dispatch a synthetic
+    // `change` event -- an arbitrary custom element never qualifies, so
+    // onChange here would silently never fire. `input` is a simple,
+    // type-agnostic DOM event React forwards regardless of tag name.
+    expect(typeof searchField.props.onInput).toBe('function')
+    expect(searchField.props.onChange).toBeUndefined()
+    expect(selects).toHaveLength(2)
+    for (const select of selects) {
+      expect(typeof select.props.onInput).toBe('function')
+      expect(select.props.onChange).toBeUndefined()
+    }
   })
 
   it('does not render pagination controls when everything fits on one page', () => {
@@ -200,40 +274,54 @@ describe('ProductIndex responsive markup', () => {
       }),
     )
 
-    expect(html).not.toContain('paginate=""')
+    // Tightened from not.toContain('paginate=""'): that alone would still
+    // pass if the impl regressed to `paginate="false"` -- a real boolean
+    // stringified onto a custom element, which a browser reads as *present*
+    // (i.e. still truthy) regardless of its text. Asserting no `paginate=`
+    // attribute at all is what actually proves pagination is off.
+    expect(html).not.toMatch(/paginate=/)
+  })
+
+  it('wires a ref onto s-table for the native previouspage/nextpage event listeners', () => {
+    // s-table's pagination is real DOM events (previouspage/nextpage per
+    // @shopify/polaris-types), not props a React 18 JSX attribute can bind
+    // to -- so ProductIndex attaches them by hand via a ref (Critical 2 fix).
+    // This can't be exercised end-to-end without a real DOM (this repo's
+    // test environment has no jsdom -- the same is true of the pre-existing
+    // useAfterHide/'afterhide' wiring this mirrors, which also has no
+    // behavioral test), but a dropped `ref={tableRef}` is exactly the
+    // regression that would silently break pagination again, so pin it
+    // structurally: the ref passed in must land on the actual <s-table>.
+    const tableRef = { current: null }
+    const tree = ProductTable(tableProps({ tableRef }))
+    const children = Array.isArray(tree.props.children) ? tree.props.children : [tree.props.children]
+    const tableElement = children.find((child) => child && child.type === 's-table')
+    // `ref` is stored on the element itself (element.ref), not inside
+    // element.props -- React strips it from props for every element type
+    // (host or component) and warns in dev if you try to read it there.
+    expect(tableElement.ref).toBe(tableRef)
   })
 })
 
 describe('ProductIndex no-results state', () => {
   it('keeps the filter controls visible and offers Clear filters when nothing matches', () => {
     const html = renderToStaticMarkup(
-      React.createElement('div', null, ProductIndexView({
+      React.createElement('div', null, ProductIndexView(tableProps({
         items: [],
-        totalPages: 1,
-        page: 1,
-        hasPreviousPage: false,
-        hasNextPage: false,
         query: 'nonexistent',
-        status: 'all',
-        sort: 'newest',
-        onQueryChange: vi.fn(),
-        onStatusChange: vi.fn(),
-        onSortChange: vi.fn(),
-        onPreviousPage: vi.fn(),
-        onNextPage: vi.fn(),
-        onClearFilters: vi.fn(),
-        themeUrl: 'https://admin.shopify.com/theme',
-        onChangeModel: vi.fn(),
-        onRemove: vi.fn(),
-      })),
+      }))),
     )
 
     // Filters must still be present -- this is not the route's first-use
     // empty state, which has no search/status/sort controls at all.
     expect(html).toContain('slot="filters"')
     expect(html).toContain('s-search-field')
-    expect(html).toContain('No products match these filters')
-    expect(html).toMatch(/Clear filters/)
+    // Anchored to the rendered text node, not a substring that would also
+    // match an attribute value like heading="..." -- s-empty-state's
+    // `heading` attribute would have satisfied a bare .toContain() even
+    // though it renders nothing visible (exactly Critical 1's failure mode).
+    expect(html).toContain('>No products match these filters<')
+    expect(html).toMatch(/>Clear filters</)
     expect(html).not.toContain('Upload a model to get started')
     expect(html).not.toContain('Add try-on to your first product')
   })
@@ -241,29 +329,23 @@ describe('ProductIndex no-results state', () => {
   it('renders rows and no empty-state copy when results exist', () => {
     const items = Array.from({ length: 2 }, mapping)
     const html = renderToStaticMarkup(
-      React.createElement('div', null, ProductIndexView({
-        items,
-        totalPages: 1,
-        page: 1,
-        hasPreviousPage: false,
-        hasNextPage: false,
-        query: '',
-        status: 'all',
-        sort: 'newest',
-        onQueryChange: vi.fn(),
-        onStatusChange: vi.fn(),
-        onSortChange: vi.fn(),
-        onPreviousPage: vi.fn(),
-        onNextPage: vi.fn(),
-        onClearFilters: vi.fn(),
-        themeUrl: 'https://admin.shopify.com/theme',
-        onChangeModel: vi.fn(),
-        onRemove: vi.fn(),
-      })),
+      React.createElement('div', null, ProductIndexView(tableProps({ items }))),
     )
 
     expect(html).not.toContain('No products match these filters')
     expect(html).toContain('Product 0')
     expect(html).toContain('Product 1')
+  })
+
+  it('calls onClearFilters when the Clear filters action is used', () => {
+    const onClearFilters = vi.fn()
+    const tree = ProductTable(tableProps({ items: [], query: 'nonexistent', onClearFilters }))
+    const clearButton = findElement(tree, (node) => (
+      node.type === 's-button' && node.props.children === 'Clear filters'
+    ))
+
+    expect(clearButton).toBeTruthy()
+    clearButton.props.onClick()
+    expect(onClearFilters).toHaveBeenCalledTimes(1)
   })
 })

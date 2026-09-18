@@ -140,6 +140,20 @@ describe('Products working surface', () => {
       expect(html.match(new RegExp(`id="${escapedTarget}"`, 'g'))).toHaveLength(1)
     }
   })
+
+  // Pins the route -> ProductIndex wiring itself. Without this, the
+  // commandFor/id invariant test above would still pass even if ProductIndex
+  // were accidentally left unmounted (it asserts "no orphans", not "the
+  // index renders at all") -- and every dead-end-state test in this file
+  // uses mappings: [], which never reaches the ProductIndex branch either.
+  it('renders the product index with its filters when mappings exist', () => {
+    const html = renderToStaticMarkup(React.createElement(Products))
+
+    expect(html).toContain('slot="filters"')
+    expect(html).toContain('s-search-field')
+    expect(html).toContain('commandFor="preview-mapping-1"')
+    expect(html).toContain('id="preview-mapping-1"')
+  })
 })
 
 describe('productPrimaryAction', () => {
