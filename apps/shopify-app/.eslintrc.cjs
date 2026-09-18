@@ -8,7 +8,7 @@
 module.exports = {
   root: true,
   parserOptions: {
-    ecmaVersion: "latest",
+    ecmaVersion: 2022,
     sourceType: "module",
     ecmaFeatures: {
       jsx: true,
@@ -17,9 +17,9 @@ module.exports = {
   env: {
     browser: true,
     commonjs: true,
-    es6: true,
+    es2022: true,
   },
-  ignorePatterns: ["!**/.server", "!**/.client"],
+  ignorePatterns: ["!**/.server", "!**/.client", "public/tryon/**"],
 
   // Base config
   extends: ["eslint:recommended"],
@@ -84,6 +84,9 @@ module.exports = {
         ".graphqlrc.{js,ts}",
         "shopify.server.{js,ts}",
         "**/*.server.{js,ts}",
+        "react-router.config.js",
+        "vitest.config.js",
+        "test/**/*.js",
       ],
       env: {
         node: true,

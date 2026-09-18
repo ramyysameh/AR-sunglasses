@@ -71,7 +71,7 @@ export default function Index() {
                 {step.done ? "Done" : "To do"}
               </s-badge>
               <s-text>{step.text}</s-text>
-              {step.note && <s-text tone="subdued">{step.note}</s-text>}
+              {step.note && <s-text color="subdued">{step.note}</s-text>}
             </s-stack>
           ))}
         </s-stack>
@@ -92,14 +92,14 @@ export default function Index() {
           {usage.unlimited ? (
             <>
               <s-text type="strong">{usage.planName ?? "No plan"}</s-text>
-              <s-text tone="subdued">{usage.used} products using try-on</s-text>
+              <s-text color="subdued">{usage.used} products using try-on</s-text>
             </>
           ) : (
             <>
               <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
                 <s-stack direction="block" gap="small-200">
                   <s-text type="strong">{usage.planName ?? "No plan"}</s-text>
-                  <s-text tone="subdued">{usage.used} / {usage.limit} products</s-text>
+                  <s-text color="subdued">{usage.used} / {usage.limit} products</s-text>
                 </s-stack>
                 {usage.pricingUrl && (
                   <s-button
@@ -114,27 +114,15 @@ export default function Index() {
               <div
                 role="progressbar"
                 aria-label={`${usage.used} of ${usage.limit} products used`}
-                aria-valuemin="0"
+                aria-valuemin={0}
                 aria-valuemax={usage.limit}
                 aria-valuenow={Math.min(usage.used, usage.limit)}
-                style={{
-                  width: "100%",
-                  height: "8px",
-                  overflow: "hidden",
-                  borderRadius: "4px",
-                  background: "#e3e3e3",
-                }}
               >
-                <div
-                  style={{
-                    width: `${usagePercent}%`,
-                    height: "100%",
-                    borderRadius: "4px",
-                    background: "#008060",
-                  }}
-                />
+                <s-box background="subdued" borderRadius="base" overflow="hidden" blockSize="8px">
+                  <s-box background="strong" blockSize="8px" inlineSize={`${usagePercent}%`}></s-box>
+                </s-box>
               </div>
-              <s-text tone="subdued">
+              <s-text color="subdued">
                 {usage.limit - usage.used > 0
                   ? `${usage.limit - usage.used} product${usage.limit - usage.used === 1 ? "" : "s"} remaining`
                   : "Upgrade to add more products"}
