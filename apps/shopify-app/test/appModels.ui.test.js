@@ -34,6 +34,7 @@ const {
   uploadModalHideBehavior,
   uploadValidationError,
 } = await import('../app/routes/app.models.jsx')
+const { default: ModelPicker, filterModelAssets } = await import('../app/components/ModelPicker.jsx')
 
 beforeEach(() => {
   routeState.loaderData = {
@@ -153,5 +154,33 @@ describe('Models UI behavior', () => {
       const escapedTarget = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       expect(html.match(new RegExp(`id="${escapedTarget}"`, 'g'))).toHaveLength(1)
     }
+  })
+})
+
+// ModelPicker is consumed by app.products.jsx, not this route, but this
+// route's loader is where the real ModelAsset shape (label/filename/status/
+// mappingCount straight off prisma.modelAsset.findMany) comes from -- so
+// exercise the compact/searchable picker against assets shaped like that,
+// not just appProducts.ui.test.js's minimal {id, label} fixtures.
+describe('ModelPicker (assets shaped like the Models route loader)', () => {
+  const assets = [
+    { id: 'used-model', label: 'Pelmo black', filename: 'pelmo.glb', status: 'ready', mappingCount: 2 },
+    { id: 'unused-model', label: null, filename: 'aviator.glb', status: 'needs_review', mappingCount: 0 },
+  ]
+
+  it('filters by the merchant-facing name, falling back to filename', () => {
+    expect(filterModelAssets(assets, 'pelmo')).toEqual([assets[0]])
+    expect(filterModelAssets(assets, 'aviator')).toEqual([assets[1]])
+    expect(filterModelAssets(assets, 'nonexistent')).toEqual([])
+  })
+
+  it('renders a search field and mounts exactly one preview, for the selected asset only', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ModelPicker, { assets, value: 'unused-model', onChange: vi.fn() }),
+    )
+
+    expect(html).toContain('s-search-field')
+    expect(html.match(/<model-viewer/g) ?? []).toHaveLength(0)
+    expect(html.match(/Loading 3D preview/g)).toHaveLength(1)
   })
 })
