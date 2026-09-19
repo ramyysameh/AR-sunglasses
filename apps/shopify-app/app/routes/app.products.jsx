@@ -563,13 +563,25 @@ export default function Products() {
           </s-stack>
         </s-section>
       ) : mappings.length === 0 ? (
+        // Models exist, but none are mapped to a product yet. This used to
+        // carry copy left over from before Task 3 split the true zero-model
+        // empty state out above ("Upload a model on the Models page, then
+        // pick the product it belongs to") -- correct instructions for a
+        // merchant with NO models, but this branch only renders once at
+        // least one model exists, so the actual blocker for someone reading
+        // this is that they haven't used Add try-on yet, not that they need
+        // to visit /app/models. Point at the real next step, and mirror the
+        // sibling zero-model state's in-body action instead of relying
+        // solely on the page-header primary action (also `commandFor=
+        // "add-tryon"` when productPrimaryAction resolves to 'add' -- a
+        // second trigger targeting the same modal id is fine).
         <s-section heading="Products with try-on">
           <s-stack direction="block" gap="base">
             <s-text type="strong">Add try-on to your first product</s-text>
             <s-paragraph>
-              Upload a model on the <s-link href="/app/models">Models</s-link> page, then
-              pick the product it belongs to.
+              Use <s-text type="strong">Add try-on</s-text> above to connect your first product to a model.
             </s-paragraph>
+            <s-button commandFor="add-tryon" command="--show">Add try-on</s-button>
           </s-stack>
         </s-section>
       ) : (

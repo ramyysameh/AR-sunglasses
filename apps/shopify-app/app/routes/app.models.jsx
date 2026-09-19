@@ -193,6 +193,55 @@ function useModalEvents({ onHide = undefined, onAfterHide = undefined }) {
   return modalRef
 }
 
+// Pulled out of the useEffect below so the wiring itself -- "does a
+// `droprejected` event on the element reach the reducer as a `reject`
+// action" -- is unit-testable against a plain fake element (addEventListener/
+// removeEventListener only), without needing a real DOM. This repo's test
+// environment has no jsdom (see productIndex.ui.test.js's ref-only coverage
+// of the sibling previouspage/nextpage wiring), so this is the closest thing
+// to a behavioral test available for the fix without adding a new
+// dependency: it proves the actual attach/detach logic, and combined with
+// uploadModalReducer's existing 'reject' coverage, closes the loop through
+// to the rendered "Choose a .glb file" banner text.
+export function attachDropRejectedListener(dropZone, dispatchUpload) {
+  const handleDropRejected = () => dispatchUpload({ type: 'reject' })
+  dropZone.addEventListener('droprejected', handleDropRejected)
+  return () => dropZone.removeEventListener('droprejected', handleDropRejected)
+}
+
+// Split out from UploadModalContent so the dropZoneRef wiring can be
+// asserted structurally (the ref lands on the real <s-drop-zone>, and
+// onDropRejected is genuinely gone, not just unused) without executing
+// hooks outside of a render -- the same tableRef/ProductTable split
+// ProductIndex.jsx already uses for its own ref-wired custom element.
+export function DropZoneField({ dropZoneRef, disabled, onInput }) {
+  return (
+    <s-drop-zone
+      ref={dropZoneRef}
+      label="Model file (.glb)"
+      name="model"
+      accept=".glb,model/gltf-binary"
+      accessibilityLabel="Choose a GLB model file"
+      disabled={disabled}
+      // Not onChange: React 18's ChangeEventPlugin only special-cases a
+      // real <select>/<input type=file> when deciding whether to dispatch a
+      // synthetic `change` event -- s-drop-zone is a custom element, so
+      // onChange here was silently never firing (a file chosen via the drop
+      // zone never reached dispatchUpload). `input` is a simple,
+      // type-agnostic DOM event React forwards regardless of tag name, and
+      // Shopify's polaris-types IDL documents onInput for s-drop-zone
+      // alongside onChange -- see ModelPicker.jsx's search field /
+      // ProductIndex.jsx's search field for the same reasoning already
+      // applied elsewhere in this app.
+      onInput={onInput}
+      // `onDropRejected` is NOT wired here -- `dropRejected` is not in React
+      // 18's simpleEventPluginEvents registry, so the prop is silently
+      // stripped and the handler never runs. See attachDropRejectedListener
+      // above and its useEffect call site for the real fix.
+    ></s-drop-zone>
+  )
+}
+
 async function postUploadJson(body, signal) {
   const res = await fetch('/api/model-upload', { method: 'POST', body, signal })
   const text = await res.text()
@@ -215,6 +264,23 @@ function UploadModalContent({ cancellationCoordinator, onBusyChange }) {
   })
   const [progress, setProgress] = useState(null)
   const uploading = progress !== null
+  const dropZoneRef = useRef(null)
+
+  // `dropRejected` (fired when a dropped/chosen file fails the `accept`
+  // filter) is not in React 18's simpleEventPluginEvents registry, so the
+  // `onDropRejected` JSX prop DropZoneField used to carry was silently
+  // stripped -- the handler never ran, and a merchant dropping a non-.glb
+  // file got total silence instead of the "Choose a .glb file" banner.
+  // Confirmed via @shopify/polaris-types/dist/polaris.d.ts:3881, which
+  // documents the real IDL event as `ondroprejected` (i.e. the DOM event
+  // name is `droprejected`). Wire it by hand, the same ref+addEventListener
+  // pattern as useModalEvents above and the pagination wiring in
+  // ProductIndex.jsx.
+  useEffect(() => {
+    const dropZone = dropZoneRef.current
+    if (!dropZone) return undefined
+    return attachDropRejectedListener(dropZone, dispatchUpload)
+  }, [])
 
   const upload = async () => {
     const validationError = uploadValidationError(pendingFile)
@@ -291,30 +357,16 @@ function UploadModalContent({ cancellationCoordinator, onBusyChange }) {
         <s-paragraph>
           Choose a .glb eyewear model up to 25 MB. We&apos;ll prepare it for try-on.
         </s-paragraph>
-        <s-drop-zone
-          label="Model file (.glb)"
-          name="model"
-          accept=".glb,model/gltf-binary"
-          accessibilityLabel="Choose a GLB model file"
+        <DropZoneField
+          dropZoneRef={dropZoneRef}
           disabled={uploading}
-          // Not onChange: React 18's ChangeEventPlugin only special-cases a
-          // real <select>/<input type=file> when deciding whether to
-          // dispatch a synthetic `change` event -- s-drop-zone is a custom
-          // element, so onChange here was silently never firing (a file
-          // chosen via the drop zone never reached dispatchUpload). `input`
-          // is a simple, type-agnostic DOM event React forwards regardless
-          // of tag name, and Shopify's polaris-types IDL documents onInput
-          // for s-drop-zone alongside onChange -- see ModelPicker.jsx's
-          // search field / ProductIndex.jsx's search field for the same
-          // reasoning already applied elsewhere in this app.
           onInput={(event) => {
             dispatchUpload({
               type: 'select',
               file: event.currentTarget.files?.[0] ?? null,
             })
           }}
-          onDropRejected={() => dispatchUpload({ type: 'reject' })}
-        ></s-drop-zone>
+        />
         {pendingFile && (
           <s-text color="subdued">
             {pendingFile.name} ({(pendingFile.size / 1048576).toFixed(1)} MB)

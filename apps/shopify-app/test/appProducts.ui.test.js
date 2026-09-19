@@ -326,6 +326,25 @@ describe('Products dead-end states', () => {
     expect(html).toMatch(/commandFor="add-tryon"/)
     // ...and this is NOT the zero-model message.
     expect(html).not.toMatch(/Upload a model to get started/)
+    // Important-2 regression guard: the body copy used to be stranded
+    // leftover prose from before the true zero-model state existed --
+    // "Upload a model on the Models page, then pick the product it belongs
+    // to" -- which points a merchant who ALREADY has a model at the wrong
+    // next step. The heading assertion above would pass unchanged even with
+    // that wrong body text, since it only matches the heading; pin the body
+    // copy itself, and the in-body action that mirrors the zero-model
+    // state's sibling button.
+    expect(html).not.toMatch(/Upload a model on the.*Models.*page, then/)
+    expect(html).toMatch(/Use.*Add try-on.*above to connect your first product to a model/)
+    // Three commandFor="add-tryon" triggers now exist in this state (the
+    // page-header primary action, the modal's own Cancel --hide, and this
+    // new in-body --show button), all correctly pointing at the one
+    // id="add-tryon" modal -- not a regression, see appProducts.ui.test.js's
+    // "routes product actions..." id-uniqueness test, which exercises a
+    // different (non-empty-mappings) fixture and is unaffected by this
+    // branch.
+    expect(html.match(/commandFor="add-tryon"/g)).toHaveLength(3)
+    expect(html.match(/id="add-tryon"/g)).toHaveLength(1)
   })
 
   it('offers an upgrade action instead of Add try-on when the plan is at its limit', () => {

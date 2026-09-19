@@ -25,8 +25,10 @@ vi.mock('../app/storage.server.js', () => ({ deleteModelGlb: vi.fn() }))
 global.React = React
 
 const {
+  attachDropRejectedListener,
   createUploadCancellationCoordinator,
   default: Models,
+  DropZoneField,
   modelName,
   modalSessionReducer,
   renameSubmitDisabled,
@@ -132,6 +134,62 @@ describe('Models UI behavior', () => {
       pendingFile: null,
       uploadError: 'Choose a .glb file',
     })
+  })
+
+  // Important-1 regression guard: `onDropRejected` on <s-drop-zone> was a
+  // dead JSX prop under React 18 (`dropRejected` is not in
+  // simpleEventPluginEvents), so a merchant dropping the wrong file type got
+  // silence instead of a banner -- the reject branch above was unit-tested
+  // but could never actually fire in production. This repo's test
+  // environment has no jsdom, so it can't mount <s-drop-zone> and dispatch a
+  // real `droprejected` DOM event -- instead this exercises the real
+  // attach/detach function the component's useEffect calls, against a plain
+  // fake element, and chains its output straight into the reducer above to
+  // prove the full path: real listener code -> real dispatched action ->
+  // the exact banner text a merchant would see.
+  it('wires droprejected on the drop-zone element to the reducer\'s required GLB guidance', () => {
+    const listeners = {}
+    const fakeDropZone = {
+      addEventListener: (type, handler) => {
+        listeners[type] = handler
+      },
+      removeEventListener: vi.fn(),
+    }
+    const dispatchUpload = vi.fn()
+
+    const detach = attachDropRejectedListener(fakeDropZone, dispatchUpload)
+    expect(typeof listeners.droprejected).toBe('function')
+
+    listeners.droprejected()
+    expect(dispatchUpload).toHaveBeenCalledExactlyOnceWith({ type: 'reject' })
+
+    // Feed the dispatched action straight into the real reducer, the same
+    // one wired to UploadModalContent's state -- this is what closes the
+    // loop from "the DOM event fired" to "the merchant sees the banner".
+    const nextState = uploadModalReducer(
+      { pendingFile: { name: 'frames.obj' }, uploadError: null },
+      dispatchUpload.mock.calls[0][0],
+    )
+    expect(nextState.uploadError).toBe('Choose a .glb file')
+
+    detach()
+    expect(fakeDropZone.removeEventListener).toHaveBeenCalledExactlyOnceWith('droprejected', listeners.droprejected)
+  })
+
+  // Structural half of the Important-1 fix: proves the ref that
+  // attachDropRejectedListener above needs a live element for is actually
+  // handed to the real <s-drop-zone> (and that onDropRejected is gone, not
+  // just unused) -- the same ref-lands-on-the-real-element check
+  // productIndex.ui.test.js already relies on for the sibling
+  // previouspage/nextpage wiring, since neither can be exercised end-to-end
+  // without jsdom.
+  it('hands the drop-zone ref to the real s-drop-zone element with no dead onDropRejected prop', () => {
+    const dropZoneRef = { current: null }
+    const element = DropZoneField({ dropZoneRef, disabled: false, onInput: vi.fn() })
+
+    expect(element.type).toBe('s-drop-zone')
+    expect(element.ref).toBe(dropZoneRef)
+    expect(element.props.onDropRejected).toBeUndefined()
   })
 
   it('reopens a busy upload modal but resets an idle dismissed modal', () => {

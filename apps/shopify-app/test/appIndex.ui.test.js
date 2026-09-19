@@ -34,6 +34,12 @@ describe('home Polaris contract', () => {
     expect(source).not.toContain('aria-valuemin="0"')
     expect(source).toContain('color="subdued"')
     expect(source).toContain('aria-valuemin={0}')
+    // Minor-5: this is the file the #e3e3e3/#008060 progress bar literally
+    // lived in before the Polaris pass replaced it with token-driven
+    // colors -- the hex guard below was added to SetupGuide.jsx (once that
+    // component owned the markup) but never backfilled here, leaving the
+    // one file that actually had the regression unpinned.
+    expect(source).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
   })
 
   // SetupGuide.jsx now owns the setup-guide markup that used to live inline
