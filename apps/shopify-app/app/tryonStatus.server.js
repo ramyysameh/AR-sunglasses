@@ -24,7 +24,21 @@ export function needsFitReview(asset) {
 }
 
 /**
- * @param {{ lastSeenLiveAt: Date|null, modelAsset: { status: string, confidence?: number|null } }} mapping
+ * Whether the try-on button is actually on the merchant's storefront.
+ *
+ * `blockSeenAt` is the direct signal: the theme block reports itself once it
+ * has rendered on a product page. `lastSeenLiveAt` counts too, and is what
+ * makes this correct for mappings that predate blockSeenAt -- a shopper cannot
+ * have opened the try-on unless the block was there to open it.
+ * @param {{ blockSeenAt?: Date|null, lastSeenLiveAt?: Date|null }} mapping
+ * @returns {boolean}
+ */
+export function isOnTheme(mapping) {
+  return Boolean(mapping.blockSeenAt || mapping.lastSeenLiveAt)
+}
+
+/**
+ * @param {{ blockSeenAt?: Date|null, lastSeenLiveAt: Date|null, modelAsset: { status: string, confidence?: number|null } }} mapping
  * @returns {{ id: 'check_fit'|'not_on_theme'|'live', label: string, tone: 'warning'|'success' }}
  */
 export function productStatus(mapping) {
@@ -38,7 +52,13 @@ export function productStatus(mapping) {
   if (needsFitReview(asset)) {
     return { id: 'check_fit', label: 'Review fit', tone: 'warning' }
   }
-  if (!mapping.lastSeenLiveAt) {
+  // Keyed on isOnTheme, not on lastSeenLiveAt. Those are different questions:
+  // the button's engine iframe sits in a closed <dialog> and is lazy, so
+  // lastSeenLiveAt only moves when a shopper CLICKS try-on. Keying "Not on your
+  // theme yet" off it told correctly-set-up merchants they had not finished,
+  // which pushed them into following "Add to theme" a second time -- and that
+  // deep link adds another copy of the block every time it is followed.
+  if (!isOnTheme(mapping)) {
     return { id: 'not_on_theme', label: 'Not on your theme yet', tone: 'warning' }
   }
   return { id: 'live', label: 'Live', tone: 'success' }

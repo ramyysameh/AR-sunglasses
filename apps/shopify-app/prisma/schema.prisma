@@ -72,6 +72,13 @@ model ProductMapping {
   modelAsset   ModelAsset @relation(fields: [modelAssetId], references: [id])
   modelAssetId String
   createdAt    DateTime   @default(now())
+  // Two different facts, deliberately kept apart. blockSeenAt says the theme
+  // block rendered the button on a storefront product page -- i.e. the merchant
+  // finished setup. lastSeenLiveAt says a shopper actually opened the try-on.
+  // Before blockSeenAt existed the app could only observe the second and
+  // reported it as "Not on your theme yet", which accused merchants of not
+  // having done something they had done.
+  blockSeenAt    DateTime?
   lastSeenLiveAt DateTime?
 
   @@unique([shop, productId])

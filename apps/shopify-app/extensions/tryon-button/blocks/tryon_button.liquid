@@ -17,8 +17,28 @@
 {% endcomment %}
 {% assign tryon_enabled = block.settings.product.metafields["$app:tryon"].enabled.value %}
 
+{% comment %}
+  Where to report that this block rendered. Derived from engine_url rather than
+  hard-coded so a merchant running their own instance reports to their own app.
+  Skipped entirely if engine_url has been pointed somewhere without the /tryon/
+  path, because then we cannot know the app's origin and a guessed URL would be
+  worse than no signal.
+{% endcomment %}
+{% assign app_origin = '' %}
+{% if block.settings.engine_url contains '/tryon/' %}
+  {% assign app_origin = block.settings.engine_url | split: '/tryon/' | first %}
+{% endif %}
+
 {% if tryon_enabled %}
-<div class="ar-tryon" {% if request.design_mode %}data-ar-tryon-design-mode="true"{% endif %} {{ block.shopify_attributes }}>
+<div
+  class="ar-tryon"
+  {% if request.design_mode %}
+    data-ar-tryon-design-mode="true"
+  {% elsif app_origin != blank %}
+    data-ar-tryon-installed-url="{{ app_origin }}/api/tryon-installed?shop={{ shop.permanent_domain | url_encode }}&productId={{ product_gid | url_encode }}"
+  {% endif %}
+  {{ block.shopify_attributes }}
+>
   <button class="ar-tryon__open" type="button">
     <svg class="ar-tryon__open-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3h5Z"></path>
@@ -75,6 +95,25 @@
     const dialog = root.querySelector('.ar-tryon__dialog')
     root.querySelector('.ar-tryon__open').addEventListener('click', () => dialog.showModal())
     root.querySelector('.ar-tryon__close').addEventListener('click', () => dialog.close())
+
+    // Report that the button is on the storefront. Without this the app can
+    // only observe a shopper CLICKING try-on -- the engine iframe is lazy and
+    // inside a closed <dialog> -- so a correctly installed block looked like
+    // unfinished setup, and the admin kept offering "Add to theme", which adds
+    // another copy of this block every time it is followed.
+    //
+    // Sent after the dedupe check so only the surviving instance reports, and
+    // never in the theme editor: previewing a block is not the same as having
+    // published it. no-cors because this is cross-origin to the app and there
+    // is nothing to read back -- the request is still delivered, and this way a
+    // blocked response cannot put an error on a merchant's storefront. The
+    // server throttles to one write per mapping per hour.
+    const installedUrl = root.dataset.arTryonInstalledUrl
+    if (installedUrl) {
+      try {
+        fetch(installedUrl, { mode: 'no-cors', credentials: 'omit' }).catch(() => {})
+      } catch (e) { /* never let bookkeeping break the product page */ }
+    }
   })()
 </script>
 

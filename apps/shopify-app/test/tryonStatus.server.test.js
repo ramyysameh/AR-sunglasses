@@ -15,6 +15,33 @@ describe('productStatus', () => {
       .toMatchObject({ id: 'not_on_theme', tone: 'warning' })
   })
 
+  // The button's engine iframe is lazy and sits in a closed <dialog>, so
+  // lastSeenLiveAt only moves when a shopper CLICKS try-on. Keying
+  // "Not on your theme yet" off it told correctly-set-up merchants they had not
+  // finished, and the admin kept offering "Add to theme" -- a deep link that
+  // adds another copy of the block every time it is followed.
+  it('is live once the block reports itself, before anyone has opened the try-on', () => {
+    expect(productStatus({ blockSeenAt: seen, lastSeenLiveAt: null, modelAsset: ready }))
+      .toMatchObject({ id: 'live', tone: 'success' })
+  })
+
+  it('still treats a shopper opening the try-on as proof the block is on the theme', () => {
+    // Mappings created before blockSeenAt existed have only this signal, and a
+    // shopper cannot open a try-on the block never rendered.
+    expect(productStatus({ blockSeenAt: null, lastSeenLiveAt: seen, modelAsset: ready }))
+      .toMatchObject({ id: 'live', tone: 'success' })
+  })
+
+  it('is not-on-theme when neither signal has arrived', () => {
+    expect(productStatus({ blockSeenAt: null, lastSeenLiveAt: null, modelAsset: ready }))
+      .toMatchObject({ id: 'not_on_theme', tone: 'warning' })
+  })
+
+  it('still reports a fit problem ahead of either theme signal', () => {
+    expect(productStatus({ blockSeenAt: seen, lastSeenLiveAt: seen, modelAsset: { status: 'ready', confidence: 0.4 } }))
+      .toMatchObject({ id: 'check_fit' })
+  })
+
   it('is check-fit when the model needs a manual anchor', () => {
     expect(productStatus({ lastSeenLiveAt: seen, modelAsset: { status: 'needs_manual', confidence: 0.9 } }))
       .toMatchObject({ id: 'check_fit' })
