@@ -18,7 +18,7 @@
 {% assign tryon_enabled = block.settings.product.metafields["$app:tryon"].enabled.value %}
 
 {% if tryon_enabled %}
-<div class="ar-tryon" {{ block.shopify_attributes }}>
+<div class="ar-tryon" {% if request.design_mode %}data-ar-tryon-design-mode="true"{% endif %} {{ block.shopify_attributes }}>
   <button class="ar-tryon__open" type="button">
     <svg class="ar-tryon__open-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3h5Z"></path>
@@ -49,6 +49,29 @@
 <script>
   (() => {
     const root = document.currentScript.previousElementSibling
+
+    // The admin's "Add to theme" deep link carries addAppBlockId, which ADDS an
+    // instance of this block every time it is followed -- Shopify offers no
+    // "only if absent" variant. The admin also keeps offering that action until
+    // someone has actually opened the try-on on the storefront, so a merchant
+    // who follows it twice ends up with two buttons on the product page.
+    //
+    // Each block's script runs immediately after its own markup during parsing,
+    // so at this point the DOM holds this instance and every earlier one. The
+    // first instance therefore always wins and later ones stand down.
+    const instances = document.querySelectorAll('.ar-tryon')
+    if (instances.length > 1 && instances[0] !== root) {
+      if (root.dataset.arTryonDesignMode) {
+        // In the theme editor, say so instead of vanishing: the merchant is the
+        // only one who can delete the extra block, and a block that silently
+        // disappears reads as the app being broken.
+        root.innerHTML = '<p class="ar-tryon__duplicate"><strong>AR Try-On</strong> is on this template more than once. Shoppers only ever see the first one -- remove the extra block.</p>'
+      } else {
+        root.remove()
+      }
+      return
+    }
+
     const dialog = root.querySelector('.ar-tryon__dialog')
     root.querySelector('.ar-tryon__open').addEventListener('click', () => dialog.showModal())
     root.querySelector('.ar-tryon__close').addEventListener('click', () => dialog.close())
@@ -180,6 +203,15 @@
     .ar-tryon__close {
       transition: none;
     }
+  }
+
+  .ar-tryon__duplicate {
+    padding: 1rem;
+    border: 1px dashed #8a8a8a;
+    border-radius: 4px;
+    color: #616161;
+    font: inherit;
+    margin: 0;
   }
 </style>
 {% elsif request.design_mode %}
