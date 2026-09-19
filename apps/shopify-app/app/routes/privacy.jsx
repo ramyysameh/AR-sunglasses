@@ -6,7 +6,7 @@
 export const meta = () => [{ title: "Privacy Policy — AR Try-on" }];
 
 const UPDATED = "22 July 2026";
-const CONTACT = "ramy.sameh2@gmail.com";
+const CONTACT = "zendolabs@gmail.com";
 
 export default function Privacy() {
   return (

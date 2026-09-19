@@ -68,7 +68,7 @@ describe('Help recovery actions', () => {
     expect(html).toContain('href="/app"')
     expect(html).toContain('href="/app/models"')
     expect(html).toContain('href="/privacy" target="_blank"')
-    expect(html).toContain('href="mailto:ramy.sameh2@gmail.com"')
+    expect(html).toContain('href="mailto:zendolabs@gmail.com"')
     // Theme editor destinations use the shared TopLevelAdminAction control
     // (an <s-button icon="external"> whose onClick does window.open(href,
     // '_top') -- see topLevelAdminAction.ui.test.js for that behavior's own

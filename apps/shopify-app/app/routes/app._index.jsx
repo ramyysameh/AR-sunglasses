@@ -317,7 +317,7 @@ export default function Workspace() {
 
       <s-section slot="aside" heading="Support">
         <s-paragraph><s-link href="/privacy" target="_blank">Privacy policy</s-link></s-paragraph>
-        <s-paragraph>Need help? <s-link href="mailto:ramy.sameh2@gmail.com">Contact support</s-link>.</s-paragraph>
+        <s-paragraph>Need help? <s-link href="mailto:zendolabs@gmail.com">Contact support</s-link>.</s-paragraph>
       </s-section>
     </s-page>
   )

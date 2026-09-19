@@ -73,7 +73,7 @@ export default function HelpPage() {
 
       <s-section slot="aside" heading="Still need help?">
         <s-paragraph>
-          <s-link href="mailto:ramy.sameh2@gmail.com">Contact support</s-link>
+          <s-link href="mailto:zendolabs@gmail.com">Contact support</s-link>
         </s-paragraph>
       </s-section>
     </s-page>
