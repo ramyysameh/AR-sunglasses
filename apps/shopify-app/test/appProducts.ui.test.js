@@ -347,6 +347,49 @@ describe('Products dead-end states', () => {
     expect(html.match(/id="add-tryon"/g)).toHaveLength(1)
   })
 
+  // Important-2 follow-up (re-review 2026-09-19): the in-body Add try-on
+  // trigger above must NOT appear when the plan is at its limit. The
+  // Add-try-on modal's submit path has no currentModelAssetId to fall back
+  // on for a brand-new mapping, so mappingSubmitDisabled resolves to
+  // `atLimit` unconditionally (app.products.jsx:207-219) -- the button would
+  // stay disabled no matter what product/model the merchant picked. Offering
+  // the trigger anyway reopens exactly the dead end productPrimaryAction's
+  // own doc comment says the route must never offer ("a mapping request
+  // that will just bounce off the plan limit"), and undoes what
+  // productPrimaryAction already correctly does for the page-header action
+  // in this same state (resolves to 'upgrade', not 'add' -- see the
+  // sibling test above, which uses the non-empty-mappings default fixture
+  // and so never exercises this branch). Nothing previously covered
+  // atLimit: true combined with mappings: [].
+  it('points at upgrading instead of an unreachable Add try-on trigger when mapped-products-empty and at the limit', () => {
+    routeState.loaderData = {
+      mappings: [],
+      assets: [{ id: 'model-a', label: 'Aviator' }],
+      usage: {
+        planName: 'Starter',
+        used: 10,
+        limit: 10,
+        unlimited: false,
+        atLimit: true,
+        pricingUrl: 'https://admin.shopify.com/pricing',
+      },
+      themeUrl: 'https://admin.shopify.com/theme',
+    }
+
+    const html = renderToStaticMarkup(React.createElement(Products))
+
+    // Still the right heading/section -- models exist, nothing mapped yet.
+    expect(html).toMatch(/Add try-on to your first product/)
+    // No trigger that opens a modal whose submit can never complete. The
+    // modal itself may still exist (assets.length > 0), so this checks for
+    // an in-body --show trigger specifically, not the modal's own
+    // id="add-tryon" or its internal Cancel --hide button.
+    expect(html).not.toMatch(/commandFor="add-tryon" command="--show"/)
+    // Points at the real next step instead: upgrading.
+    expect(html).toMatch(/Upgrade to add your first product/)
+    expect(html).toMatch(/accessibilityLabel="Upgrade plan"/)
+  })
+
   it('offers an upgrade action instead of Add try-on when the plan is at its limit', () => {
     // routeState.loaderData default (beforeEach) already has assets and atLimit: true.
     const html = renderToStaticMarkup(React.createElement(Products))

@@ -572,16 +572,45 @@ export default function Products() {
         // this is that they haven't used Add try-on yet, not that they need
         // to visit /app/models. Point at the real next step, and mirror the
         // sibling zero-model state's in-body action instead of relying
-        // solely on the page-header primary action (also `commandFor=
-        // "add-tryon"` when productPrimaryAction resolves to 'add' -- a
-        // second trigger targeting the same modal id is fine).
+        // solely on the page-header primary action.
+        //
+        // The in-body Add try-on trigger is gated on primaryAction.kind ===
+        // 'add', the same completable-action check productPrimaryAction
+        // itself enforces for the header. Within this branch assets.length >
+        // 0 is already guaranteed (the assets.length === 0 arm above already
+        // claimed that case), so 'kind' here can only be 'add' or 'upgrade'
+        // -- never 'upload'. At the plan limit, mappingSubmitDisabled's Add
+        // try-on path has no `currentModelAssetId` to fall back on and so
+        // resolves to `atLimit` unconditionally (app.products.jsx:207-219):
+        // the modal's submit button would stay disabled no matter what the
+        // merchant picked. Offering the trigger anyway would reopen exactly
+        // the dead end Task 3 existed to close -- productPrimaryAction's own
+        // doc comment above names this as "a mapping request that will just
+        // bounce off the plan limit". So this state gets the same upgrade
+        // messaging as the page-level usage box and the modal's own atLimit
+        // banner instead of an action the merchant cannot complete.
         <s-section heading="Products with try-on">
           <s-stack direction="block" gap="base">
             <s-text type="strong">Add try-on to your first product</s-text>
-            <s-paragraph>
-              Use <s-text type="strong">Add try-on</s-text> above to connect your first product to a model.
-            </s-paragraph>
-            <s-button commandFor="add-tryon" command="--show">Add try-on</s-button>
+            {primaryAction.kind === 'add' ? (
+              <>
+                <s-paragraph>
+                  Use <s-text type="strong">Add try-on</s-text> above to connect your first product to a model.
+                </s-paragraph>
+                <s-button commandFor="add-tryon" command="--show">Add try-on</s-button>
+              </>
+            ) : (
+              <>
+                <s-paragraph>
+                  You&apos;re using all {usage.limit} products on your plan. Upgrade to add your first product.
+                </s-paragraph>
+                {usage.pricingUrl && (
+                  <TopLevelAdminAction href={usage.pricingUrl} accessibilityLabel="Upgrade plan" variant="tertiary">
+                    Upgrade
+                  </TopLevelAdminAction>
+                )}
+              </>
+            )}
           </s-stack>
         </s-section>
       ) : (
