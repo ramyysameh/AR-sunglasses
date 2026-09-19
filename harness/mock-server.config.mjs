@@ -1,0 +1,220 @@
+/**
+ * Dev server for AR occlusion/fit testing.
+ *
+ * Adds two things the normal dev server cannot do:
+ *
+ *  1. A stub /api/register-model, so ?model=<local glb> exercises the REAL
+ *     block-model path (validate -> normalize -> calibrate ->
+ *     toEngineModelConfig -> registerRuntimeGlassesConfig) without the Shopify
+ *     backend running.
+ *
+ *     It runs the SAME sequence as apps/shopify-app/app/calibration.server.js,
+ *     deliberately: it used to call a bare calibrate() on the un-normalized
+ *     doc, which meant every fit and occlusion number measured through this
+ *     harness described a pipeline production does not run. Keep the two in
+ *     step -- the whole value of this server is that what it measures is what
+ *     ships. Production serves the merchant's original bytes, and so does the
+ *     static handler here, so the delivery path now matches too.
+ *
+ *  2. Serves a denser, wider-range mock head over /mock-<sweep>/frame-N.png. The
+ *     repo's own turn frames peak at 26 degrees of yaw, which is not enough to
+ *     expose the temple arm alongside the head -- the frontal mask still covers
+ *     it there, so an occluder bug in that region is invisible. The replacement
+ *     set sweeps +/-60 in 5 degree steps.
+ *
+ *     Sweeps available, each a directory under MOCK_HEAD_DIR with the render's
+ *     own params.json beside it:
+ *
+ *       turn      yaw, the workhorse          ?mock=turn&mockframes=25
+ *       yaw       yaw +/-30, finer steps      ?mock=yaw&mockframes=21
+ *       pitch     pitch +/-30, yaw 0          ?mock=pitch&mockframes=21
+ *       pitchyaw  pitch +/-25 held at yaw 35  ?mock=pitchyaw&mockframes=14&mockhold=13
+ *
+ *     pitchyaw exists because the occlusion criterion cannot be applied at yaw
+ *     0: head-on, the arm is foreshortened and its rear extent is set by the
+ *     hinge rather than the tip, so JUDGED_ABOVE_YAW drops every row and a pure
+ *     pitch sweep scores 0/0 -- the pitch axis was unguarded for the temples
+ *     entirely. Holding a yaw while pitch sweeps makes both criteria valid.
+ *     Re-render it with:
+ *
+ *       /render?axis=pitch&yawoffset=35&range=25&count=13&anchor=1
+ *              &dist=1.45&heady=0.3&neck=1&save=1&dir=pitchyaw
+ *
+ *     ?anchor=1 is not optional there, and neither is &mockhold=13 when loading
+ *     it: the scan will not lock on a turned face, so without a square-on frame
+ *     to hold nothing ever renders and every row reads "glasses hidden". The
+ *     anchor is frame 13, APPENDED after the 13-frame series -- so frame index
+ *     still maps to pitch, and the series itself is a clean nod at a constant
+ *     yaw. An earlier version substituted the anchor into the middle instead,
+ *     which put a frontal picture in the middle of a nodding sweep and silently
+ *     removed the pitch-0 sample.
+ *
+ * Usage:
+ *   npm run harness        -> http://localhost:5175  (Claude's in-app browser
+ *                             refuses the dev server's self-signed cert, so the
+ *                             plain-HTTP variant is the one that can be driven)
+ *   npm run harness:https  -> https://<lan-ip>:5174 for phone testing, where
+ *                             getUserMedia needs a secure context
+ *
+ * Mock assets live OUTSIDE the repo (they are ~13 MB of generated PNGs). Point
+ * MOCK_HEAD_DIR at them; the default assumes the sibling layout this was built
+ * with. Missing frames fall through to the repo's own, so the harness still runs
+ * without them -- just with the 26-degree ceiling.
+ */
+import { defineConfig } from 'vite'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const MOCK_HEAD_DIR = process.env.MOCK_HEAD_DIR
+  ? path.resolve(process.env.MOCK_HEAD_DIR)
+  : path.resolve(ROOT, '..', 'test-mock-head')
+const SHOT_DIR = process.env.HARNESS_SHOT_DIR
+  ? path.resolve(process.env.HARNESS_SHOT_DIR)
+  : path.resolve(ROOT, '..', 'test-shots')
+const HTTPS = process.env.HARNESS_HTTPS === '1'
+const PORT = Number(process.env.HARNESS_PORT ?? (HTTPS ? 5174 : 5175))
+
+const harnessPlugin = {
+  name: 'ar-tryon-harness',
+  configureServer(server) {
+    // Registered in configureServer (not as a returned post-hook) so it runs
+    // BEFORE vite's static handler and can shadow public/ without touching it.
+    server.middlewares.use((req, res, next) => {
+      const match = /^\/mock-([a-z0-9][a-z0-9-]{0,23})\/(frame-\d+\.png)$/.exec((req.url ?? '').split('?')[0])
+      if (!match) return next()
+      const file = path.join(MOCK_HEAD_DIR, match[1], match[2])
+      if (!fs.existsSync(file)) return next()
+      res.setHeader('Content-Type', 'image/png')
+      res.setHeader('Cache-Control', 'no-store')
+      res.end(fs.readFileSync(file))
+    })
+
+    // The sweep renderer is CODE and lives in the repo; only the bust and the
+    // rendered frames live outside it. Keeping the renderer here is what makes a
+    // sweep reproducible -- the camera and rig settings that produced a frame set
+    // are reviewable alongside the engine they are used to measure.
+    server.middlewares.use('/render', (req, res, next) => {
+      if ((req.url ?? '').split('?')[0] !== '/') return next()
+      res.setHeader('Content-Type', 'text/html')
+      res.setHeader('Cache-Control', 'no-store')
+      res.end(fs.readFileSync(path.join(ROOT, 'harness', 'headrender.html')))
+    })
+
+    // The mock-head assets (head.glb) live outside the repo.
+    // Serving it here is what lets a sweep be RE-RENDERED rather than treated as
+    // a fixed asset -- the pitch set below did not exist until the fit work
+    // needed an axis the turn set does not cover.
+    server.middlewares.use('/mockhead', (req, res, next) => {
+      const rel = (req.url ?? '').split('?')[0].replace(/^\//, '')
+      const file = path.resolve(MOCK_HEAD_DIR, rel)
+      if (!file.startsWith(path.resolve(MOCK_HEAD_DIR)) || !fs.existsSync(file)) return next()
+      const type = { '.html': 'text/html', '.glb': 'model/gltf-binary', '.png': 'image/png' }[path.extname(file)]
+      if (type) res.setHeader('Content-Type', type)
+      res.setHeader('Cache-Control', 'no-store')
+      res.end(fs.readFileSync(file))
+    })
+
+    // Frame sink for headrender.html. ?dir=<name> picks the sweep directory, so
+    // rendering a new axis does not overwrite an existing one.
+    server.middlewares.use('/__save-frames', async (req, res) => {
+      try {
+        const chunks = []
+        for await (const chunk of req) chunks.push(chunk)
+        const { frames, params } = JSON.parse(Buffer.concat(chunks).toString())
+        const dir = (new URL(req.url ?? '', 'http://localhost').searchParams.get('dir') ?? 'turn')
+          .replace(/[^a-zA-Z0-9_-]/g, '')
+        const target = path.join(MOCK_HEAD_DIR, dir || 'turn')
+        fs.mkdirSync(target, { recursive: true })
+        frames.forEach((dataUrl, i) => {
+          fs.writeFileSync(
+            path.join(target, `frame-${i}.png`),
+            Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'),
+          )
+        })
+        // Record what rendered this sweep. Two sweeps are only comparable if
+        // their CAMERA matches: apparent face size drives the IPD depth
+        // estimate, and a pitch set re-rendered at the default `dist` measured
+        // 9% smaller than the yaw set for the same model and solver, which read
+        // as a fit regression until the framing was checked.
+        if (params) fs.writeFileSync(path.join(target, 'params.json'), JSON.stringify(params, null, 2))
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ saved: frames.length, dir: target, params: params ?? null }))
+      } catch (error) {
+        res.statusCode = 500
+        res.end(JSON.stringify({ error: String(error?.message ?? error) }))
+      }
+    })
+
+    // Screenshot sink. The agent driving this harness cannot see the preview
+    // pane, and every geometry regression in this project's history reached the
+    // user because automated runs could measure but not look. Posting composited
+    // frames to disk closes that loop without a human in it.
+    server.middlewares.use('/__shot', async (req, res) => {
+      try {
+        const chunks = []
+        for await (const chunk of req) chunks.push(chunk)
+        const { name, dataUrl } = JSON.parse(Buffer.concat(chunks).toString())
+        const safe = String(name ?? 'shot').replace(/[^a-zA-Z0-9._-]/g, '_')
+        fs.mkdirSync(SHOT_DIR, { recursive: true })
+        const file = path.join(SHOT_DIR, `${safe}.png`)
+        fs.writeFileSync(file, Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'))
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ file }))
+      } catch (error) {
+        res.statusCode = 500
+        res.end(JSON.stringify({ error: String(error?.message ?? error) }))
+      }
+    })
+
+    server.middlewares.use('/api/register-model', async (req, res) => {
+      try {
+        const url = new URL(req.url ?? '', 'http://localhost')
+        const modelUrl = url.searchParams.get('url')
+        if (!modelUrl) throw new Error('missing ?url')
+
+        const { NodeIO } = await import('@gltf-transform/core')
+        const { KHRONOS_EXTENSIONS } = await import('@gltf-transform/extensions')
+        const { validateModel, normalizeModel, calibrate, MODELING_SPEC } =
+          await import('@artryon/calibration')
+
+        const rel = modelUrl.startsWith('/') ? modelUrl.slice(1) : modelUrl
+        const io = new NodeIO().registerExtensions(KHRONOS_EXTENSIONS)
+        const doc = await io.read(path.join(ROOT, 'public', rel))
+
+        const validation = validateModel(doc, MODELING_SPEC)
+        if (validation.status === 'fail') {
+          throw new Error(`model rejected: ${validation.issues.map((i) => i.message).join('; ')}`)
+        }
+        // normalizeModel mutates `doc`, which is fine: like production, this doc
+        // is only ever measured, never written back.
+        const { doc: measured, scale } = normalizeModel(doc, MODELING_SPEC)
+        const { fitMetadata } = calibrate(measured, MODELING_SPEC, { modelScale: scale })
+
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ fitMetadata, modelUrl }))
+      } catch (error) {
+        res.statusCode = 500
+        res.end(JSON.stringify({ error: String(error?.message ?? error) }))
+      }
+    })
+  },
+}
+
+export default defineConfig(async () => {
+  const plugins = [harnessPlugin]
+  if (HTTPS) {
+    // Loaded dynamically and only when asked for: basic-ssl is a dev-only
+    // dependency that a production install prunes, and importing it at module
+    // top level is what previously broke the Vercel build.
+    const { default: basicSsl } = await import('@vitejs/plugin-basic-ssl')
+    plugins.unshift(basicSsl())
+  }
+
+  return {
+    root: ROOT,
+    plugins,
+    server: { host: true, port: PORT, strictPort: true },
+  }
+})

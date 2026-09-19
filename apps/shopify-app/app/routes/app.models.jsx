@@ -1,6 +1,6 @@
 /* eslint-disable react/prop-types -- route-local modal components consume loader-shaped data */
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import { useFetcher, useLoaderData, useRevalidator } from 'react-router'
+import { useFetcher, useLoaderData } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { authenticate } from '../shopify.server'
@@ -18,6 +18,26 @@ import { themeEditorUrl } from '../adminLinks.server'
 import { needsFitReview } from '../tryonStatus.server'
 import ModelViewer from '../components/ModelViewer'
 import ModelFitReview from '../components/ModelFitReview'
+import {
+  attachDropRejectedListener,
+  createUploadCancellationCoordinator,
+  DropZoneField,
+  uploadModalHideBehavior,
+  uploadModalReducer,
+  uploadValidationError,
+} from '../components/ModelUploadFlow'
+
+// Re-exported from the route that used to own them: upstream moved the upload
+// modal's internals into the shared ModelUploadFlow component, but the
+// existing tests (and any other caller) still reach for them here.
+export {
+  attachDropRejectedListener,
+  createUploadCancellationCoordinator,
+  DropZoneField,
+  uploadModalHideBehavior,
+  uploadModalReducer,
+  uploadValidationError,
+}
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
@@ -100,16 +120,8 @@ export const action = async ({ request }) => {
   return { error: 'Unknown action.' }
 }
 
-const MAX_UPLOAD_BYTES = 25 * 1048576
-
 export function modelName(asset) {
   return asset.label?.trim() || asset.filename || `Model ${asset.id.slice(0, 8)}`
-}
-
-export function uploadValidationError(file) {
-  if (!file || !file.name.toLowerCase().endsWith('.glb')) return 'Choose a .glb file'
-  if (file.size > MAX_UPLOAD_BYTES) return 'Model exceeds the 25 MB limit'
-  return null
 }
 
 export function renameSubmitDisabled({ asset, draft, currentLabel, state }) {
@@ -127,55 +139,6 @@ export function modalSessionReducer(state, action) {
   return state
 }
 
-export function uploadModalReducer(state, action) {
-  if (action.type === 'select') {
-    return { pendingFile: action.file, uploadError: null }
-  }
-  if (action.type === 'reject') {
-    return { pendingFile: null, uploadError: 'Choose a .glb file' }
-  }
-  if (action.type === 'error') {
-    return { ...state, uploadError: action.message }
-  }
-  return state
-}
-
-export function uploadModalHideBehavior(busy) {
-  return busy
-    ? { reopen: true, reset: false }
-    : { reopen: false, reset: true }
-}
-
-export function createUploadCancellationCoordinator() {
-  /** @type {{ controller: AbortController, xhr: XMLHttpRequest | null } | null} */
-  // @ts-ignore -- the Shopify validator wraps this JS file as TSX and ignores JSDoc types.
-  let activeUpload = null
-
-  return {
-    begin() {
-      const controller = new AbortController()
-      activeUpload = { controller, xhr: null }
-      return controller.signal
-    },
-    attachXhr(xhr) {
-      if (!activeUpload || activeUpload.controller.signal.aborted) {
-        xhr.abort()
-        return
-      }
-      activeUpload.xhr = xhr
-    },
-    detachXhr(xhr) {
-      if (activeUpload?.xhr === xhr) activeUpload.xhr = null
-    },
-    abortForUnmount() {
-      const upload = activeUpload
-      activeUpload = null
-      upload?.controller.abort()
-      upload?.xhr?.abort()
-    },
-  }
-}
-
 function useModalEvents({ onHide = undefined, onAfterHide = undefined }) {
   const modalRef = useRef(null)
 
@@ -191,261 +154,6 @@ function useModalEvents({ onHide = undefined, onAfterHide = undefined }) {
   }, [onAfterHide, onHide])
 
   return modalRef
-}
-
-// Pulled out of the useEffect below so the wiring itself -- "does a
-// `droprejected` event on the element reach the reducer as a `reject`
-// action" -- is unit-testable against a plain fake element (addEventListener/
-// removeEventListener only), without needing a real DOM. This repo's test
-// environment has no jsdom (see productIndex.ui.test.js's ref-only coverage
-// of the sibling previouspage/nextpage wiring), so this is the closest thing
-// to a behavioral test available for the fix without adding a new
-// dependency: it proves the actual attach/detach logic, and combined with
-// uploadModalReducer's existing 'reject' coverage, closes the loop through
-// to the rendered "Choose a .glb file" banner text.
-export function attachDropRejectedListener(dropZone, dispatchUpload) {
-  const handleDropRejected = () => dispatchUpload({ type: 'reject' })
-  dropZone.addEventListener('droprejected', handleDropRejected)
-  return () => dropZone.removeEventListener('droprejected', handleDropRejected)
-}
-
-// Split out from UploadModalContent so the dropZoneRef wiring can be
-// asserted structurally (the ref lands on the real <s-drop-zone>, and
-// onDropRejected is genuinely gone, not just unused) without executing
-// hooks outside of a render -- the same tableRef/ProductTable split
-// ProductIndex.jsx already uses for its own ref-wired custom element.
-export function DropZoneField({ dropZoneRef, disabled, onInput }) {
-  return (
-    <s-drop-zone
-      ref={dropZoneRef}
-      label="Model file (.glb)"
-      name="model"
-      accept=".glb,model/gltf-binary"
-      accessibilityLabel="Choose a GLB model file"
-      disabled={disabled}
-      // Not onChange: React 18's ChangeEventPlugin only special-cases a
-      // real <select>/<input type=file> when deciding whether to dispatch a
-      // synthetic `change` event -- s-drop-zone is a custom element, so
-      // onChange here was silently never firing (a file chosen via the drop
-      // zone never reached dispatchUpload). `input` is a simple,
-      // type-agnostic DOM event React forwards regardless of tag name, and
-      // Shopify's polaris-types IDL documents onInput for s-drop-zone
-      // alongside onChange -- see ModelPicker.jsx's search field /
-      // ProductIndex.jsx's search field for the same reasoning already
-      // applied elsewhere in this app.
-      onInput={onInput}
-      // `onDropRejected` is NOT wired here -- `dropRejected` is not in React
-      // 18's simpleEventPluginEvents registry, so the prop is silently
-      // stripped and the handler never runs. See attachDropRejectedListener
-      // above and its useEffect call site for the real fix.
-    ></s-drop-zone>
-  )
-}
-
-async function postUploadJson(body, signal) {
-  const res = await fetch('/api/model-upload', { method: 'POST', body, signal })
-  const text = await res.text()
-  let data
-  try {
-    data = JSON.parse(text)
-  } catch {
-    throw new Error(`Server error (HTTP ${res.status})`)
-  }
-  if (data.error) throw new Error(data.error)
-  return data
-}
-
-function UploadModalContent({ cancellationCoordinator, onBusyChange }) {
-  const shopify = useAppBridge()
-  const revalidator = useRevalidator()
-  const [{ pendingFile, uploadError }, dispatchUpload] = useReducer(uploadModalReducer, {
-    pendingFile: null,
-    uploadError: null,
-  })
-  const [progress, setProgress] = useState(null)
-  const uploading = progress !== null
-  const dropZoneRef = useRef(null)
-
-  // `dropRejected` (fired when a dropped/chosen file fails the `accept`
-  // filter) is not in React 18's simpleEventPluginEvents registry, so the
-  // `onDropRejected` JSX prop DropZoneField used to carry was silently
-  // stripped -- the handler never ran, and a merchant dropping a non-.glb
-  // file got total silence instead of the "Choose a .glb file" banner.
-  // Confirmed via @shopify/polaris-types/dist/polaris.d.ts:3881, which
-  // documents the real IDL event as `ondroprejected` (i.e. the DOM event
-  // name is `droprejected`). Wire it by hand, the same ref+addEventListener
-  // pattern as useModalEvents above and the pagination wiring in
-  // ProductIndex.jsx.
-  useEffect(() => {
-    const dropZone = dropZoneRef.current
-    if (!dropZone) return undefined
-    return attachDropRejectedListener(dropZone, dispatchUpload)
-  }, [])
-
-  const upload = async () => {
-    const validationError = uploadValidationError(pendingFile)
-    if (validationError) {
-      dispatchUpload({ type: 'error', message: validationError })
-      return
-    }
-
-    dispatchUpload({ type: 'select', file: pendingFile })
-    onBusyChange(true)
-    setProgress(0)
-    const signal = cancellationCoordinator.begin()
-    try {
-      const presignForm = new FormData()
-      presignForm.append('intent', 'upload-presign')
-      const { uploadUrl, storageRef } = await postUploadJson(presignForm, signal)
-      if (signal.aborted) return
-
-      await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-        cancellationCoordinator.attachXhr(xhr)
-        if (signal.aborted) {
-          reject(new DOMException('Upload canceled', 'AbortError'))
-          return
-        }
-        xhr.open('PUT', uploadUrl)
-        xhr.setRequestHeader('Content-Type', 'model/gltf-binary')
-        xhr.upload.onprogress = (event) => {
-          if (!signal.aborted && event.lengthComputable) {
-            setProgress(Math.round((event.loaded / event.total) * 100))
-          }
-        }
-        xhr.onload = () => {
-          cancellationCoordinator.detachXhr(xhr)
-          if (xhr.status >= 200 && xhr.status < 300) resolve(undefined)
-          else reject(new Error(`Upload failed (${xhr.status})`))
-        }
-        xhr.onerror = () => {
-          cancellationCoordinator.detachXhr(xhr)
-          reject(new Error('Upload failed (network/CORS)'))
-        }
-        xhr.onabort = () => reject(new DOMException('Upload canceled', 'AbortError'))
-        xhr.send(pendingFile)
-      })
-      if (signal.aborted) return
-
-      setProgress('preparing')
-      const finalizeForm = new FormData()
-      finalizeForm.append('intent', 'upload-finalize')
-      finalizeForm.append('storageRef', storageRef)
-      finalizeForm.append('filename', pendingFile.name)
-      await postUploadJson(finalizeForm, signal)
-      if (signal.aborted) return
-
-      onBusyChange(false)
-      setProgress(null)
-      shopify.toast.show('Model ready')
-      shopify.modal.hide('upload-model')
-      revalidator.revalidate()
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!signal.aborted) dispatchUpload({ type: 'error', message })
-    } finally {
-      if (!signal.aborted) {
-        onBusyChange(false)
-        setProgress(null)
-      }
-    }
-  }
-
-  return (
-    <>
-      <s-stack direction="block" gap="base">
-        <s-paragraph>
-          Choose a .glb eyewear model up to 25 MB. We&apos;ll prepare it for try-on.
-        </s-paragraph>
-        <DropZoneField
-          dropZoneRef={dropZoneRef}
-          disabled={uploading}
-          onInput={(event) => {
-            dispatchUpload({
-              type: 'select',
-              file: event.currentTarget.files?.[0] ?? null,
-            })
-          }}
-        />
-        {pendingFile && (
-          <s-text color="subdued">
-            {pendingFile.name} ({(pendingFile.size / 1048576).toFixed(1)} MB)
-          </s-text>
-        )}
-        {progress !== null && (
-          <s-stack direction="block" gap="small-500">
-            {typeof progress === 'number' ? (
-              <>
-                <progress value={progress} max="100" style={{ width: '100%' }} />
-                <s-text>Uploading {progress}%</s-text>
-              </>
-            ) : (
-              <s-text>Preparing model...</s-text>
-            )}
-            <s-text color="subdued">Keep this window open while the model is uploading and preparing.</s-text>
-          </s-stack>
-        )}
-        {uploadError && (
-          <s-banner heading="Could not upload model" tone="critical">
-            {uploadError}
-          </s-banner>
-        )}
-      </s-stack>
-      {!uploading && (
-        <s-button
-          slot="secondary-actions"
-          commandFor="upload-model"
-          command="--hide"
-        >
-          Cancel
-        </s-button>
-      )}
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        onClick={upload}
-        disabled={!pendingFile || uploading}
-        {...(uploading ? { loading: true } : {})}
-      >
-        Upload model
-      </s-button>
-    </>
-  )
-}
-
-function UploadModal() {
-  const shopify = useAppBridge()
-  const [session, setSession] = useState(0)
-  const busyRef = useRef(false)
-  const cancellationCoordinator = useRef(null)
-  if (!cancellationCoordinator.current) {
-    cancellationCoordinator.current = createUploadCancellationCoordinator()
-  }
-
-  const onBusyChange = useCallback((busy) => {
-    busyRef.current = busy
-  }, [])
-  const finishHide = useCallback(() => {
-    const behavior = uploadModalHideBehavior(busyRef.current)
-    if (behavior.reopen) {
-      shopify.modal.show('upload-model')
-    } else if (behavior.reset) {
-      setSession((value) => value + 1)
-    }
-  }, [shopify])
-  const modalRef = useModalEvents({ onAfterHide: finishHide })
-
-  useEffect(() => () => cancellationCoordinator.current.abortForUnmount(), [])
-
-  return (
-    <s-modal ref={modalRef} id="upload-model" heading="Upload model">
-      <UploadModalContent
-        key={session}
-        cancellationCoordinator={cancellationCoordinator.current}
-        onBusyChange={onBusyChange}
-      />
-    </s-modal>
-  )
 }
 
 function RenameModalContent({ asset }) {
@@ -647,25 +355,14 @@ export default function Models() {
 
   return (
     <s-page heading="Models">
-      <s-button
-        slot="primary-action"
-        variant="primary"
-        commandFor="upload-model"
-        command="--show"
-      >
-        Upload model
-      </s-button>
-
       <s-section heading="Model library">
         {assets.length === 0 ? (
           <s-stack direction="block" gap="base">
-            <s-text type="strong">Add your first model</s-text>
+            <s-text type="strong">Your model library is empty</s-text>
             <s-paragraph>
-              Upload a .glb eyewear model to make it available for try-on products.
+              Upload a model while setting up try-on for a product.
             </s-paragraph>
-            <s-button commandFor="upload-model" command="--show">
-              Upload model
-            </s-button>
+            <s-link href="/app">Set up try-on</s-link>
           </s-stack>
         ) : (
           <s-grid
@@ -716,7 +413,7 @@ export default function Models() {
                     {asset.mappingCount > 0 ? (
                       <s-text color="subdued">
                         Used by {asset.mappingCount} product{asset.mappingCount === 1 ? '' : 's'}.{' '}
-                        <s-link href="/app/products">View products</s-link>
+                        <s-link href="/app">View products</s-link>
                       </s-text>
                     ) : (
                       <s-text color="subdued">Not used by any products</s-text>
@@ -752,7 +449,6 @@ export default function Models() {
         )}
       </s-section>
 
-      <UploadModal />
       <RenameModal
         asset={renameAsset}
         session={renameModal.session}

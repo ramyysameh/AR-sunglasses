@@ -4,7 +4,23 @@ import { randomUUID } from 'node:crypto'
 const tag = randomUUID().slice(0, 8)
 const shop = `limit-${tag}.myshopify.com`
 
-const hoisted = vi.hoisted(() => ({ plan: 'Starter' }))
+const hoisted = vi.hoisted(() => ({ plan: 'Starter', billingLookups: 0 }))
+const admin = {
+  graphql: async () => {
+    hoisted.billingLookups += 1
+    return new Response(
+      JSON.stringify({
+        data: {
+          currentAppInstallation: {
+            activeSubscriptions: hoisted.plan
+              ? [{ name: hoisted.plan, status: 'ACTIVE' }]
+              : [],
+          },
+        },
+      }),
+    )
+  },
+}
 // Fake the Admin GraphQL response itself (rather than mocking
 // getActivePlanName) so that requireActivePlanForLoader -- which calls
 // getActivePlanName via an in-module reference, not through the mocked
@@ -13,26 +29,14 @@ vi.mock('../app/shopify.server.js', () => ({
   authenticate: {
     admin: async () => ({
       session: { shop },
-      admin: {
-        graphql: async () =>
-          new Response(
-            JSON.stringify({
-              data: {
-                currentAppInstallation: {
-                  activeSubscriptions: hoisted.plan
-                    ? [{ name: hoisted.plan, status: 'ACTIVE' }]
-                    : [],
-                },
-              },
-            }),
-          ),
-      },
+      admin,
     }),
   },
 }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { action, loader } = await import('../app/routes/app.products.jsx')
+const { loader } = await import('../app/routes/app._index.jsx')
+const { handleProductAction } = await import('../app/productActions.server.js')
 
 async function seedAsset() {
   const a = await prisma.modelAsset.create({
@@ -48,9 +52,16 @@ function mapForm(productId, modelAssetId) {
   return new Request('https://x/app/products', { method: 'POST', body: fd })
 }
 
+const map = (productId, modelAssetId) => handleProductAction({
+  request: mapForm(productId, modelAssetId),
+  admin,
+  shop,
+})
+
 // Each case controls its own mapping count, so clear mappings first. Assets
 // persist (harmless, referenced by id) and are removed in afterAll.
 beforeEach(async () => {
+  hoisted.billingLookups = 0
   await prisma.productMapping.deleteMany({ where: { shop } })
 })
 
@@ -61,14 +72,27 @@ afterAll(async () => {
 })
 
 describe('map action tier limit', () => {
-  // The Starter-cap block and the re-map-at-cap allowance are covered exactly
-  // by appProducts.map.test.js ('enforces the plan cap for a new product' and
-  // 'allows re-mapping an existing product at the cap'); not duplicated here.
+  it('allows changing an existing mapping when Starter usage is at the limit', async () => {
+    hoisted.plan = 'Starter'
+    const firstAssetId = await seedAsset()
+    const replacementAssetId = await seedAsset()
+    const productId = `gid://shopify/Product/${tag}-existing-at-limit`
+    await prisma.productMapping.create({
+      data: { shop, productId, modelAssetId: firstAssetId },
+    })
+
+    const result = await map(productId, replacementAssetId)
+
+    expect(result.mapped).toBe(true)
+    expect(await prisma.productMapping.findUnique({
+      where: { shop_productId: { shop, productId } },
+    })).toMatchObject({ modelAssetId: replacementAssetId })
+  })
 
   it('allows a new product on Pro (unlimited)', async () => {
     hoisted.plan = 'Pro'
     const assetId = await seedAsset()
-    const res = await action({ request: mapForm(`gid://shopify/Product/${tag}-pro`, assetId) })
+    const res = await map(`gid://shopify/Product/${tag}-pro`, assetId)
     expect(res.mapped).toBe(true)
   })
 
@@ -82,29 +106,31 @@ describe('map action tier limit', () => {
     await prisma.productMapping.create({
       data: { shop, productId: `gid://shopify/Product/${tag}-existing`, modelAssetId: assetId },
     })
-    const res = await action({
-      request: mapForm(`gid://shopify/Product/${tag}-existing`, assetId),
-    })
+    const res = await map(`gid://shopify/Product/${tag}-existing`, assetId)
     expect(res.error).toMatch(/no active subscription/i)
   })
 })
 
 describe('products loader subscription gate', () => {
+  it('loads normally with an active subscription', async () => {
+    hoisted.plan = 'Starter'
+    const result = await loader({ request: new Request('https://x/app') })
+    expect(result).toHaveProperty('assets')
+    expect(result).toHaveProperty('mappings')
+    expect(hoisted.billingLookups).toBe(1)
+  })
+
   it('does NOT redirect and returns empty data when there is no active subscription', async () => {
     hoisted.plan = null
     // Throwing redirect('/app') here looped forever (/app/products -> /app ->
     // /app...), rendering a dead, control-less page (App Store rejection Ref
     // 127328). The app.jsx layout owns the no-subscription screen, so this
     // loader must resolve without a redirect and do no gated DB work.
-    const result = await loader({ request: new Request('https://x/app/products') })
+    const findAssets = vi.spyOn(prisma.modelAsset, 'findMany')
+    const result = await loader({ request: new Request('https://x/app') })
     expect(result.assets).toEqual([])
     expect(result.mappings).toEqual([])
-  })
-
-  it('loads normally with an active subscription', async () => {
-    hoisted.plan = 'Starter'
-    const result = await loader({ request: new Request('https://x/app/products') })
-    expect(result).toHaveProperty('assets')
-    expect(result).toHaveProperty('mappings')
+    expect(hoisted.billingLookups).toBe(1)
+    expect(findAssets).not.toHaveBeenCalled()
   })
 })

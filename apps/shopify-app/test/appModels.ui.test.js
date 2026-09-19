@@ -74,9 +74,9 @@ describe('Models UI behavior', () => {
   })
 
   it('rejects missing, non-GLB, and oversized uploads before starting', () => {
-    expect(uploadValidationError(null)).toBe('Choose a .glb file')
-    expect(uploadValidationError({ name: 'frames.obj', size: 1024 })).toBe('Choose a .glb file')
-    expect(uploadValidationError({ name: 'frames.glb', size: 25 * 1048576 + 1 })).toBe('Model exceeds the 25 MB limit')
+    expect(uploadValidationError(null)).toBe('Choose a .glb file up to 25 MB.')
+    expect(uploadValidationError({ name: 'frames.obj', size: 1024 })).toBe('Choose a .glb file up to 25 MB.')
+    expect(uploadValidationError({ name: 'frames.glb', size: 25 * 1048576 + 1 })).toBe('Choose a .glb file up to 25 MB.')
     expect(uploadValidationError({ name: 'frames.GLB', size: 25 * 1048576 })).toBeNull()
   })
 
@@ -127,12 +127,12 @@ describe('Models UI behavior', () => {
     expect(reopened.session).not.toBe(opened.session)
   })
 
-  it('clears a rejected drop and exposes the required GLB guidance', () => {
+  it('keeps the previous file after a rejected drop and exposes the required GLB guidance', () => {
     const selected = { pendingFile: { name: 'frames.obj' }, uploadError: null }
 
     expect(uploadModalReducer(selected, { type: 'reject' })).toEqual({
-      pendingFile: null,
-      uploadError: 'Choose a .glb file',
+      pendingFile: { name: 'frames.obj' },
+      uploadError: 'Choose a .glb file up to 25 MB.',
     })
   })
 
@@ -170,7 +170,7 @@ describe('Models UI behavior', () => {
       { pendingFile: { name: 'frames.obj' }, uploadError: null },
       dispatchUpload.mock.calls[0][0],
     )
-    expect(nextState.uploadError).toBe('Choose a .glb file')
+    expect(nextState.uploadError).toBe('Choose a .glb file up to 25 MB.')
 
     detach()
     expect(fakeDropZone.removeEventListener).toHaveBeenCalledExactlyOnceWith('droprejected', listeners.droprejected)
@@ -179,10 +179,7 @@ describe('Models UI behavior', () => {
   // Structural half of the Important-1 fix: proves the ref that
   // attachDropRejectedListener above needs a live element for is actually
   // handed to the real <s-drop-zone> (and that onDropRejected is gone, not
-  // just unused) -- the same ref-lands-on-the-real-element check
-  // productIndex.ui.test.js already relies on for the sibling
-  // previouspage/nextpage wiring, since neither can be exercised end-to-end
-  // without jsdom.
+  // just unused), since it cannot be exercised end-to-end without jsdom.
   it('hands the drop-zone ref to the real s-drop-zone element with no dead onDropRejected prop', () => {
     const dropZoneRef = { current: null }
     const element = DropZoneField({ dropZoneRef, disabled: false, onInput: vi.fn() })
@@ -197,17 +194,20 @@ describe('Models UI behavior', () => {
     expect(uploadModalHideBehavior(false)).toEqual({ reopen: false, reset: true })
   })
 
-  it('renders the model library as the primary surface with valid modal targets', () => {
+  it('keeps Models as a library without a second upload action', () => {
     const html = renderToStaticMarkup(React.createElement(Models))
     const targets = [...html.matchAll(/commandFor="([^"]+)"/g)].map((match) => match[1])
 
-    expect(html).toContain('slot="primary-action"')
-    expect(html).toContain('commandFor="upload-model"')
-    expect(html).toContain('Upload model')
+    expect(html).not.toContain('upload-model')
     expect(html).toContain('Pelmo black')
     expect(html).toContain('pelmo.glb')
     expect(html).toContain('Used by 2 products')
-    expect(html).toContain('href="/app/products"')
+    // Navigation follows upstream's workspace redesign: the standalone
+    // Products page is gone (app.products.jsx redirects to /app), so Models
+    // links at the Workspace. The merchant-facing copy stays "Review fit"
+    // (the status id is still `check_fit`) -- that wording matches the action
+    // every review surface actually offers.
+    expect(html).toContain('href="/app"')
     expect(html).toContain('Review fit')
     expect(html).not.toMatch(/Check fit/)
     expect(html).not.toMatch(/A1 pipeline|calibrat|manual anchor|geometric confidence/i)
@@ -217,7 +217,13 @@ describe('Models UI behavior', () => {
     expect(html.match(/id="review-model-fit"/g)).toHaveLength(1)
     // One card action (--show) plus the modal's own Close button (--hide).
     expect(html.match(/commandFor="review-model-fit"/g)).toHaveLength(2)
-    expect(html).toContain('accessibilityLabel="Choose a GLB model file"')
+    // The drop zone assertion that used to live here is deliberately gone:
+    // under upstream's redesign Models is a library only, and the upload drop
+    // zone moved into the workspace's ModelUploadFlow (this very test's
+    // `not.toContain('upload-model')` above is upstream asserting exactly
+    // that). Coverage for the drop zone -- including the React 18 onInput /
+    // droprejected wiring -- now lives in modelUploadFlow.ui.test.js.
+
 
     for (const target of new Set(targets)) {
       const escapedTarget = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

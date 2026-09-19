@@ -72,12 +72,16 @@ function frontSlabX(positions) {
 // is real-world size. Without this, a model authored in a large coordinate space
 // yields anchors (bridge pivot, hinge points) that are off by the model's scale
 // factor — and the fit solver, which treats them as metre offsets, mis-places and
-// mis-tracks the frame. Returns true if a rescale was applied.
+// mis-tracks the frame.
+//
+// Returns the factor applied, or 1 when the model was already in metres. The
+// caller records it as fitMetadata.modelScale so the engine can apply the same
+// factor to the UNMODIFIED file it serves.
 function rescaleToRealWorld(doc, positions) {
   const slab = frontSlabX(positions)
   const width = slab.max - slab.min
   if (!(width > 0) || (width >= REAL_WORLD_MIN_WIDTH && width <= REAL_WORLD_MAX_WIDTH)) {
-    return false
+    return 1
   }
   const s = CANONICAL_FRONT_WIDTH_M / width
   for (const mesh of doc.getRoot().listMeshes()) {
@@ -95,16 +99,18 @@ function rescaleToRealWorld(doc, positions) {
     const t = node.getTranslation()
     node.setTranslation([t[0] * s, t[1] * s, t[2] * s])
   }
-  return true
+  return s
 }
 
 export function normalizeModel(doc, spec) {
   const transforms = []
+  let scale = 1
   if (bakeNodeTransforms(doc)) transforms.push('flatten')
   let positions = mergedPositions(doc)
-  if (positions.length === 0) return { doc, transforms }
+  if (positions.length === 0) return { doc, transforms, scale }
 
-  if (rescaleToRealWorld(doc, positions)) {
+  scale = rescaleToRealWorld(doc, positions)
+  if (scale !== 1) {
     transforms.push('rescale')
     positions = mergedPositions(doc)
   }
@@ -143,5 +149,5 @@ export function normalizeModel(doc, spec) {
     transforms.push('recenter')
   }
 
-  return { doc, transforms }
+  return { doc, transforms, scale }
 }

@@ -7,7 +7,7 @@ global.React = React
 import ModelFitReview from '../app/components/ModelFitReview.jsx'
 import ModelViewer from '../app/components/ModelViewer.jsx'
 
-// Same tree-walk helper as appProducts.ui.test.js/productIndex.ui.test.js.
+// Same tree-walk helper as appProducts.ui.test.js.
 function findElement(node, predicate) {
   if (!node || typeof node !== 'object') return null
   if (predicate(node)) return node
@@ -21,15 +21,13 @@ function findElement(node, predicate) {
   return null
 }
 
-// Minor-3: this shared remediation surface (mounted by both Task 6
-// destinations -- PreviewPanel and the Models review modal) had zero direct
-// test coverage. appModels.ui.test.js only asserts the surrounding modal
-// plumbing (id="review-model-fit" once, commandFor twice), never what's
-// actually inside the modal. Cover the real conditional at
-// ModelFitReview.jsx:37 (themeUrl && ...) and the fit-preview src a
-// merchant's reference-head render depends on.
+// This remediation surface (mounted by the Models review modal) had zero
+// direct test coverage. appModels.ui.test.js only asserts the surrounding
+// modal plumbing (id="review-model-fit" once, commandFor twice), never what's
+// actually inside the modal. Cover the real themeUrl conditional and the
+// preview src the merchant's render depends on.
 describe('ModelFitReview', () => {
-  it('points the reference-head preview at this asset\'s fit-preview GLB', () => {
+  it('points the preview at this asset\'s own GLB, not the reference-head composition', () => {
     // Called directly (no hooks of its own), the same way
     // topLevelAdminAction.ui.test.js exercises TopLevelAdminAction -- this
     // returns the real element tree with ModelViewer still unexpanded, so
@@ -43,7 +41,13 @@ describe('ModelFitReview', () => {
     const viewer = findElement(element, (node) => node.type === ModelViewer)
 
     expect(viewer).not.toBeNull()
-    expect(viewer.props.src).toBe('/models/asset-123/fit-preview.glb?v=2')
+    // Upstream decided in 9d93e54 that the admin previews the model on its
+    // own, not composed onto a mock head ("previews the glasses model without
+    // composing it onto a mock head" in appProducts.ui.test.js). This surface
+    // follows that decision so the two admin previews cannot disagree.
+    expect(viewer.props.src).toBe('/models/asset-123.glb')
+    expect(viewer.props.alt).toBe('Your glasses model')
+    expect(viewer.props.src).not.toContain('fit-preview')
   })
 
   it('shows the Glasses size sizing guidance and omits the theme action when no theme URL is available', () => {

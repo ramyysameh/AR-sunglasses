@@ -9,8 +9,7 @@
 //
 // `onClick` (not `href`/`target`) is deliberate: React 18 dispatches the
 // simple `click` event to any element regardless of tag name, so this works
-// the same way ProductIndex.jsx's menu actions and this app's other
-// onClick-driven s-button controls already do.
+// the same way this app's other onClick-driven s-button controls already do.
 //
 // `slot` is intentionally accepted and forwarded even though it is not part
 // of this component's documented interface: a page's `primary-action` slot

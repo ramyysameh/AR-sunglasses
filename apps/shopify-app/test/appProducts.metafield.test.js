@@ -50,7 +50,7 @@ vi.mock('../app/shopify.server.js', () => ({
 }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { action, loader } = await import('../app/routes/app.products.jsx')
+const { action, loader } = await import('../app/routes/app._index.jsx')
 const { deleteMappingWithRecovery } = await import('../app/productMappingRecovery.server.js')
 
 const productId = `gid://shopify/Product/${tag}`
@@ -59,7 +59,7 @@ function form(intent, fields) {
   const fd = new FormData()
   fd.set('intent', intent)
   for (const [k, v] of Object.entries(fields)) fd.set(k, v)
-  return new Request('https://x/app/products', { method: 'POST', body: fd })
+  return new Request('https://x/app', { method: 'POST', body: fd })
 }
 
 async function seedAsset() {
@@ -182,7 +182,7 @@ describe('loader backfill', () => {
     await prisma.productMapping.create({ data: { shop, productId, modelAssetId } })
     hoisted.calls = []
 
-    await loader({ request: new Request('https://x/app/products') })
+    await loader({ request: new Request('https://x/app') })
 
     const sets = metafieldCalls('metafieldsSet')
     expect(sets).toHaveLength(1)
@@ -194,12 +194,12 @@ describe('loader backfill', () => {
     await prisma.productMapping.create({ data: { shop, productId, modelAssetId } })
     hoisted.setErrors = [{ message: 'Throttled' }]
 
-    const data = await loader({ request: new Request('https://x/app/products') })
+    const data = await loader({ request: new Request('https://x/app') })
     expect(data.mappings).toHaveLength(1)
   })
 
   it('makes no metafield call for a shop with no mappings', async () => {
-    await loader({ request: new Request('https://x/app/products') })
+    await loader({ request: new Request('https://x/app') })
     expect(metafieldCalls('metafieldsSet')).toHaveLength(0)
   })
 })

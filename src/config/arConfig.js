@@ -252,10 +252,18 @@ export function registerRuntimeGlassesConfig(key, engineModelConfig) {
     // 0.62 (inherited from the base SKU) read as a near-solid panel rather than a
     // tinted lens you can see eyes through. ?lensopacity=<n> overrides live.
     materialProfile: { ...base.materialProfile, lensOpacity: 0.4 },
-    // Was -0.01, then 0 (removed entirely after feedback wanted it higher) --
-    // that overshot, so split the difference. ?voffset=<n> overrides for
-    // further live tuning.
-    verticalOffset: -0.004,
+    // Pin the frame's own nose saddle to the face's nose bridge rather than
+    // dropping the model's bounding-box centre on a brow point. Uploaded models
+    // only: the built-in SKUs ship pre-normalized files the loader does not
+    // recentre (useNormalizedModel: true) and hand-tuned pivots to match, so
+    // they keep the legacy placement.
+    anchorMode: 'saddle',
+    // Zero under saddle anchoring: the frame's own nose saddle is placed on the
+    // face's nose bridge, so there is nothing left to trim. The -0.004 this
+    // replaces was tuned against the old placement, where the model's
+    // bounding-box centre landed on a brow point and the resulting height
+    // depended on the frame's proportions. ?voffset=<n> still overrides live.
+    verticalOffset: 0,
   }
 
   for (const field of VECTOR3_FIELDS) {

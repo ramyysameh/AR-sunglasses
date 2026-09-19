@@ -86,7 +86,12 @@ describe('app.models loader themeUrl', () => {
     expect(result.assets.map((a) => a.id)).toEqual([asset.id])
     expect(typeof result.themeUrl).toBe('string')
     const url = new URL(result.themeUrl)
-    expect(url.host).toBe('admin.shopify.com')
+    // Host is the shop's own admin, not admin.shopify.com: upstream's theme
+    // deep-link work moved themeEditorUrl (adminLinks.server.js) to
+    // https://{shop}/admin/themes/current/editor. What this test guards is
+    // unchanged -- the loader hands the review modal a usable theme-editor
+    // URL carrying the canonical app-block id -- so only the host moves.
+    expect(url.host).toBe(shop)
     expect(url.searchParams.get('addAppBlockId')).toMatch(/\/tryon_button$/)
   })
 
@@ -105,7 +110,8 @@ describe('app.models loader themeUrl', () => {
     expect(result.assets).toEqual([])
     expect(typeof result.themeUrl).toBe('string')
     const url = new URL(result.themeUrl)
-    expect(url.host).toBe('admin.shopify.com')
+    // Same host change as the subscribed branch above.
+    expect(url.host).toBe(shop)
     expect(url.searchParams.get('addAppBlockId')).toMatch(/\/tryon_button$/)
   })
 })

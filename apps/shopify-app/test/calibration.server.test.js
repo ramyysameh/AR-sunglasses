@@ -24,6 +24,30 @@ describe('calibrateUpload', () => {
     expect(res.fitMetadata.version).toBe('eyewear-v1')
     expect(res.fitMetadata.provenance.source).toBe('tagged')
     expect(res.needsManual).toBe(false)
-    expect(res.normalizedGlb).toBeInstanceOf(Uint8Array)
+    expect(res.storedGlb).toBeInstanceOf(Uint8Array)
+  })
+})
+
+describe('calibrateUpload byte fidelity', () => {
+  it("returns the caller's bytes untouched", async () => {
+    const bytes = await glbBytes(buildDoc(GOOD))
+    const res = await calibrateUpload(bytes)
+    expect(res.storedGlb).toBeInstanceOf(Uint8Array)
+    expect(Buffer.from(res.storedGlb).equals(Buffer.from(bytes))).toBe(true)
+  })
+
+  it('measures a rotated node without rewriting anything', async () => {
+    // A node carrying rotation is exactly the case the old bake corrupted:
+    // POSITION was transformed, NORMAL was left stale. Nothing may be rewritten.
+    const doc = buildDoc(GOOD)
+    doc.getRoot().listNodes()[0].setRotation([0, 1, 0, 0]) // 180 deg about Y
+    const bytes = await glbBytes(doc)
+    const res = await calibrateUpload(bytes)
+    expect(Buffer.from(res.storedGlb).equals(Buffer.from(bytes))).toBe(true)
+  })
+
+  it('reports modelScale 1 for a model already in metres', async () => {
+    const res = await calibrateUpload(await glbBytes(buildDoc(GOOD)))
+    expect(res.fitMetadata.modelScale).toBe(1)
   })
 })

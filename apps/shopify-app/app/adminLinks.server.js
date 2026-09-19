@@ -1,12 +1,14 @@
-// The uid committed in extensions/tryon-button/shopify.extension.toml. Override
-// with SHOPIFY_THEME_EXTENSION_UID if the deployed registration id turns out to
-// differ from the CLI uid -- see the spec's risk note.
-const FALLBACK_EXTENSION_UID = '53b5dfb4-3bb4-0954-72aa-7e751170befc5b13a1dd'
+// Shopify app-block deep links use the app API key/client ID, not the theme
+// extension uid. The latter used to be accepted but now produces the generic
+// "block not added" editor error. Keep this aligned with shopify.app.toml.
+const CANONICAL_API_KEY = 'be1db9d64c7c617dcd67f6add58f4824'
 const BLOCK_HANDLE = 'tryon_button'
 
-function extensionUid() {
-  // eslint-disable-next-line no-undef
-  return process.env.SHOPIFY_THEME_EXTENSION_UID || FALLBACK_EXTENSION_UID
+function apiKey() {
+  // Do not read SHOPIFY_API_KEY here. Some development/deployment environments
+  // still carry the retired f2a93e app's credential; using it creates a valid-
+  // looking deep link for the wrong app and Shopify rejects the block.
+  return CANONICAL_API_KEY
 }
 
 /**
@@ -14,12 +16,17 @@ function extensionUid() {
  * product template. Not embeddable: open top-level (target="_top"), the same
  * reason app.jsx opens the Managed Pricing URL that way.
  * @param {string} shop myshopify domain
+ * @param {string|null} [productHandle] product to preview in the theme editor
  */
-export function themeEditorUrl(shop) {
-  const store = String(shop).replace(/\.myshopify\.com$/, '')
-  const url = new URL(`https://admin.shopify.com/store/${store}/themes/current/editor`)
-  url.searchParams.set('template', 'product')
-  url.searchParams.set('addAppBlockId', `${extensionUid()}/${BLOCK_HANDLE}`)
+export function themeEditorUrl(shop, productHandle = null) {
+  const domain = String(shop).replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const url = new URL(`https://${domain}/admin/themes/current/editor`)
+  if (productHandle) {
+    url.searchParams.set('previewPath', `/products/${productHandle}`)
+  } else {
+    url.searchParams.set('template', 'product')
+  }
+  url.searchParams.set('addAppBlockId', `${apiKey()}/${BLOCK_HANDLE}`)
   url.searchParams.set('target', 'mainSection')
   return url.toString()
 }

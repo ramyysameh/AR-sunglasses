@@ -7,7 +7,75 @@ const DEFAULT_FALLBACK_DEPTH = -0.72
 const DEFAULT_LANDMARK_DEPTH_SCALE = 0.08
 // Depth relief applied to the occluder mesh so the cheeks/jaw bulge forward and
 // actually mask the temple arms. Tunable: bigger = more pronounced 3D face shell.
-const OCCLUDER_DEPTH_SCALE = 0.45
+/**
+ * How much of the face's real depth relief the occluder mesh keeps.
+ *
+ * Calibrated against a property that cannot be argued with: distances between
+ * RIGID landmark pairs must not change when the head rotates. They did. Sweeping
+ * this constant and measuring the worst inflation across +/-33 degrees of yaw:
+ *
+ *   scale      1.0    0.8    0.6    0.5    0.3
+ *   worst     16.4%   7.1%   5.7%   ~9%   ~11%
+ *   canthi    +16%   +7.1%  +1.3%  -4.8%  -10.9%
+ *
+ * The sign of the error flips between 0.5 and 0.7, so 0.6 is a real minimum
+ * rather than a preference. Too much relief and the excess -- which points along
+ * the view axis head-on, where it hides -- rotates into the lateral direction as
+ * the head turns and inflates the head sideways.
+ *
+ * This was 0.45, then 1.0. The move to 1.0 was made to stop the FAR temple
+ * showing through a turn, and was judged on rearTrimPx, which rewards an
+ * occluder for removing as much of the arm as possible and is now known to
+ * score that failure mode as a perfect result. Re-checked here on the honest
+ * metric: at 0.6 the fraction of temple pixels hidden is 39.3% against 40.8% at
+ * 1.0, i.e. unchanged, and every judged angle still passes. ?occdepth=<n>
+ * overrides for tuning.
+ */
+const DEFAULT_OCCLUDER_DEPTH_SCALE = 0.6
+
+let _occluderDepthScale = null
+
+function occluderDepthScale() {
+  if (_occluderDepthScale == null) {
+    const raw = typeof window !== 'undefined'
+      ? parseFloat(new URLSearchParams(window.location.search).get('occdepth'))
+      : NaN
+    _occluderDepthScale = Number.isFinite(raw) && raw >= 0 && raw <= 3
+      ? raw
+      : DEFAULT_OCCLUDER_DEPTH_SCALE
+  }
+
+  return _occluderDepthScale
+}
+
+// Past this, one iris is occluded by the nose and the IPD estimate is noise
+// rather than a foreshortened measurement -- cos would keep shrinking (and
+// double the noise gain doing it), so clamp and let the hold below carry it.
+const MAX_YAW_DEPTH_CORRECTION = Math.PI / 3 // 60 degrees
+
+// Where the IPD depth estimate stops being a measurement. Both values are
+// measured, not guessed -- see the `trust` comment in solve().
+const IRIS_RELIABLE_YAW_DEG = 32
+const IRIS_USELESS_YAW_DEG = 42
+// Off-axis IPD depth noise measured about 12 mm SD. Changes beyond 25 mm are
+// much more likely to be real forward/back motion than landmark shimmer.
+const DEPTH_MOTION_THRESHOLD_M = 0.025
+
+export function depthFollowGain(frontal, innovation, trust) {
+  const movingInDepth = Math.abs(innovation) > DEPTH_MOTION_THRESHOLD_M
+  const baseGain = frontal ? 0.35 : (movingInDepth ? 0.22 : 0.02)
+  return baseGain * THREE.MathUtils.clamp(trust, 0, 1)
+}
+
+// Fraction of the way from bridgeTop (landmark 168) toward browCenter (9) that
+// the frame anchor sits. See the frameAnchorXY comment for why this is a blend
+// between landmarks rather than an offset in metres. 0.5 was picked on a real
+// face over ?vlift=, bracketed against 0.4 (rim on the brow line) and 0.8 (rim
+// over the brows) -- not derived, so re-tune with ?vlift if a frame reads low.
+const DEFAULT_VERTICAL_LIFT = 0.5
+
+/** Scratch for the forward-axis clearance offset; solve() runs every frame. */
+const FORWARD = new THREE.Vector3()
 
 function finiteVector3(vector) {
   return vector &&
@@ -18,6 +86,24 @@ function finiteVector3(vector) {
 
 function validDepth(depth) {
   return Number.isFinite(depth) && depth < DEFAULT_MAX_DEPTH && depth > DEFAULT_MIN_DEPTH
+}
+
+/**
+ * Metres per unit of MediaPipe landmark z, at a given depth.
+ *
+ * Landmark z is NOT metric: it is normalised on roughly the same scale as x,
+ * i.e. as a fraction of the image width. Subtracting it from a depth in metres
+ * with a dimensionless fudge factor -- which is what this file did for a long
+ * time -- measures the face and the glasses in two different spaces, and no
+ * value of that factor is right at more than one camera distance.
+ *
+ * One normalised unit spans the full frame width, which at distance d is
+ * 2*tan(fov/2)*d*aspect metres. Converting with that puts the occluder's relief
+ * in the same units as everything else and scales correctly with distance.
+ */
+function landmarkDepthToMetres(camera, baseDepth) {
+  const halfFov = THREE.MathUtils.degToRad(camera.fov) * 0.5
+  return 2 * Math.tan(halfFov) * Math.abs(baseDepth) * nativeAspectOf(camera)
 }
 
 function anchorToWorld(anchor, camera, baseDepth, depthScale = DEFAULT_LANDMARK_DEPTH_SCALE) {
@@ -96,13 +182,36 @@ function decomposeMatrix(matrix) {
   return { position, quaternion, scale }
 }
 
-function averageWorld(points) {
-  const valid = points.filter(finiteVector3)
-  if (!valid.length) {
-    return null
+/**
+ * Blends between two world points, tolerating either being missing.
+ * @returns {THREE.Vector3 | null}
+ */
+function lerpWorld(from, to, t) {
+  if (!finiteVector3(from)) {
+    return finiteVector3(to) ? to.clone() : null
+  }
+  if (!finiteVector3(to) || !(t > 0)) {
+    return from.clone()
   }
 
-  return valid.reduce((sum, point) => sum.add(point), new THREE.Vector3()).multiplyScalar(1 / valid.length)
+  return from.clone().lerp(to, THREE.MathUtils.clamp(t, 0, 1))
+}
+
+let _verticalLift = null
+
+/**
+ * How far to lift the frame anchor from bridgeTop toward browCenter.
+ * ?vlift=<0..1> overrides for live tuning on a phone, like ?gscale / ?voffset.
+ */
+function verticalLift(fallback = DEFAULT_VERTICAL_LIFT) {
+  if (_verticalLift === null) {
+    const raw = typeof window !== 'undefined'
+      ? parseFloat(new URLSearchParams(window.location.search).get('vlift'))
+      : NaN
+    _verticalLift = Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : undefined
+  }
+
+  return _verticalLift ?? fallback
 }
 
 function estimateMetricDepth(leftIris, rightIris, camera, realIPD_m = 0.063) {
@@ -183,31 +292,67 @@ export class FaceFitSolver {
       camera,
       0.076
     )
-    const rawDepth = ipdDepth
-      ?? (validDepth(matrixPosition.z) ? matrixPosition.z : this.fallbackDepth)
-
-    // The IPD-based distance estimate inflates with yaw OR pitch (foreshortened/
-    // occluded irises read as "farther" turning sideways, and looking down partly
-    // hides the iris under the eyelid the same way), which makes the whole frame
-    // drift in depth. Hold the distance steady while off-frontal on EITHER axis;
-    // only re-estimate near-frontal. Doing this at the source keeps x, y and z
-    // consistent (no recede, no forward pop). Originally yaw-only -- pitch was
-    // missed, so looking down still jittered (confirmed live).
     const headEuler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ')
+
+    // Yaw foreshortens the (horizontal) iris span by cos(yaw), so the IPD
+    // distance estimate inflates by 1/cos(yaw) and the frame recedes through
+    // every turn. Undo that projection term geometrically rather than trying to
+    // hold the depth still: the hold below is an EMA, and easing toward a
+    // BIASED estimate just walks to the bias more slowly -- measured at ~11 mm
+    // of recede front-to-turned, 45 mm of range across one oscillation, even
+    // with the hold engaged. Correcting the input instead means a genuine
+    // distance change (leaning in mid-turn) still registers.
+    //
+    // Pitch deliberately does NOT get the same treatment: rotating about X does
+    // not foreshorten a horizontal segment at all, so there is no cos term to
+    // undo. Its effect is the eyelid occluding the iris, which is not a
+    // projection artefact -- that stays the frontal gate's job below.
+    const yawForeshorten = Math.cos(
+      THREE.MathUtils.clamp(headEuler.y, -MAX_YAW_DEPTH_CORRECTION, MAX_YAW_DEPTH_CORRECTION)
+    )
+    const rawDepth = ipdDepth != null
+      ? ipdDepth * yawForeshorten
+      : (validDepth(matrixPosition.z) ? matrixPosition.z : this.fallbackDepth)
+
+    // Hold the distance steady while off-frontal; only re-estimate near-frontal.
+    // Doing this at the source keeps x, y and z consistent (no recede, no
+    // forward pop). Originally yaw-only -- pitch was missed, so looking down
+    // still jittered (confirmed live).
+    // The hold stays SLOW off-frontal on both axes, and that is load-bearing.
+    //
+    // Tried and reverted: letting yaw track the (now bias-corrected) estimate at
+    // a yaw-scaled gain, on the theory that a 0.02 EMA is what made the frame
+    // lag differently depending on travel direction. Measured the opposite --
+    // depth spread went from 85 mm SD to 12 mm SD when the slow hold came back,
+    // and while it was fast the frame visibly pulsed in size through every turn,
+    // because scale is derived from this depth. Off-axis iris landmarks are
+    // noisy enough that the hold is doing real work, independent of the bias the
+    // cos correction above removes. Don't re-raise this gain without measuring
+    // the z spread across a full turn.
     const frontalDepth = Math.abs(headEuler.y) < THREE.MathUtils.degToRad(5) &&
       Math.abs(headEuler.x) < THREE.MathUtils.degToRad(5)
+
+    // How far to trust the IPD estimate at this yaw, measured rather than
+    // assumed. Holding depth against a fully-settled frontal reference, the
+    // estimate is FLAT within 1.4% out to ~32 degrees and then falls off a
+    // cliff: +5% at 38, +22% at 45, +41% at 51. That is not foreshortening --
+    // foreshortening is a smooth cosine, and the cos correction above already
+    // removes it. It is the far iris disappearing behind the nose, after which
+    // the apparent IPD collapses and there is no measurement left to correct.
+    //
+    // So the gain falls to zero across that band and the last good depth simply
+    // holds. A slow non-zero gain is not a safe middle ground: at 0.02 per frame
+    // it still converges ~70% of the way to a bad number in a couple of seconds
+    // of held pose, which is exactly how a 121 mm recede accumulated.
+    const yawDeg = Math.abs(THREE.MathUtils.radToDeg(headEuler.y))
+    const trust = 1 - THREE.MathUtils.smoothstep(yawDeg, IRIS_RELIABLE_YAW_DEG, IRIS_USELESS_YAW_DEG)
     if (this._heldDepth == null) {
       this._heldDepth = rawDepth
-    } else if (frontalDepth) {
-      // Light EMA instead of snapping straight to rawDepth -- the native-video
-      // aspect estimateMetricDepth now uses (matching anchorToMetricXY, see
-      // above) is more sensitive to ordinary per-frame MediaPipe landmark
-      // noise than the old display-aspect version was, which showed up as
-      // visible nose-bridge jitter. Still responsive to real distance changes
-      // (moving closer/farther) within a few frames, just not frame-instant.
-      this._heldDepth += (rawDepth - this._heldDepth) * 0.35
     } else {
-      this._heldDepth += (rawDepth - this._heldDepth) * 0.02
+      const innovation = rawDepth - this._heldDepth
+      // Keep small off-axis fluctuations heavily damped, but let a real move
+      // toward or away from the camera clear the noise band and follow quickly.
+      this._heldDepth += innovation * depthFollowGain(frontalDepth, innovation, trust)
     }
     const baseDepth = this._heldDepth
 
@@ -237,8 +382,25 @@ export class FaceFitSolver {
     // Give the occluder real depth (cheeks/nose forward, jaw/ears back) instead of
     // a flat billboard, so temple arms passing behind the cheeks get masked.
     const faceWorldPoints = Array.isArray(landmarks)
-      ? landmarks.map((landmark) => anchorToWorld(landmark, camera, baseDepth, OCCLUDER_DEPTH_SCALE))
+      ? landmarks.map((landmark) => anchorToWorld(landmark, camera, baseDepth, landmarkDepthToMetres(camera, baseDepth) * occluderDepthScale()))
       : []
+    // The nose bridge at its REAL depth, using the same per-landmark mapping the
+    // occluder above uses.
+    //
+    // anchorWorldPoints places every anchor on a FLAT plane -- bridgeTop included,
+    // at baseDepth + 22 mm, identical at every head angle. The occluder gives the
+    // same landmark its own depth. So the frame and the face disagree about where
+    // the skin is, and the disagreement moves with pitch: measured on a nod sweep,
+    // the frame's nose saddle travelled 33 mm along the head's forward axis
+    // (+22.8 mm ahead of the sellion looking up, 10.7 mm BEHIND it looking down)
+    // and the bridge ended up 23.6 mm inside the nose at the bottom of the nod.
+    //
+    // Same bug class as the landmark-depth unit error and the yaw foreshortening:
+    // a single scalar standing in for a quantity that actually varies.
+    const bridgeSurfaceWorld = pose.anchorPoints?.bridgeTop
+      ? anchorToWorld(pose.anchorPoints.bridgeTop, camera, baseDepth, landmarkDepthToMetres(camera, baseDepth))
+      : null
+
     const bridgeWorld = anchorWorldPoints.bridgeCenter ?? anchorWorldPoints.bridgeTop
     const irisWorld = anchorWorldPoints.irisCenter
     const leftTemple = anchorWorldPoints.leftTemple
@@ -249,12 +411,31 @@ export class FaceFitSolver {
     const rightIris = anchorWorldPoints.rightIris
     const browTop = anchorWorldPoints.bridgeTop ?? anchorWorldPoints.browCenter
 
-    // Anchor on the nose bridge, where glasses physically rest. We previously
-    // averaged in the iris and brow landmarks, but those swing far more than the
-    // bridge when the head pitches up/down, dragging the anchor off the bridge.
-    // A light pull toward bridgeTop keeps the resting point at the top of the
-    // bridge (where the frame sits) without reintroducing the brow's pitch swing.
-    const frameAnchorXY = averageWorld([bridgeWorld, bridgeWorld, browTop])
+    // Anchor where the bridge meets the nose. This used to average in the iris
+    // and brow landmarks, but those swing far more than the bridge when the head
+    // pitches, dragging the anchor off the bridge -- so it became bridgeCenter
+    // (landmark 6, mid-nose). That sat every frame visibly low, confirmed on a
+    // real face: each calibrated model measured so far authors AR_bridge at
+    // ~80% of frame height, so roughly four fifths of the frame hangs BELOW
+    // whatever point this lands on, and mid-nose is already below the nasion.
+    //
+    // So: start at bridgeTop (landmark 168, the nasion) and lift a fraction of
+    // the way toward browCenter (landmark 9, between the brows). A blend of two
+    // landmarks rather than an offset in metres, on purpose -- it scales with
+    // face size and camera distance for free, where a fixed constant would be
+    // right at exactly one distance and one head size. browCenter sits on the
+    // skull between the brows, not on the brow ridge, so this does not bring
+    // back the pitch swing that pushed the old iris/brow average out.
+    // Saddle-anchored models pin the frame's OWN nose saddle to the face, so the
+    // anchor is the nose bridge itself (lift 0) rather than a blend up toward the
+    // brow. The blend exists in the legacy path to compensate for placing the
+    // model's bounding-box centre, which is not a point on the frame at all.
+    const saddleAnchored = skuFitMetadata?.anchorMode === 'saddle'
+    const frameAnchorXY = lerpWorld(
+      browTop,
+      anchorWorldPoints.browCenter,
+      verticalLift(saddleAnchored ? 0 : DEFAULT_VERTICAL_LIFT)
+    )
     const frameAnchor = new THREE.Vector3(
       frameAnchorXY?.x ?? matrixPosition.x,
       frameAnchorXY?.y ?? matrixPosition.y,
@@ -305,11 +486,57 @@ export class FaceFitSolver {
 
     const limits = skuFitMetadata?.scaleLimits ?? { min: 0.85, max: 1.25 }
     const scale = THREE.MathUtils.clamp(fittedScale, limits.min, limits.max)
+    // Surfaced so a binding clamp is visible rather than silent. A frame sitting
+    // exactly on its ceiling looks like a confident fit in the HUD and is really
+    // the solver asking for a size it is not allowed to have.
+    const scaleClamped = scale !== fittedScale
+
+    // Put the frame's nose saddle ON the face's nose bridge, at every head angle.
+    //
+    // The legacy path positions the model ORIGIN -- which the loader set to the
+    // bounding-box centre, a point that is not on the frame -- and then leans on
+    // (I - R)*pivot to keep the contact steady under rotation. Where the frame
+    // ends up therefore depends on its bounding box: measured on one mock frame,
+    // the saddle landed -3.3 mm, +6.7 mm and +15.4 mm relative to the sellion for
+    // three real models. An 18.7 mm spread that no single vertical lift can
+    // remove, because it is a property of each frame's proportions.
+    //
+    // Solving for the saddle instead makes the placement exact rather than
+    // corrected: saddleWorld = position + R*(saddle*s), so position =
+    // anchor - R*(saddle*s) pins it for any R. That also subsumes the pivot
+    // correction -- and fixes its missing render scale, since the lever arm is in
+    // model units but the frame is drawn at `scale`.
+    if (saddleAnchored && Number.isFinite(scale)) {
+      // Clearance is applied along the HEAD's forward axis, not world Z. A world-Z
+      // floor holds the frame off the skin only while the face points at the
+      // camera; once the head pitches, "forward" is no longer Z and the floor
+      // stops protecting the surface it was meant to protect.
+      const clearance = skuFitMetadata?.frontFrameClearanceMeters ?? 0.003
+      targetPosition
+        .copy(bridgeSurfaceWorld ?? frameAnchor)
+        .add(FORWARD.set(0, 0, clearance).applyQuaternion(quaternion))
+        .sub(localBridgePivot.clone().multiplyScalar(scale).applyQuaternion(quaternion))
+      // Deliberately no world-Z clamp here: it would reintroduce exactly the
+      // pitch-varying depth error this anchor removes.
+    }
 
     const scaleDrift = faceSpan > 0 && currentSpan > 0
       ? THREE.MathUtils.clamp(currentSpan / faceSpan, 0.985, 1.015)
       : 1
-    const worldFaceWidth = weightedWorldFaceWidth(metricPoints)
+    // Yaw foreshortens a PROJECTED width by cos(yaw), and every span here is
+    // projected at a fixed depth -- so a turning head reads as a narrowing face
+    // and the frame tries to shrink with it. Measured across the mock sweep the
+    // target ran 1.15 frontal to 0.85 at 53 degrees: a 26% swing on a head whose
+    // width never changed, pinned at BOTH clamps at the extremes. Same bug class
+    // as the IPD depth estimate above, and the same correction.
+    //
+    // Clamped at the same 60 degrees: past that an iris is occluded by the nose
+    // and dividing by a small cosine amplifies noise instead of removing bias.
+    const widthForeshorten = Math.cos(
+      THREE.MathUtils.clamp(headEuler.y, -MAX_YAW_DEPTH_CORRECTION, MAX_YAW_DEPTH_CORRECTION)
+    )
+    const worldFaceWidth = weightedWorldFaceWidth(metricPoints) /
+      Math.max(widthForeshorten, 0.5)
     const frameFitRatio = Number.isFinite(skuFitMetadata?.faceFitWidthRatio)
       ? skuFitMetadata.faceFitWidthRatio
       : 0.88
@@ -328,6 +555,8 @@ export class FaceFitSolver {
       // The head yaw the solver used, so the size-freeze downstream keys off the
       // exact same value as the depth-hold here (no out-of-sync transition).
       headYaw: headEuler.y,
+      fittedScaleRaw: fittedScale,
+      scaleClamped,
       occlusionMesh: {
         landmarks,
         baseDepth,

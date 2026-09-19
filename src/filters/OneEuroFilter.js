@@ -33,6 +33,7 @@ export class OneEuroFilter {
     this.x = new LowPassFilter()
     this.dx = new LowPassFilter()
     this.lastTimestamp = null
+    this.lastRawValue = null
   }
 
   setParams(options = {}) {
@@ -57,6 +58,7 @@ export class OneEuroFilter {
     this.x.reset()
     this.dx.reset()
     this.lastTimestamp = null
+    this.lastRawValue = null
   }
 
   _alpha(cutoff, dt) {
@@ -76,8 +78,11 @@ export class OneEuroFilter {
 
     this.lastTimestamp = timestamp
 
-    const previousValue = this.x.initialized ? this.x.value : value
-    const derivative = (value - previousValue) * this.freq
+    // The derivative is the input signal's velocity. Using the filtered value
+    // here mistakes ordinary filter lag for continued motion, progressively
+    // opens the cutoff, and makes each step accelerate instead of easing.
+    const derivative = this.lastRawValue == null ? 0 : (value - this.lastRawValue) * this.freq
+    this.lastRawValue = value
     const derivativeEstimate = this.dx.filter(derivative, this._alpha(this.dCutoff, dt))
     const cutoff = this.minCutoff + this.beta * Math.abs(derivativeEstimate)
 

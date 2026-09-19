@@ -45,10 +45,12 @@ describe('Help loader', () => {
     const result = await loader({ request: new Request('https://example.test/app/additional') })
     const url = new URL(result.themeEditorUrl)
 
-    expect(url.origin).toBe('https://admin.shopify.com')
-    expect(url.pathname).toBe('/store/help-recovery/themes/current/editor')
+    expect(url.origin).toBe('https://help-recovery.myshopify.com')
+    expect(url.pathname).toBe('/admin/themes/current/editor')
     expect(url.searchParams.get('template')).toBe('product')
-    expect(url.searchParams.get('addAppBlockId')).toMatch(/\/tryon_button$/)
+    expect(url.searchParams.get('addAppBlockId')).toBe(
+      'be1db9d64c7c617dcd67f6add58f4824/tryon_button',
+    )
   })
 })
 
@@ -63,7 +65,7 @@ describe('Help recovery actions', () => {
     expect(html).not.toMatch(
       /<s-page[^>]*inlineSize="small"[^>]*>[\s\S]*<s-section[^>]*slot="aside"/,
     )
-    expect(html).toContain('href="/app/products"')
+    expect(html).toContain('href="/app"')
     expect(html).toContain('href="/app/models"')
     expect(html).toContain('href="/privacy" target="_blank"')
     expect(html).toContain('href="mailto:ramy.sameh2@gmail.com"')

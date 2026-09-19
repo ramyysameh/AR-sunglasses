@@ -8,7 +8,7 @@ function modelName(a) {
 
 // Pure: which assets match a search query against the merchant-facing model
 // name (never the raw filename or id) -- exported so tests can exercise it
-// without mounting anything, matching ProductIndex.jsx's filterMappings.
+// without mounting anything.
 export function filterModelAssets(assets, query) {
   const q = query.trim().toLowerCase()
   if (!q) return assets
@@ -18,7 +18,7 @@ export function filterModelAssets(assets, query) {
 // Hook-free presentational piece: one search field, one compact choice list,
 // and exactly one preview -- for the selected asset only, never one per
 // choice. Exported so node-environment tests can call it directly without a
-// real DOM, the same reasoning as ProductTable in ProductIndex.jsx.
+// real DOM.
 export function ModelPickerView({
   assets,
   filtered,
@@ -42,13 +42,12 @@ export function ModelPickerView({
         // shouldUseChangeEvent), so it never fires on a custom element here.
         // `input` is a simple, type-agnostic DOM event React forwards
         // regardless of tag name, and it's the per-keystroke event per
-        // Shopify's "Handling events" guide -- see ProductIndex.jsx's search
-        // field for the same reasoning.
+        // Shopify's "Handling events" guide -- see ModelUploadFlow.jsx's
+        // DropZoneField for the same reasoning applied elsewhere.
         onInput={(event) => onQueryChange(event.currentTarget.value)}
       ></s-search-field>
       {filtered.length === 0 ? (
-        // Keeps the search field mounted and visible -- same principle as
-        // ProductIndex's no-results state -- instead of collapsing the whole
+        // Keeps the search field mounted and visible instead of collapsing the whole
         // picker to an empty list a merchant can't recover from.
         <s-stack direction="block" gap="base">
           <s-text type="strong">No models match your search</s-text>

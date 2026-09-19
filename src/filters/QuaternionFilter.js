@@ -11,6 +11,7 @@ export class QuaternionFilter {
     this.dCutoff = options.dCutoff ?? 1.0
     this.freq = options.freq ?? 60
     this.filtered = null
+    this.lastRaw = null
     this.lastTimestamp = null
     this.angularVelocityFilter = new OneEuroFilter({
       freq: this.freq,
@@ -47,6 +48,7 @@ export class QuaternionFilter {
 
   reset() {
     this.filtered = null
+    this.lastRaw = null
     this.lastTimestamp = null
     this.angularVelocityFilter.reset()
   }
@@ -65,6 +67,7 @@ export class QuaternionFilter {
 
     if (!this.filtered) {
       this.filtered = target.clone()
+      this.lastRaw = target.clone()
       this.lastTimestamp = timestamp
       this.angularVelocityFilter.reset()
       return this.filtered.clone()
@@ -80,7 +83,10 @@ export class QuaternionFilter {
       target.w *= -1
     }
 
-    const delta = this.filtered.clone().conjugate().multiply(target)
+    // Angular velocity belongs to consecutive raw observations. Measuring from
+    // the filtered quaternion includes the filter's residual error as fake
+    // motion, which raises the cutoff and produces a visible catch-up surge.
+    const delta = this.lastRaw.clone().conjugate().multiply(target)
     const angle = 2 * Math.acos(THREE.MathUtils.clamp(delta.w, -1, 1))
     const angularVelocity = angle / dt
     const smoothedAngularVelocity = this.angularVelocityFilter.filter(angularVelocity, timestamp)
@@ -88,6 +94,7 @@ export class QuaternionFilter {
     const alpha = this._alpha(cutoff, dt)
 
     this.filtered.slerp(target, alpha).normalize()
+    this.lastRaw.copy(target)
     this.lastTimestamp = timestamp
 
     return this.filtered.clone()

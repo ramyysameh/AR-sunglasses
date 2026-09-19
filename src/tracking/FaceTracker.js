@@ -11,6 +11,11 @@ export class FaceTracker {
     this.modelAssetPath = options.modelAssetPath ?? DEFAULT_MODEL_URL
     this.wasmRoot = options.wasmRoot ?? DEFAULT_WASM_ROOT
     this.faceLandmarker = null
+    this.lastVideoTime = null
+    this.lastResult = null
+    this.lastDetectionWasFresh = false
+    this.lastDetectionTimestamp = null
+    this.frameIntervalMs = 1000 / 30
   }
 
   async init() {
@@ -23,7 +28,7 @@ export class FaceTracker {
       },
       runningMode: 'VIDEO',
       numFaces: 1,
-      outputFaceBlendshapes: true,
+      outputFaceBlendshapes: false,
       outputFacialTransformationMatrixes: true,
     })
 
@@ -35,11 +40,32 @@ export class FaceTracker {
       return null
     }
 
-    return this.faceLandmarker.detectForVideo(videoElement, timestamp)
+    const videoTime = Number(videoElement.currentTime)
+    if (Number.isFinite(videoTime) && videoTime === this.lastVideoTime) {
+      this.lastDetectionWasFresh = false
+      return this.lastResult
+    }
+
+    this.lastResult = this.faceLandmarker.detectForVideo(videoElement, timestamp)
+    if (this.lastDetectionTimestamp != null) {
+      const observedInterval = timestamp - this.lastDetectionTimestamp
+      if (observedInterval >= 8 && observedInterval <= 100) {
+        this.frameIntervalMs += (observedInterval - this.frameIntervalMs) * 0.2
+      }
+    }
+    this.lastDetectionTimestamp = timestamp
+    this.lastVideoTime = Number.isFinite(videoTime) ? videoTime : null
+    this.lastDetectionWasFresh = true
+    return this.lastResult
   }
 
   dispose() {
     this.faceLandmarker?.close?.()
     this.faceLandmarker = null
+    this.lastVideoTime = null
+    this.lastResult = null
+    this.lastDetectionWasFresh = false
+    this.lastDetectionTimestamp = null
+    this.frameIntervalMs = 1000 / 30
   }
 }

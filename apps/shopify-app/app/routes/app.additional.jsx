@@ -28,7 +28,15 @@ export default function HelpPage() {
 
       <s-section heading="Try on button is missing">
         <s-paragraph>
-          Assign a model to the product in <s-link href="/app/products">Products</s-link>,
+          {/* Upstream's workspace redesign removed the standalone Products
+              page (app.products.jsx now redirects to /app), so this points at
+              the Workspace. The theme editor stays plain prose rather than
+              upstream's inline <a target="_top">: the section already ends in
+              a TopLevelAdminAction "Open theme editor" button, which is the
+              reliable break-out for a Shopify admin destination (a raw
+              target="_top" anchor mid-sentence duplicates that action and
+              fragments the sentence at narrow widths). */}
+          Assign a model to the product in <s-link href="/app">Workspace</s-link>,
           then add the AR Try-On block to the product template in the theme editor.
           The button stays hidden until both are ready.
         </s-paragraph>
@@ -56,8 +64,7 @@ export default function HelpPage() {
         <s-paragraph>
           Use a .glb file no larger than 25 MB. If the upload finishes with a
           Review fit status instead of Ready, open it on the Models page and use
-          Review fit to check it on a reference head before assigning it to
-          products.
+          Review fit to check its scale before assigning it to products.
         </s-paragraph>
         <s-paragraph>
           <s-link href="/app/models">Open Models</s-link>

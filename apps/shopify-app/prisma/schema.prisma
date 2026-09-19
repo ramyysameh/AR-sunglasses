@@ -68,6 +68,7 @@ model ProductMapping {
   id           String     @id @default(uuid())
   shop         String
   productId    String
+  productHandle String?
   modelAsset   ModelAsset @relation(fields: [modelAssetId], references: [id])
   modelAssetId String
   createdAt    DateTime   @default(now())

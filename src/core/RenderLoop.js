@@ -2,6 +2,10 @@
  * Main AR render loop that fuses face tracking, pose filtering, occlusion, and Three.js rendering.
  */
 import * as THREE from 'three'
+import { NEAR_ARM_YAW_DEG, TEMPLE_CURL_RAD, TEMPLE_CUT_BEHIND_EAR_M, applyCurl, applyNearArmClip, applyOffset, applySplay, buildHinges, solveSplay } from '../models/templeHinge.js'
+import { EAR_LANDMARKS, EYE_LANDMARKS, NOSE_LANDMARK, headFrame } from '../occlusion/headFrame.js'
+import { halfWidthAt, toWorldPositions } from '../occlusion/headWidth.js'
+import { SHELL_INDEX_START } from '../occlusion/FaceOccluder.js'
 import { scaleMultiplier, xOffset, yOffset, zOffset, rotOffsetX, rotOffsetY, rotOffsetZ, trackingSmoothness } from '../config/poseConfig.js'
 import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
@@ -9,23 +13,45 @@ import { FaceFitSolver } from '../fit/FaceFitSolver.js'
 import { coverNDC } from '../fit/coverMap.js'
 import { resolveGlassesScaleMultiplier } from './glassesScale.js'
 import { createLensEnvironment } from './lensEnvironment.js'
-import { resolveLensReflectionConfig } from './lensReflection.js'
+import { resolveLensReflectionConfig, resolveEnvironmentName} from './lensReflection.js'
 import { resolveFrameReflectionConfig } from './frameReflection.js'
+import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
+import { PoseInterpolator } from '../tracking/PoseInterpolator.js'
 
 const TRACK_LOSS_RESET_MS = 180
-// Lower lead than before (was 0.85): heavy lead on an already-smoothed signal
-// overshoots and recoils, which reads as rubber-banding. A light lead just
-// compensates residual filter latency.
-const PREDICTION_FACTOR = 0.85
+// Bounded translation lead to compensate camera + detector + filter latency.
+// Time-based rather than "frames ahead" so behavior is stable across 30/60 Hz.
+const POSITION_LEAD_MS = 60
 const MAX_PREDICTION_SPEED = 1.2
+const MAX_POSITION_LEAD_M = 0.035
 // Rotation lead (ms) to cancel capture->detect->render latency during turns.
-const ROT_LEAD_MS = 60
-const MAX_ROT_LEAD_FRAMES = 4
+const ROT_LEAD_MS = 75
+const MAX_ROT_LEAD_FRAMES = 1
 const FALLBACK_FACE_DEPTH = -0.78
 const NEAREST_DISPLAY_DEPTH = -0.62
-const LOW_QUALITY_FREEZE_FRAMES = 3
-const LOW_QUALITY_THRESHOLD = 0.42
-
+// How many frontal samples the running size estimate averages over. Capped so it
+// remains a long moving average and can still follow a genuine change of face.
+const FRONTAL_SCALE_SAMPLES = 120
+// Beyond this yaw the face mesh is too foreshortened to measure head width from.
+const SPLAY_MEASURE_YAW_DEG = 12
+// Sanity bounds on the measured head half-width, guarding against acting on an
+// occluder that has not been populated yet.
+const MIN_PLAUSIBLE_HEAD_HALF_M = 0.05
+const MAX_PLAUSIBLE_HEAD_HALF_M = 0.13
+// Frontal samples the head-width estimate averages over before the arms are
+// opened, and how far that average must move to justify re-solving.
+const HEAD_WIDTH_SAMPLES = 90
+const HEAD_WIDTH_RESOLVE_M = 0.004
+/** Re-solve once glasses scale drifts by 1%; roughly half a degree of splay. */
+const SPLAY_SCALE_RESOLVE = 0.01
+/**
+ * Samples required before the resolve latch is set, so the mean has settled
+ * before the solve stops being revisited. The SOLVE itself runs on every
+ * qualifying frame regardless -- gating the solve on this count instead meant
+ * a head that was near-frontal for only a few frames before turning away
+ * never got splay or curl at all.
+ */
+const HEAD_WIDTH_MIN_SAMPLES = 10
 export class RenderLoop {
   constructor(options = {}) {
     this.canvas = options.canvas ?? null
@@ -73,7 +99,10 @@ export class RenderLoop {
     this.lowQualityFrames = 0
     this.smoothedScale = null
     this.smoothedDepth = null
+    this._frontalScaleMean = null
+    this._frontalScaleCount = 0
     this.lastPredictionTimestamp = null
+    this.poseInterpolator = new PoseInterpolator()
     this.occlusionEnabled = true
     // The flat CircleGeometry "contact shadow" reads as a grey disc on the nose,
     // so keep it off. Revisit with a proper soft/blurred shadow later if desired.
@@ -81,18 +110,29 @@ export class RenderLoop {
     this.filterMode = 'still'
     this.motionLevel = 0
     this.lastScanStateKey = ''
+    // Read here rather than in init(): setGlassesRoot/setFaceOccluder can run
+    // before init, and a flag set later would leave both of them early-returning
+    // with nothing ever installing the probe.
+    this.probeEnabled = typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('probe') === '1'
+    this._probe = null
   }
 
   async init() {
+    // preserveDrawingBuffer stays OFF: on iOS it makes the alpha canvas render
+    // as solid green (uninitialized GPU buffer). The occlusion probe reads an
+    // offscreen render target instead of the canvas, so pixel verification does
+    // not need it -- see src/debug/occlusionProbe.js.
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       alpha: true,
       antialias: true,
-      // preserveDrawingBuffer is intentionally OFF: on iOS it makes the alpha
-      // canvas render as solid green (uninitialized GPU buffer). It was only
-      // needed for the since-removed capture/screenshot feature.
     })
+
     this.renderer.setClearColor(0x000000, 0)
+    // The near temple is cut at the ear plane rather than occluded there; see
+    // applyNearArmClip.
+    this.renderer.localClippingEnabled = true
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     // AgX matches Blender's default view transform, so the frame reads with the
     // same richness/contrast as in Blender (ACES was washing it out lighter).
@@ -109,6 +149,7 @@ export class RenderLoop {
     this.lensReflection = resolveLensReflectionConfig(window.location.search)
     this.frameReflection = resolveFrameReflectionConfig(window.location.search)
     this.lensEnvironment = createLensEnvironment(this.renderer, {
+      environment: resolveEnvironmentName(window.location.search),
       sunAzimuthDeg: this.lensReflection.sunAzimuthDeg,
       sunElevationDeg: this.lensReflection.sunElevationDeg,
     })
@@ -156,6 +197,7 @@ export class RenderLoop {
     this.scene.add(this.contactShadow)
 
     this._syncSize()
+    this._installProbe()
 
     return this
   }
@@ -171,10 +213,25 @@ export class RenderLoop {
     }
 
     this.glassesRoot = glassesRoot
+    // Each arm gets a pivot at its own hinge so it can be opened rigidly. Built
+    // per model: a new model needs new pivots, and the old ones went with it.
+    this._hinges = glassesRoot ? buildHinges(glassesRoot) : null
+
+    // The head's width survives a frame swap; the SOLVE does not. Without this
+    // the resolve latch below never releases -- it used to release by accident,
+    // because the old vertex measurement moved 22 mm between models and always
+    // blew past HEAD_WIDTH_RESOLVE_M. At 0.8 mm of spread it no longer does, and
+    // the new frame would keep its authored, unopened, uncurled arms all session.
+    this._splayForWidth = null
+    this._splayForScale = null
 
     if (this.glassesRoot && this.scene) {
       this.scene.add(this.glassesRoot)
     }
+
+    // The probe needs both the glasses and the occluder; they are set by
+    // different callers in either order, so try from both.
+    this._installProbe()
 
     // A new model can have a radically different fitted scale/depth (e.g. a
     // normalized frame ~1.0 vs a raw-unit frame ~0.05). Force a tracking-state
@@ -186,9 +243,129 @@ export class RenderLoop {
 
   setFaceOccluder(faceOccluder) {
     this.faceOccluder = faceOccluder
+    this._shellWorld = null
 
     if (this.faceOccluder?.occluderMesh && this.scene && this.faceOccluder.occluderMesh.parent !== this.scene) {
       this.scene.add(this.faceOccluder.occluderMesh)
+    }
+
+    this._installProbe()
+  }
+
+  /**
+   * Wires up ?probe=1 once both the glasses and the occluder exist -- the probe
+   * needs to toggle each of them, and they arrive from different callers.
+   */
+  _installProbe() {
+    if (!this.probeEnabled || !this.glassesRoot || !this.faceOccluder) {
+      return
+    }
+    if (this._probe?.glassesRoot === this.glassesRoot) return
+    this._probe?.target?.dispose?.()
+
+    this._probe = new OcclusionProbe({
+      renderer: this.renderer,
+      scene: this.scene,
+      camera: this.camera,
+      glassesRoot: this.glassesRoot,
+      faceOccluder: this.faceOccluder,
+    })
+
+    // The objects the probe measures, exposed so the HARNESS itself can be
+    // debugged. A measurement of zero is ambiguous without them -- nothing drawn
+    // because it was occluded, or because the glasses were hidden that frame?
+    window.__probeRefs = {
+      loop: this,
+      glassesRoot: this.glassesRoot,
+      faceOccluder: this.faceOccluder,
+      scene: this.scene,
+      camera: this.camera,
+      renderer: this.renderer,
+    }
+
+    window.__probe = {
+      measure: () => this._probe.measure(THREE.MathUtils.radToDeg(this.headYaw ?? 0)),
+      /**
+       * Advances the engine by hand: pushes a mock video frame, then runs one
+       * tracking+render step for it. Needed because both the mock camera and
+       * this loop are rAF-driven, and rAF stops when the page is not painted.
+       */
+      tick: (frames = 1) => {
+        for (let i = 0; i < frames; i += 1) {
+          window.__mock?.step(1)
+          this._step()
+        }
+      },
+      /**
+       * Walks every mock frame and scores the result.
+       *
+       * Settles by STEPPING FRAMES rather than sleeping. The video frame,
+       * MediaPipe's landmarks and the smoothed pose each lag a pin by several
+       * frames, so measuring immediately reports the previous pose -- but
+       * waiting on wall time made the sweep depend on how fast the page happened
+       * to be running, which is exactly what made earlier runs unreproducible
+       * (three settings silently sampled three different parts of the turn).
+       * A frame count is the same on any machine, and works while throttled.
+       *
+       * It has to yield between steps even so. requestFrame() only QUEUES a
+       * frame onto the capture track; the <video> element picks it up when the
+       * event loop turns, so a fully synchronous settle loop leaves the video
+       * frozen on the previous pose and every row reports the same angle. The
+       * yield is what lets the media pipeline deliver -- the frame count, not
+       * the elapsed time, is still what defines the settle.
+       */
+      /**
+       * Captures the composited view at one mock frame and writes it to disk via
+       * the harness, returning the path. This is how an automated run SEES its
+       * own work instead of asking a human to look.
+       */
+      shot: async (name, { frame = null, settleFrames = 14 } = {}) => {
+        if (frame != null) window.__mock?.pin(frame)
+        for (let f = 0; f < settleFrames; f += 1) {
+          window.__probe.tick(1)
+          await new Promise((r) => setTimeout(r, 16))
+        }
+        const dataUrl = compositeFrame(this._probe, this.video)
+        const response = await fetch('/__shot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, dataUrl }),
+        })
+        return { ...(await response.json()), yaw: Math.round(THREE.MathUtils.radToDeg(this.headYaw ?? 0) * 10) / 10 }
+      },
+
+      /** Captures a whole turn, so a sweep can be reviewed as pictures. */
+      sheet: async (prefix, frames, opts) => {
+        const shots = []
+        for (const frame of frames) shots.push(await window.__probe.shot(`${prefix}-f${frame}`, { frame, ...opts }))
+        window.__mock?.release()
+        return shots
+      },
+
+      /**
+       * DISCARD THE FIRST SWEEP AFTER A PAGE LOAD.
+       *
+       * The fit keeps converging for a few seconds after the scan locks, so the
+       * first pass reads worse than the engine settles to. Measured back to back
+       * on one pose set: sweep 1 gave 0.123 short with 18 px of hole, sweeps 2-4
+       * gave 0.056 and 9. Both are real; only the later ones are the steady
+       * state, and a tuning pass driven by the first is chasing a transient.
+       */
+      sweep: async ({ settleFrames = 14, step = 1 } = {}) => {
+        const mock = window.__mock
+        if (!mock) return { error: 'no mock camera: use ?mock=turn' }
+        const rows = []
+        for (let i = 0; i < mock.frameCount; i += step) {
+          mock.pin(i)
+          for (let f = 0; f < settleFrames; f += 1) {
+            window.__probe.tick(1)
+            await new Promise((r) => setTimeout(r, 16))
+          }
+          rows.push({ frame: i, ...window.__probe.measure() })
+        }
+        mock.release()
+        return { rows, ...evaluate(rows) }
+      },
     }
   }
 
@@ -272,8 +449,15 @@ export class RenderLoop {
     this.lastGoodTransform = null
     this.lowQualityFrames = 0
     this.lastPredictionTimestamp = null
+    this.poseInterpolator?.reset?.()
     this.smoothedScale = null
     this.smoothedDepth = null
+    this._frontalScaleMean = null
+    this._frontalScaleCount = 0
+    this._headWidthMean = null
+    this._headWidthCount = 0
+    this._splayForWidth = null
+    this._splayForScale = null
     this._lastRotQuat = null
     this._angVelQ = null
   }
@@ -298,7 +482,11 @@ export class RenderLoop {
     if (yaw > this._fitDbgPeak) this._fitDbgPeak = yaw
     this._fitDbgEl.textContent =
       `yaw      ${data.yaw.toFixed(1)}°  (peak ${this._fitDbgPeak.toFixed(0)}°)\n` +
-      `scale    applied ${data.scale.toFixed(4)}  target ${data.raw.toFixed(4)}\n` +
+      // Show what the solver actually asked for whenever the limits overrode it.
+      // A frame sitting exactly on its ceiling reads as a confident fit here and
+      // is really the solver requesting a size it is not allowed to have.
+      `scale    applied ${data.scale.toFixed(4)}  target ${data.raw.toFixed(4)}` +
+      `${data.clamped ? `  WANTED ${Number(data.fittedRaw).toFixed(4)}` : ''}\n` +
       `depth z  ${data.z.toFixed(4)}  (more -neg = farther)\n` +
       `fitQual  ${(data.quality ?? 0).toFixed(2)}`
   }
@@ -336,18 +524,18 @@ export class RenderLoop {
     })
   }
 
-  _predictPosition(smoothPos) {
+  _predictPosition(smoothPos, timestamp = performance.now()) {
     if (!this.prevFilteredPos) {
       this.prevFilteredPos = smoothPos.clone()
       this.smoothedVelocity = null
       this.predictionDelta = 0
-      this.lastPredictionTimestamp = performance.now()
+      this.lastPredictionTimestamp = timestamp
       return smoothPos.clone()
     }
 
-    const now = performance.now()
-    const dt = Math.max((now - (this.lastPredictionTimestamp ?? now)) / 1000, 1 / 120)
-    const velocity = smoothPos.clone().sub(this.prevFilteredPos)
+    const dt = Math.max((timestamp - (this.lastPredictionTimestamp ?? timestamp)) / 1000, 1 / 120)
+    const observedDelta = smoothPos.clone().sub(this.prevFilteredPos)
+    const velocity = observedDelta.clone().multiplyScalar(1 / dt)
 
     // Smooth the velocity before using it as a lead. Raw per-frame velocity is
     // noisy, and once scaled by the prediction gain that noise becomes visible
@@ -358,21 +546,24 @@ export class RenderLoop {
       this.smoothedVelocity.lerp(velocity, 0.45)
     }
 
-    const leadVelocity = this.smoothedVelocity.clone()
-    const velocityLength = leadVelocity.length()
-    const maxPredictionDelta = THREE.MathUtils.clamp(MAX_PREDICTION_SPEED * dt, 0.006, 0.045)
-    if (velocityLength > maxPredictionDelta) {
-      leadVelocity.multiplyScalar(maxPredictionDelta / velocityLength)
+    const speed = this.smoothedVelocity.length()
+    if (speed > MAX_PREDICTION_SPEED) {
+      this.smoothedVelocity.multiplyScalar(MAX_PREDICTION_SPEED / speed)
     }
 
     this.prevFilteredPos = smoothPos.clone()
-    this.lastPredictionTimestamp = now
-    this.predictionDelta = Math.min(velocityLength, maxPredictionDelta)
+    this.lastPredictionTimestamp = timestamp
 
-    // Scale lead by current motion: zero prediction (and zero noise amplification)
-    // at rest, ramping to full lead during real movement.
-    const predictionGain = PREDICTION_FACTOR * (this.motionLevel ?? 0)
-    return smoothPos.clone().addScaledVector(leadVelocity, predictionGain)
+    const lead = this.smoothedVelocity.clone().multiplyScalar(
+      (POSITION_LEAD_MS / 1000) * (this.motionLevel ?? 0),
+    )
+    // Never extrapolate farther than the movement we just observed. A large
+    // time-based lead can otherwise turn a 10 mm sample into a 45 mm pose,
+    // visibly crossing the face before the next sample corrects it.
+    const maxLead = Math.min(MAX_POSITION_LEAD_M, observedDelta.length())
+    if (lead.length() > maxLead) lead.setLength(maxLead)
+    this.predictionDelta = lead.length()
+    return smoothPos.clone().add(lead)
   }
 
   _predictRotation(quat, timestamp) {
@@ -419,10 +610,10 @@ export class RenderLoop {
 
     const dt = Math.max((timestamp - this.lastRawTimestamp) / 1000, 1e-3)
     const linearSpeed = rawPosition.distanceTo(this.lastRawPosition) / dt
-    // More sensitive gate (was /0.65): heads rarely translate that fast, so the
-    // filter almost never opened up and everything lagged. /0.4 lets it respond
-    // to normal head movement.
-    const linearMotion = THREE.MathUtils.clamp(linearSpeed / 0.4, 0, 1)
+    // Reach full response at ordinary deliberate movement. The previous 0.4
+    // m/s ceiling classified normal lateral motion as nearly still, leaving the
+    // rest filter engaged while the face was visibly moving.
+    const linearMotion = THREE.MathUtils.clamp(linearSpeed / 0.25, 0, 1)
 
     // A head tilt/turn is mostly rotation with little translation. Without this,
     // the gate reads a tilt as "still" and over-smooths the rotation, so the
@@ -432,17 +623,17 @@ export class RenderLoop {
       const angularSpeed = rawQuat.angleTo(this.lastRawQuat) / dt // rad/s
       // More sensitive: a head turn should hit full motion quickly so the filters
       // open up immediately and the glasses don't trail the turn.
-      angularMotion = THREE.MathUtils.clamp(angularSpeed / 0.6, 0, 1)
+      angularMotion = THREE.MathUtils.clamp(angularSpeed / 0.35, 0, 1)
     }
 
     const rawMotion = Math.max(linearMotion, angularMotion)
     // Deadzone: ignore tiny motion (landmark noise + involuntary sway) so the
     // filter stays in its heavily-smoothed "still" mode at rest and doesn't jitter.
     // Real movement still ramps motion to 1 for full responsiveness.
-    // Wider deadzone (was 0.12): tracking is noisier when the head is held at an
-    // angle, and that noise was tripping the gate out of "still" mode and jittering.
-    // A bigger deadzone keeps any held pose (forward OR turned) in heavy smoothing.
-    const deadzone = 0.28
+    // Duplicate-frame inference and false derivative motion are now removed at
+    // their sources, so this no longer needs the oversized 0.28 deadzone that
+    // made slow, intentional movement trail the face.
+    const deadzone = 0.22
     const motion = THREE.MathUtils.clamp((rawMotion - deadzone) / (1 - deadzone), 0, 1)
     // The detector runs slower than the render loop, so a fresh pose arrives only
     // every ~2nd frame; the in-between (near-duplicate) frame reads as "still".
@@ -467,14 +658,14 @@ export class RenderLoop {
     // landmark noise doesn't jitter the frame; high ceilings keep it responsive
     // once real movement ramps `motion` up.
     this.positionFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.40, 6.0, smoothedMotion) * smoothFactor,
-      beta: THREE.MathUtils.lerp(0.010, 0.22, smoothedMotion) * smoothFactor,
+      minCutoff: THREE.MathUtils.lerp(0.40, 30.0, smoothedMotion) * smoothFactor,
+      beta: THREE.MathUtils.lerp(0.010, 0.28, smoothedMotion) * smoothFactor,
       dCutoff: 1.0,
     })
 
     this.rotationFilter?.setParams({
-      minCutoff: THREE.MathUtils.lerp(0.35, 6.0, smoothedMotion) * smoothFactor,
-      beta: THREE.MathUtils.lerp(0.02, 0.30, smoothedMotion) * smoothFactor,
+      minCutoff: THREE.MathUtils.lerp(0.35, 30.0, smoothedMotion) * smoothFactor,
+      beta: THREE.MathUtils.lerp(0.02, 0.36, smoothedMotion) * smoothFactor,
       dCutoff: 1.0,
     })
 
@@ -577,13 +768,38 @@ export class RenderLoop {
     // still; hold it steady through turns (the face isn't actually resizing).
     const yawAbs = Math.abs(this.headYaw ?? 0)
     const frontal = yawAbs < THREE.MathUtils.degToRad(5)
+
+    // Frontal samples feed a RUNNING MEAN rather than easing an EMA toward
+    // whatever the latest sample happens to be.
+    //
+    // The freeze below holds the size through a turn, so the held value is
+    // whatever the EMA reached during the brief window the head was frontal --
+    // and that window is short, so it never fully converged. Each pass latched a
+    // different number and the whole turn inherited it: measured 1.1966 sweeping
+    // one way against 1.1755 the other, a 1.8% step at the crossing that read as
+    // the frame changing size depending on which way the head had turned.
+    //
+    // A face's width does not change, so every good frontal sample is an
+    // estimate of the same constant and averaging them is strictly better than
+    // taking the most recent. The mean is direction-independent, which is what
+    // removes the hysteresis, and it keeps converging the longer a face is seen.
+    if (frontal && Number.isFinite(clampedScale)) {
+      this._frontalScaleCount = Math.min((this._frontalScaleCount ?? 0) + 1, FRONTAL_SCALE_SAMPLES)
+      this._frontalScaleMean = this._frontalScaleMean == null
+        ? clampedScale
+        : this._frontalScaleMean + (clampedScale - this._frontalScaleMean) / this._frontalScaleCount
+    }
+
+    // Capped count, so it stays a long moving average rather than becoming
+    // immovable -- a different person in front of the camera still takes effect.
+    const target = this._frontalScaleMean ?? clampedScale
     const damping = frontal
       ? THREE.MathUtils.lerp(baseDamping, 0.004, this.motionLevel ?? 0)
       : 0.0
 
     this.smoothedScale = this.smoothedScale === null
-      ? clampedScale
-      : THREE.MathUtils.lerp(this.smoothedScale, clampedScale, damping)
+      ? target
+      : THREE.MathUtils.lerp(this.smoothedScale, target, damping)
 
     return this.smoothedScale
   }
@@ -635,13 +851,235 @@ export class RenderLoop {
         transform.occlusionMesh.faceWorldPoints,
         transform.anchorWorldPoints,
         occluderAlpha,
-        transform.occluderCorrection
+        transform.occluderCorrection,
+        // The frame's OWN rotation, for the same reason occluderCorrection is the
+        // frame's own position delta: the head shell extrudes along this axis, so
+        // the surface the temple arm hides behind is locked to the arm by
+        // construction instead of by two smoothing curves agreeing.
+        transform.quaternion,
+        transform.occluderRotation,
+        transform.occluderPivot,
       )
     } else if (transform.anchorWorldPoints) {
       this.faceOccluder?.updateFromAnchors(transform.anchorWorldPoints)
     } else if (transform.occluderMatrix) {
       this.faceOccluder?.update(transform.occluderMatrix)
     }
+
+    this._openTemples(transform)
+    this._clipNearArm(transform)
+  }
+
+  /**
+   * Opens both temples far enough to clear the head they are being worn on.
+   *
+   * Measured NEAR-FRONTAL only and then held. Off-frontal the face mesh is
+   * foreshortened and half self-occluded so its apparent width shrinks with yaw;
+   * re-measuring through a turn would open and close the arms as the head moved.
+   * A head's width does not change, so measuring it once is right.
+   *
+   * Both arms take the SAME angle, the larger of the two solves: letting each
+   * side follow its own measurement turns noise into a visibly crooked frame.
+   */
+  _openTemples(transform) {
+    if (!this._hinges?.length || !this.faceOccluder?.occluderMesh) {
+      return
+    }
+    if (!this.faceOccluder.occluderMesh.visible) {
+      return
+    }
+    if (Math.abs(THREE.MathUtils.radToDeg(this.headYaw ?? 0)) > SPLAY_MEASURE_YAW_DEG) {
+      return
+    }
+
+    const position = this.faceOccluder.occluderMesh.geometry.attributes.position
+    if (position.count <= Math.max(...EAR_LANDMARKS)) {
+      return
+    }
+
+    // About the EAR MIDPOINT, not the frame's own anchors. A head's width is a
+    // property of the head, and measuring it from wherever a particular model
+    // happens to put its temple anchors makes it a property of the glasses:
+    // on one mock head GRIPZ read 105.2 mm and WILLOW 111.9 mm, which is enough
+    // to send a solve keyed on it 3 degrees apart between two frames that need
+    // the same answer.
+    const axX = (this._splayAxX ??= new THREE.Vector3()).set(1, 0, 0).applyQuaternion(transform.quaternion)
+    const axY = (this._splayAxY ??= new THREE.Vector3()).set(0, 1, 0).applyQuaternion(transform.quaternion)
+    const mid = (this._splayMid ??= new THREE.Vector3())
+    const ear = (this._splayEar ??= new THREE.Vector3())
+    mid.set(0, 0, 0)
+    for (const index of EAR_LANDMARKS) {
+      ear.fromBufferAttribute(position, index).applyMatrix4(this.faceOccluder.occluderMesh.matrixWorld)
+      mid.add(ear)
+    }
+    mid.multiplyScalar(1 / EAR_LANDMARKS.length)
+
+    // How high the arm rides above the ear plane, so the head can be measured
+    // at THAT height rather than at its widest point anywhere.
+    const armTmp = (this._splayArmTmp ??= new THREE.Vector3())
+    let armHeight = 0
+    let armHeightCount = 0
+    for (const hinge of this._hinges) {
+      if (!hinge.curl) continue
+      hinge.curl.getWorldPosition(armTmp)
+      armHeight += armTmp.sub(mid).dot(axY)
+      armHeightCount += 1
+    }
+    if (armHeightCount === 0) return
+    armHeight /= armHeightCount
+
+    // The head's half-width WHERE THE TEMPLE RUNS, not at the head's widest
+    // point -- measuring anywhere else aims the arm at a different height than
+    // the one it actually needs to clear.
+    // Cast, do not scan vertices. The shell is a few sparse rings, so the widest
+    // vertex within a slab steps by ~5 mm as the slab catches a ring or falls
+    // between two -- which put this same head at 72.5, 84.9 and 94.4 mm on three
+    // different frames, purely because their temples ride at different heights.
+    const mesh = this.faceOccluder.occluderMesh
+    const world = toWorldPositions(
+      position.array,
+      mesh.matrixWorld.elements,
+      (this._shellWorld ??= new Float64Array(position.array.length)),
+    )
+    // Only the SHELL's own triangles: the index buffer is the face tessellation
+    // followed by the shell (see SHELL_INDEX_START), and a cast against the whole
+    // thing hits the face mesh first -- it sits inboard of the shell wall, so the
+    // nearest-hit cast would measure the skin instead of the wall the temple
+    // actually has to clear.
+    const headHalfWidth = halfWidthAt(
+      world,
+      mesh.geometry.index.array.subarray(SHELL_INDEX_START),
+      [mid.x, mid.y, mid.z],
+      [axX.x, axX.y, axX.z],
+      [axY.x, axY.y, axY.z],
+      armHeight,
+    )
+    if (headHalfWidth == null) {
+      return
+    }
+    // A plausible human half-head is ~0.05-0.13 m in this space. Outside that
+    // the occluder was not ready, and acting on it opens the arms to fit a head
+    // that is not there.
+    if (!(headHalfWidth > MIN_PLAUSIBLE_HEAD_HALF_M && headHalfWidth < MAX_PLAUSIBLE_HEAD_HALF_M)) {
+      return
+    }
+    // Average before acting. A head's width does not change but the MEASURED
+    // width does: inside this same gate the ray-cast reads 78.9 / 78.7 / 79.5 mm
+    // on the mock across the three known-good frames, and the solve is no longer
+    // saturated, so that would now be visible movement rather than a number
+    // nobody sees.
+    this._headWidthCount = Math.min((this._headWidthCount ?? 0) + 1, HEAD_WIDTH_SAMPLES)
+    this._headWidthMean = this._headWidthMean == null
+      ? headHalfWidth
+      : this._headWidthMean + (headHalfWidth - this._headWidthMean) / this._headWidthCount
+    const scale = this.glassesRoot?.scale?.x || 1
+    if (
+      this._splayForWidth != null &&
+      Math.abs(this._headWidthMean - this._splayForWidth) < HEAD_WIDTH_RESOLVE_M &&
+      Math.abs(scale - (this._splayForScale ?? 0)) < SPLAY_SCALE_RESOLVE
+    ) {
+      return
+    }
+
+    let angle = 0
+    for (const hinge of this._hinges) {
+      const solved = solveSplay(this._headWidthMean, hinge.armLateral * scale, hinge.jointDepth * scale)
+      if (solved > angle) angle = solved
+    }
+
+    applyOffset(this._hinges, 0)
+    applySplay(this._hinges, angle)
+    applyCurl(this._hinges, TEMPLE_CURL_RAD)
+    this.glassesRoot?.updateWorldMatrix(true, true)
+    // Latch only once the mean has samples behind it, so the first solve is not
+    // frozen in on a single measurement -- but SOLVE every qualifying frame
+    // regardless. Gating the solve itself on the count meant a head that turned
+    // away after five frames never got splay or curl at all: measured on WILLOW,
+    // headWidthCount 5, splay null, both hinge and curl rotations 0, and 44% of
+    // the temple hidden with earGapRatio +0.145.
+    if (this._headWidthCount >= HEAD_WIDTH_MIN_SAMPLES) {
+      this._splayForWidth = this._headWidthMean
+      this._splayForScale = scale
+    }
+    this._splayAngle = angle
+  }
+
+  /**
+   * Points the near-arm cut at the ear plane, once per frame.
+   *
+   * The plane has to be rebuilt every frame because it is the HEAD's, and it
+   * moves with the head; the arm's own geometry cannot stand in for it. An
+   * earlier version cut at the articulation joint instead, which is fixed in the
+   * frame's own space -- it drifts up to 18 mm from the ear plane as the head
+   * turns, and the arm visibly ended short of the ear at some angles and left a
+   * detached fragment past it at others.
+   */
+  _clipNearArm(transform) {
+    if (!this._hinges?.length) {
+      this.faceOccluder?.aimTempleFloor?.(null)
+      return
+    }
+    if (!this.faceOccluder?.occluderMesh) {
+      return
+    }
+    const position = this.faceOccluder.occluderMesh.geometry.attributes.position
+    if (!this.faceOccluder.occluderMesh.visible || position.count <= Math.max(...EAR_LANDMARKS)) {
+      this.faceOccluder.aimTempleFloor?.(null)
+      applyNearArmClip(this._hinges, 0, null, null)
+      return
+    }
+
+    const displayedYaw = transform?.quaternion
+      ? new THREE.Euler().setFromQuaternion(transform.quaternion, 'YXZ').y
+      : this.headYaw
+    const yaw = THREE.MathUtils.radToDeg(displayedYaw ?? 0)
+    const nearSide = Math.abs(yaw) < NEAR_ARM_YAW_DEG ? 0 : (yaw >= 0 ? -1 : 1)
+    if (nearSide === 0) {
+      this.faceOccluder.aimTempleFloor?.(null)
+      applyNearArmClip(this._hinges, 0, null, null)
+      return
+    }
+
+    // The head's OWN frame, not the pose quaternion's +Z. Those sit about 29
+    // degrees apart, and the cut has to be the same plane the metric measures
+    // against or the arm being scored is not the arm being drawn.
+    const world = this.faceOccluder.occluderMesh.matrixWorld
+    const at = (index, into) => into.fromBufferAttribute(position, index).applyMatrix4(world)
+    const frame = headFrame(
+      at(EAR_LANDMARKS[0], (this._clipA ??= new THREE.Vector3())),
+      at(EAR_LANDMARKS[1], (this._clipB ??= new THREE.Vector3())),
+      at(EYE_LANDMARKS[0], (this._clipC ??= new THREE.Vector3())),
+      at(EYE_LANDMARKS[1], (this._clipD ??= new THREE.Vector3())),
+      at(NOSE_LANDMARK, (this._clipE ??= new THREE.Vector3())),
+      { origin: (this._clipMid ??= new THREE.Vector3()), forward: (this._clipForward ??= new THREE.Vector3()) },
+    )
+    if (!frame) {
+      this.faceOccluder.aimTempleFloor?.(null)
+      applyNearArmClip(this._hinges, 0, null, null)
+      return
+    }
+
+    // Behind the tragion, not on it: the tragion is the ear's FRONT edge, so a
+    // cut there sits on bare skin instead of inside the ear's outline.
+    const cutAt = (this._clipCutAt ??= new THREE.Vector3())
+      .copy(frame.origin)
+      .addScaledVector(frame.forward, -TEMPLE_CUT_BEHIND_EAR_M)
+    const plane = (this._clipPlane ??= new THREE.Plane())
+    plane.setFromNormalAndCoplanarPoint(frame.forward, cutAt)
+    const behind = (this._clipBehind ??= new THREE.Plane())
+    behind.setFromNormalAndCoplanarPoint(
+      (this._clipBack ??= new THREE.Vector3()).copy(frame.forward).negate(),
+      cutAt,
+    )
+    // The floor under the lifted arm. Aimed here because this is where the head
+    // frame already exists, and only on the path that actually lifts something:
+    // an inner shell left on while nothing is lifted is pure cost, and one left
+    // aimed at a stale head punches a hole wherever that head used to be.
+    this.faceOccluder.aimTempleFloor?.(
+      this.camera.getWorldDirection((this._floorView ??= new THREE.Vector3())),
+    )
+
+    applyNearArmClip(this._hinges, nearSide, plane, behind)
   }
 
   _isPositionInCameraView(position) {
@@ -772,7 +1210,20 @@ export class RenderLoop {
     }
 
     this.rafId = requestAnimationFrame(() => this._frame())
+    this._step()
+  }
 
+  /**
+   * One frame of tracking and rendering, with no scheduling of its own.
+   *
+   * Split out so a harness can drive the engine directly. requestAnimationFrame
+   * is throttled to a crawl whenever the page is not being painted, so with the
+   * preview pane hidden the whole pipeline stalls: the scan never locks, the
+   * glasses stay hidden, and every measurement comes back empty. Stepping this
+   * by hand makes automated runs independent of whether anyone is watching --
+   * and deterministic, since a step is a frame rather than a slice of wall time.
+   */
+  _step() {
     try {
       this._syncSize()
 
@@ -812,19 +1263,6 @@ export class RenderLoop {
 
       if (!pose) {
         this._hideTrackedObjects(timestamp)
-        this.renderer?.render(this.scene, this.camera)
-        return
-      }
-
-      if (pose.poseQuality < LOW_QUALITY_THRESHOLD) {
-        this.lowQualityFrames += 1
-      } else {
-        this.lowQualityFrames = 0
-      }
-
-      if (this.lowQualityFrames > 1 && this.lastGoodTransform && this.lowQualityFrames <= LOW_QUALITY_FREEZE_FRAMES) {
-        this.lowQualityFrames += 1
-        this._applyTransform(this.lastGoodTransform)
         this.renderer?.render(this.scene, this.camera)
         return
       }
@@ -885,7 +1323,12 @@ export class RenderLoop {
       const basePosition = fitSolution.glassesTransform.position
       const tunedPosition = basePosition.clone().add(new THREE.Vector3(xOffset, yOffset, zOffset))
 
-      this._updateAdaptiveFilters(tunedPosition, fitSolution.glassesTransform.quaternion, timestamp)
+      // A 60 Hz render loop commonly sees each 30 Hz camera frame twice. Keep
+      // filtering toward the cached target on the in-between render, but only
+      // update motion classification from a genuinely new observation.
+      if (this.faceTracker?.lastDetectionWasFresh !== false) {
+        this._updateAdaptiveFilters(tunedPosition, fitSolution.glassesTransform.quaternion, timestamp)
+      }
 
       const smoothPos = this.positionFilter
         ? this.positionFilter.filter(tunedPosition, timestamp)
@@ -912,7 +1355,7 @@ export class RenderLoop {
         ? fitSolution.headYaw
         : new THREE.Euler().setFromQuaternion(predictedQuat, 'YXZ').y
 
-      const predictedPos = this._predictPosition(smoothPos)
+      const predictedPos = this._predictPosition(smoothPos, timestamp)
       // Depth (z) jitter damping. (Yaw-induced depth inflation is now handled at
       // the source in FaceFitSolver, so x/y/z stay consistent.)
       const depthAlpha = THREE.MathUtils.lerp(0.05, 0.85, this.motionLevel ?? 0)
@@ -920,6 +1363,18 @@ export class RenderLoop {
         ? predictedPos.z
         : THREE.MathUtils.lerp(this.smoothedDepth, predictedPos.z, depthAlpha)
       predictedPos.z = this.smoothedDepth
+      const freshDetection = this.faceTracker?.lastDetectionWasFresh !== false
+      if (freshDetection) {
+        this.poseInterpolator.push(
+          predictedPos,
+          predictedQuat,
+          timestamp,
+          this.faceTracker?.frameIntervalMs,
+        )
+      }
+      const displayPose = this.poseInterpolator.sample(timestamp)
+      const displayPos = displayPose?.position ?? predictedPos
+      const displayQuat = displayPose?.quaternion ?? predictedQuat
       // The occluder mesh is built from RAW per-frame landmarks (it has to be,
       // to deform to the actual face shape), while the frame above just went
       // through OneEuro smoothing + predictive lead + this same depth damping.
@@ -928,32 +1383,43 @@ export class RenderLoop {
       // (the nose bridge). Passing this exact delta into the occluder locks
       // its OVERALL position to the frame's, by construction, instead of
       // hoping two separately-tuned smoothing curves happen to agree.
-      const occluderCorrection = predictedPos.clone().sub(tunedPosition)
+      const occluderCorrection = displayPos.clone().sub(tunedPosition)
+      const occluderRotation = displayQuat.clone().multiply(
+        fitSolution.glassesTransform.quaternion.clone().invert(),
+      )
+      const occluderPivot = tunedPosition.clone()
       const fitScale = this._smoothSolvedScale(fitSolution.glassesTransform.scale)
       this._updateFitDebugOverlay({
         yaw: THREE.MathUtils.radToDeg(this.headYaw ?? 0),
         scale: fitScale,
         raw: fitSolution.glassesTransform.scale,
-        z: predictedPos.z,
+        fittedRaw: fitSolution.fittedScaleRaw,
+        clamped: fitSolution.scaleClamped,
+        z: displayPos.z,
         quality: fitSolution.fitQuality,
       })
       const transform = {
-        position: predictedPos,
-        quaternion: predictedQuat,
+        position: displayPos,
+        quaternion: displayQuat,
         scale: fitScale,
         anchorWorldPoints,
         occlusionMesh: fitSolution.occlusionMesh,
         occluderCorrection,
+        occluderRotation,
+        occluderPivot,
         fitSolution,
       }
 
       this._applyTransform(transform)
       this.lastGoodTransform = {
-        position: predictedPos.clone(),
-        quaternion: predictedQuat.clone(),
+        position: displayPos.clone(),
+        quaternion: displayQuat.clone(),
         scale: fitScale,
         anchorWorldPoints,
         occlusionMesh: fitSolution.occlusionMesh,
+        occluderCorrection: occluderCorrection.clone(),
+        occluderRotation: occluderRotation.clone(),
+        occluderPivot: occluderPivot.clone(),
         fitSolution,
       }
       this.lastTrackingTimestamp = timestamp
@@ -973,7 +1439,7 @@ export class RenderLoop {
           surfaceDepth: fitSolution.debugMetrics?.surfaceDepth,
           bridgeClearance: this.modelConfig?.frontFrameClearanceMeters ?? 0,
           filterMode: this.filterMode,
-          trackingDelta: pose.rawPose?.position?.distanceTo?.(predictedPos) ?? 0,
+          trackingDelta: pose.rawPose?.position?.distanceTo?.(displayPos) ?? 0,
           templeSpan: pose.metrics?.templeSpan ?? 0,
           irisSpan: pose.metrics?.irisSpan ?? 0,
           cheekSpan: pose.metrics?.cheekSpan ?? 0,
@@ -986,8 +1452,8 @@ export class RenderLoop {
           modelDepth: glassesModel.userData.naturalDepth,
           depthPivot: glassesModel.userData.depthPivot,
           noseBridgeZ: smoothPos.z,
-          headQuaternion: predictedQuat ?? this.lastHeadQuaternion,
-          headPosition: predictedPos ?? this.lastHeadPosition,
+          headQuaternion: displayQuat ?? this.lastHeadQuaternion,
+          headPosition: displayPos ?? this.lastHeadPosition,
           predictionDelta: this.predictionDelta ?? 0,
           debugPoints: this._projectDebugPoints(anchorWorldPoints),
         })

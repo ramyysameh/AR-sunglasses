@@ -1,0 +1,195 @@
+import React from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  attachDropRejectedListener,
+  DropZoneField,
+  ModelUploadFlow,
+  uploadModalReducer,
+  uploadValidationError,
+} from '../app/components/ModelUploadFlow.jsx'
+
+const reactState = vi.hoisted(() => ({
+  progress: null,
+  reducerState: undefined,
+}))
+const appBridge = vi.hoisted(() => ({
+  modal: { hide: vi.fn(), show: vi.fn() },
+  toast: { show: vi.fn() },
+}))
+const revalidate = vi.hoisted(() => vi.fn())
+
+vi.mock('react', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useCallback: (callback) => callback,
+  useEffect: () => undefined,
+  useReducer: (reducer, initialState) => {
+    if (reactState.reducerState === undefined) reactState.reducerState = initialState
+    return [
+      reactState.reducerState,
+      (action) => {
+        reactState.reducerState = reducer(reactState.reducerState, action)
+      },
+    ]
+  },
+  useRef: (initialValue) => ({ current: initialValue }),
+  useState: (initialValue) => {
+    if (initialValue !== null) return [initialValue, vi.fn()]
+    return [reactState.progress, (value) => { reactState.progress = value }]
+  },
+}))
+vi.mock('react-router', () => ({
+  useRevalidator: () => ({ revalidate }),
+}))
+vi.mock('@shopify/app-bridge-react', () => ({
+  useAppBridge: () => appBridge,
+}))
+
+global.React = React
+
+function findElement(node, type) {
+  if (!node || typeof node !== 'object') return null
+  if (node.type === type) return node
+  const children = Array.isArray(node.props?.children)
+    ? node.props.children
+    : [node.props?.children]
+  for (const child of children.flat(Infinity)) {
+    const found = findElement(child, type)
+    if (found) return found
+  }
+  return null
+}
+
+beforeEach(() => {
+  reactState.progress = null
+  reactState.reducerState = undefined
+  vi.clearAllMocks()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+describe('ModelUploadFlow', () => {
+  it('rejects files other than GLB without clearing a previous valid selection', () => {
+    const selected = new File(['glb'], 'frame.glb', { type: 'model/gltf-binary' })
+    const state = { pendingFile: selected, uploadError: null }
+    expect(uploadModalReducer(state, { type: 'reject' })).toEqual({
+      pendingFile: selected,
+      uploadError: 'Choose a .glb file up to 25 MB.',
+    })
+    expect(uploadValidationError(new File(['x'], 'frame.obj'))).toBe(
+      'Choose a .glb file up to 25 MB.',
+    )
+  })
+
+  it('uploads through presign and finalize and passes only the finalized asset to its owner', async () => {
+    const onUploaded = vi.fn()
+    const asset = {
+      assetId: 'asset-1',
+      status: 'pass',
+      source: 'tagged',
+      confidence: 1,
+      needsManual: false,
+    }
+    const responseEnvelope = { uploaded: asset }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        text: async () => JSON.stringify({
+          uploadUrl: 'https://uploads.example.test/model',
+          storageRef: 'temp/model.glb',
+        }),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        text: async () => JSON.stringify(responseEnvelope),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const xhr = {
+      abort: vi.fn(),
+      open: vi.fn(),
+      send: vi.fn(),
+      setRequestHeader: vi.fn(),
+      status: 200,
+      upload: {},
+    }
+    xhr.send.mockImplementation(() => xhr.onload())
+    vi.stubGlobal('XMLHttpRequest', vi.fn(() => xhr))
+
+    const flow = ModelUploadFlow({ embedded: true, onUploaded })
+    let content = flow.type(flow.props)
+    const file = new File(['glb'], 'frame.glb', { type: 'model/gltf-binary' })
+    // The drop zone is behind DropZoneField now, and the file handler is
+    // `onInput`, not `onChange`. React 18 (this app is pinned to 18.3.1) only
+    // dispatches a synthetic `change` to a real <select>/<input type=file>,
+    // so the `onChange` this test used to call was a handler React never
+    // actually fired on <s-drop-zone> -- choosing a file through the drop
+    // zone reached nothing. Calling it directly here made the test pass over
+    // a control that was dead in the browser.
+    findElement(content, DropZoneField).props.onInput({
+      currentTarget: { files: [file] },
+    })
+
+    content = flow.type(flow.props)
+    const uploadButton = findElement(content, 's-button')
+    expect(uploadButton.props.slot).toBeUndefined()
+    const uploadPromise = uploadButton.props.onClick()
+    content = flow.type(flow.props)
+    expect(findElement(content, 'progress').props['aria-label']).toBe('Model upload progress')
+    await uploadPromise
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(xhr.open).toHaveBeenCalledWith('PUT', 'https://uploads.example.test/model')
+    expect(xhr.send).toHaveBeenCalledWith(file)
+    expect(onUploaded).toHaveBeenCalledWith({ ...asset, id: 'asset-1' })
+    expect(onUploaded).not.toHaveBeenCalledWith(responseEnvelope)
+  })
+})
+
+// This app is pinned to React 18.3.1, which only dispatches an event to a
+// Polaris `s-*` custom element when that event is in React's
+// `simpleEventPluginEvents` registry. `onInput` and `onClick` are; `onChange`
+// is not (its ChangeEventPlugin only matches a real <select>/<input
+// type=file>), and neither is `dropRejected`. A handler outside the registry
+// is silently stripped, so the prop looks wired in the source and does
+// nothing in the browser. Both of these were live defects in this component:
+// choosing a file did nothing, and dropping a non-.glb file produced total
+// silence instead of the "Choose a .glb file" banner.
+describe('ModelUploadFlow drop zone React 18 event wiring', () => {
+  it('binds the file handler with onInput and carries no stripped onChange/onDropRejected', () => {
+    const onInput = vi.fn()
+    const dropZoneRef = { current: null }
+    const field = DropZoneField({ dropZoneRef, disabled: false, onInput })
+
+    expect(field.type).toBe('s-drop-zone')
+    expect(field.props.onInput).toBe(onInput)
+    // The two handlers React 18 would silently drop on a custom element.
+    expect(field.props.onChange).toBeUndefined()
+    expect(field.props.onDropRejected).toBeUndefined()
+    // The ref is what the droprejected listener below attaches to. React 18
+    // keeps `ref` off props, on the element itself.
+    expect(field.ref).toBe(dropZoneRef)
+  })
+
+  it('subscribes to the real droprejected IDL event name', () => {
+    // Verified against @shopify/polaris-types/dist/polaris.d.ts:3881
+    // (`ondroprejected` on s-drop-zone), so the DOM event is `droprejected`.
+    // The full path from this listener through the reducer to the banner text
+    // a merchant sees is covered in appModels.ui.test.js.
+    const listeners = []
+    const dropZone = {
+      addEventListener: (type, handler) => listeners.push([type, handler]),
+      removeEventListener: (type, handler) => {
+        const index = listeners.findIndex(([t, h]) => t === type && h === handler)
+        if (index >= 0) listeners.splice(index, 1)
+      },
+    }
+
+    const detach = attachDropRejectedListener(dropZone, vi.fn())
+    expect(listeners.map(([type]) => type)).toEqual(['droprejected'])
+
+    detach()
+    expect(listeners).toHaveLength(0)
+  })
+})

@@ -31,7 +31,7 @@ export function productStatus(mapping) {
   const asset = mapping.modelAsset ?? {}
 
   // Order is load-bearing; see the precedence test. The id stays `check_fit`
-  // (ProductIndex.jsx's filter/sort keys off it) -- only the merchant-facing
+  // (the workspace's status filter/sort keys off it) -- only the merchant-facing
   // label changed, to match the action every "review this" surface now
   // offers (ModelFitReview via the Models review modal and the product
   // preview panel).

@@ -24,7 +24,7 @@ vi.mock('../app/tryonMetafield.server.js', () => ({
 vi.mock('../app/products.server.js', () => ({ fetchProductsByIds: async () => new Map() }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { loader } = await import('../app/routes/app.products.jsx')
+const { loader } = await import('../app/routes/app._index.jsx')
 
 beforeEach(async () => {
   await prisma.productMapping.deleteMany({ where: { shop } })
@@ -41,7 +41,7 @@ afterAll(async () => {
 
 describe('products preview', () => {
   it('points the preview at this product, marked as preview traffic', async () => {
-    const { mappings } = await loader({ request: new Request('https://x/app/products') })
+    const { mappings } = await loader({ request: new Request('https://x/app') })
     const url = new URL(mappings[0].previewUrl)
     expect(url.searchParams.get('productId')).toBe(`gid://shopify/Product/${tag}`)
     expect(url.searchParams.get('src')).toBe('preview')
@@ -58,7 +58,7 @@ describe('products preview', () => {
     it('still returns mappings instead of throwing', async () => {
       vi.stubEnv('TRYON_ENGINE_URL', '')
       vi.stubEnv('SHOPIFY_APP_URL', '')
-      const { mappings } = await loader({ request: new Request('https://x/app/products') })
+      const { mappings } = await loader({ request: new Request('https://x/app') })
       expect(mappings).toHaveLength(1)
       expect(() => new URL(mappings[0].previewUrl)).not.toThrow()
     })

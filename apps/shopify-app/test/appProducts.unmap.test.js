@@ -4,35 +4,36 @@ import { randomUUID } from 'node:crypto'
 const tag = randomUUID().slice(0, 8)
 const shop = `unmap-${tag}.myshopify.com`
 const hoisted = vi.hoisted(() => ({ plan: 'Pro', unpublishError: null }))
+const admin = {
+  graphql: async (query) => {
+    if (query.includes('UnpublishTryon')) {
+      return new Response(JSON.stringify({
+        data: {
+          metafieldsDelete: {
+            userErrors: hoisted.unpublishError
+              ? [{ field: ['metafields'], message: hoisted.unpublishError }]
+              : [],
+          },
+        },
+      }))
+    }
+    return new Response(JSON.stringify({
+      data: { currentAppInstallation: { activeSubscriptions: hoisted.plan ? [{ name: hoisted.plan, status: 'ACTIVE' }] : [] } },
+    }))
+  },
+}
 
 vi.mock('../app/shopify.server.js', () => ({
   authenticate: {
     admin: async () => ({
       session: { shop },
-      admin: {
-        graphql: async (query) => {
-          if (query.includes('UnpublishTryon')) {
-            return new Response(JSON.stringify({
-              data: {
-                metafieldsDelete: {
-                  userErrors: hoisted.unpublishError
-                    ? [{ field: ['metafields'], message: hoisted.unpublishError }]
-                    : [],
-                },
-              },
-            }))
-          }
-          return new Response(JSON.stringify({
-            data: { currentAppInstallation: { activeSubscriptions: hoisted.plan ? [{ name: hoisted.plan, status: 'ACTIVE' }] : [] } },
-          }))
-        },
-      },
+      admin,
     }),
   },
 }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { action } = await import('../app/routes/app.products.jsx')
+const { handleProductAction } = await import('../app/productActions.server.js')
 
 function unmapForm(productId) {
   const fd = new FormData()
@@ -40,6 +41,8 @@ function unmapForm(productId) {
   fd.set('productId', productId)
   return new Request('https://x/app/products', { method: 'POST', body: fd })
 }
+
+const unmap = (productId) => handleProductAction({ request: unmapForm(productId), admin, shop })
 
 beforeEach(async () => {
   hoisted.plan = 'Pro'
@@ -58,7 +61,7 @@ describe('unmap action', () => {
     const productId = `gid://shopify/Product/${tag}-a`
     await prisma.productMapping.create({ data: { shop, productId, modelAssetId: asset.id } })
 
-    const res = await action({ request: unmapForm(productId) })
+    const res = await unmap(productId)
     expect(res.unmapped).toBe(true)
     expect(await prisma.productMapping.count({ where: { shop, productId } })).toBe(0)
   })
@@ -69,7 +72,7 @@ describe('unmap action', () => {
     await prisma.productMapping.create({ data: { shop, productId, modelAssetId: asset.id } })
     hoisted.unpublishError = 'Shopify is temporarily unavailable'
 
-    const res = await action({ request: unmapForm(productId) })
+    const res = await unmap(productId)
 
     expect(res.error).toMatch(/couldn't be removed/i)
     expect(await prisma.productMapping.count({ where: { shop, productId } })).toBe(1)
@@ -77,7 +80,7 @@ describe('unmap action', () => {
 
   it('is blocked without an active subscription', async () => {
     hoisted.plan = null
-    const res = await action({ request: unmapForm(`gid://shopify/Product/${tag}-b`) })
+    const res = await unmap(`gid://shopify/Product/${tag}-b`)
     expect(res.error).toMatch(/no active subscription/i)
   })
 })

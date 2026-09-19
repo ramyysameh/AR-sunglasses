@@ -18,13 +18,14 @@ describe('fetchProductsByIds', () => {
 
   it('maps id -> title + image and omits deleted products', async () => {
     const admin = adminReturning([
-      { id: 'gid://shopify/Product/1', title: 'Aviator', featuredImage: { url: 'https://cdn/x.jpg', altText: 'Aviator' } },
+      { id: 'gid://shopify/Product/1', title: 'Aviator', handle: 'aviator', featuredImage: { url: 'https://cdn/x.jpg', altText: 'Aviator' } },
       null, // deleted product
     ])
     const out = await fetchProductsByIds(admin, ['gid://shopify/Product/1', 'gid://shopify/Product/2'])
     expect(out.get('gid://shopify/Product/1')).toEqual({
       id: 'gid://shopify/Product/1',
       title: 'Aviator',
+      handle: 'aviator',
       imageUrl: 'https://cdn/x.jpg',
       imageAlt: 'Aviator',
     })
