@@ -45,16 +45,46 @@ export default function App() {
     // primitive, harder-to-intercept control on purpose.
     return (
       <AppProvider embedded apiKey={apiKey}>
-        <s-page heading="Choose a plan">
-          <s-section heading="A subscription is required">
+        <s-page heading="Welcome to AR Try-on">
+          <s-section heading="Let shoppers try your frames on before they buy">
+            <s-stack direction="block" gap="base">
+              <s-paragraph>
+                AR Try-on adds a live camera try-on to your product pages.
+                Shoppers see your frames on their own face, tracked in real
+                time — nothing is uploaded and there is no app for them to
+                install.
+              </s-paragraph>
+
+              <s-stack direction="block" gap="small-200">
+                <s-text type="strong">Setting up takes three steps</s-text>
+                <s-unordered-list>
+                  <s-list-item>Upload an eyewear model.</s-list-item>
+                  <s-list-item>Map it to one of your products.</s-list-item>
+                  <s-list-item>Add the try-on block in your theme editor.</s-list-item>
+                </s-unordered-list>
+              </s-stack>
+
+              <s-paragraph color="subdued">
+                Choose a plan to get started. You can change or cancel it at any
+                time from your Shopify admin.
+              </s-paragraph>
+
+              <s-paragraph>
+                {/* Deliberately a plain <a target="_top"> -- see the comment
+                    above this return for why this one control stays primitive. */}
+                <a href={pricingUrl} target="_top" rel="noreferrer">
+                  Choose a plan
+                </a>
+              </s-paragraph>
+            </s-stack>
+          </s-section>
+
+          <s-section slot="aside" heading="Questions?">
             <s-paragraph>
-              AR Try-on needs an active plan before you can add try-on to your
-              products. Choose a plan to get started.
+              <s-link href="mailto:zendolabs@gmail.com">Contact support</s-link>
             </s-paragraph>
             <s-paragraph>
-              <a href={pricingUrl} target="_top" rel="noreferrer">
-                Choose a plan
-              </a>
+              <s-link href="/privacy" target="_blank">Privacy policy</s-link>
             </s-paragraph>
           </s-section>
         </s-page>

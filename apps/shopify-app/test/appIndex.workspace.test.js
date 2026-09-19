@@ -6,6 +6,7 @@ import WorkspaceFilters from '../app/components/WorkspaceFilters.jsx'
 import ProductOperationsList, { primaryActionFor } from '../app/components/ProductOperationsList.jsx'
 import { AddTryOnFlow } from '../app/components/AddTryOnFlow.jsx'
 import TopLevelAdminAction from '../app/components/TopLevelAdminAction.jsx'
+import PlanUsage from '../app/components/PlanUsage.jsx'
 
 const harness = vi.hoisted(() => ({
   data: null,
@@ -214,19 +215,22 @@ describe('Workspace route composition', () => {
     }))
     const addButton = findElements(page, 's-button')
       .find((candidate) => candidate.props.slot === 'primary-action')
-    // Managed Pricing is a Shopify admin destination, so the plan route is a
-    // TopLevelAdminAction rather than the <s-link target="_top"> this
-    // asserted on origin/main: App Bridge intercepts navigation from Polaris
-    // s-* components, so target="_top" on an s-link is not a reliable
-    // break-out from the embedded iframe. TopLevelAdminAction performs the
-    // top-level navigation imperatively from a click handler instead (and
-    // no-ops on a falsy href rather than sending the top frame to
-    // about:blank).
-    const plansAction = findComponent(page, TopLevelAdminAction)
+    // The standalone "Your plan limit is reached / View plans" banner this
+    // used to assert has been removed: PlanUsage is always present, turns
+    // amber at the limit and carries its own Upgrade action, and the guide
+    // surfaces the limit too, so the banner was a third route to the same
+    // pricing page on one screen. The plan route now lives inside PlanUsage,
+    // which this helper does not render into (findElements matches element
+    // types without invoking function components), so the route-level
+    // contract asserted here is that PlanUsage receives the limit state --
+    // planUsage.ui.test.js covers the meter and the Upgrade button it builds
+    // from it, including that the button is a TopLevelAdminAction and not an
+    // <s-button href target="_top"> App Bridge would intercept.
+    const planUsage = findComponent(page, PlanUsage)
 
     expect(addButton.props.disabled).toBe(true)
-    expect(plansAction.props.children).toBe('View plans')
-    expect(plansAction.props.href).toBe('/plans')
+    expect(planUsage.props.usage).toMatchObject({ atLimit: true, pricingUrl: '/plans' })
+    expect(findComponent(page, TopLevelAdminAction)).toBeUndefined()
     expect(findComponent(page, WorkspaceGuide).props.guide).toEqual(guide)
   })
 

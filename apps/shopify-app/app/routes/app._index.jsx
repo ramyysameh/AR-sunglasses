@@ -11,7 +11,6 @@ import ModelPicker from '../components/ModelPicker'
 import PlanUsage from '../components/PlanUsage'
 import PreviewPanel from '../components/PreviewPanel'
 import ProductOperationsList, { filterWorkspaceMappings } from '../components/ProductOperationsList'
-import TopLevelAdminAction from '../components/TopLevelAdminAction'
 import WorkspaceFilters from '../components/WorkspaceFilters'
 import WorkspaceGuide from '../components/WorkspaceGuide'
 import workspaceStyles from '../styles/workspace.css?url'
@@ -266,27 +265,11 @@ export default function Workspace() {
       )}
 
       <div className="workspace-shell">
-        {data.usage.atLimit && data.usage.pricingUrl && (
-          <div className="workspace-plan-limit" role="status">
-            <s-text>Your plan limit is reached. </s-text>
-            {/* Managed Pricing is a Shopify admin destination and is never
-                embeddable in this app's iframe. An <s-link target="_top"> is
-                not a reliable break-out -- App Bridge intercepts navigation
-                from Polaris s-* components -- so this uses the shared
-                TopLevelAdminAction, which does the top-level navigation
-                imperatively from a click handler App Bridge has no say over
-                (and no-ops on a falsy href instead of navigating the top
-                frame to about:blank). Same treatment as the theme-editor and
-                upgrade actions elsewhere in this app. */}
-            <TopLevelAdminAction
-              href={data.usage.pricingUrl}
-              accessibilityLabel="View plans"
-              variant="tertiary"
-            >
-              View plans
-            </TopLevelAdminAction>
-          </div>
-        )}
+        {/* The standalone "Your plan limit is reached / View plans" banner that
+            used to sit here is gone: PlanUsage below is always present, turns
+            amber at the limit and carries its own Upgrade action, and the guide
+            surfaces the limit too. Three routes to the same pricing page on one
+            screen was noise, not urgency. */}
         <PlanUsage usage={data.usage} />
         <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />
         {hasOperations && (

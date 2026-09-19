@@ -33,10 +33,15 @@ export default function WorkspaceFilters({
           </button>
         ))}
       </div>
+      {/* `label` + labelAccessibilityVisibility, not aria-label: on a Polaris
+          custom element aria-label sits on the wrapper and does not reliably
+          reach the inner input, so the field could reach screen readers with
+          no accessible name. Same pattern as the Models page rename field. */}
       <s-text-field
         type="search"
         value={query}
-        aria-label="Search products and models"
+        label="Search products and models"
+        labelAccessibilityVisibility="exclusive"
         placeholder="Search products and models"
         onInput={(event) => onQueryChange(event.currentTarget.value)}
       ></s-text-field>

@@ -1,5 +1,6 @@
 /* eslint-disable react/prop-types -- plain JSX component, no PropTypes library in use */
 import StatusBadge from './StatusBadge'
+import TopLevelAdminAction from './TopLevelAdminAction'
 
 const STATUS_DETAILS = {
   live: { label: 'Live', tone: 'success' },
@@ -7,6 +8,11 @@ const STATUS_DETAILS = {
   'model-issue': { label: 'Model issue', tone: 'critical' },
   'plan-limit': { label: 'Plan limit', tone: 'warning' },
 }
+
+// A status this build does not know about is reported as unknown rather than
+// borrowed from another row type: labelling it "Plan limit" told merchants the
+// wrong reason their try-on was not live.
+const UNKNOWN_STATUS = { label: 'Needs attention', tone: 'warning' }
 
 export function filterWorkspaceMappings(mappings, { status, query }) {
   const needle = query.trim().toLocaleLowerCase()
@@ -91,10 +97,18 @@ function PrimaryAction({ action, mapping, onPreview, onChangeModel }) {
   }
 
   if ((action.id === 'theme' || action.id === 'plans') && action.href) {
+    // Both destinations live in the Shopify admin and cannot be embedded in
+    // this app's iframe. <s-button href target="_top"> does not reliably break
+    // out of the frame -- App Bridge intercepts navigation from Polaris s-*
+    // components -- so this row action used to render and do nothing.
     return (
-      <s-button variant="primary" href={action.href} target="_top" icon="external">
+      <TopLevelAdminAction
+        href={action.href}
+        variant="primary"
+        accessibilityLabel={action.label}
+      >
         {action.label}
-      </s-button>
+      </TopLevelAdminAction>
     )
   }
 
@@ -133,7 +147,7 @@ export default function ProductOperationsList({
       <s-table-body>
         {mappings.map((mapping) => {
           const title = mapping.product?.title ?? 'Product unavailable'
-          const status = STATUS_DETAILS[mapping.status] ?? STATUS_DETAILS['plan-limit']
+          const status = STATUS_DETAILS[mapping.status] ?? UNKNOWN_STATUS
           const primaryAction = mapping.id === guidedMappingId
             ? null
             : primaryActionFor(mapping, pricingUrl)

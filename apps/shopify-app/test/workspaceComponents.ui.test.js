@@ -164,7 +164,11 @@ describe('workspace component accessibility contracts', () => {
       onRemove: vi.fn(),
     }))
 
-    expect(filters).toContain('aria-label="Search products and models"')
+    // `label` + labelAccessibilityVisibility, not aria-label: on a Polaris
+    // custom element aria-label lands on the wrapper and does not reliably
+    // reach the inner input, so the field could have had no accessible name.
+    expect(filters).toContain('label="Search products and models"')
+    expect(filters).toContain('labelAccessibilityVisibility="exclusive"')
     expect(list).toContain('alt="Willow glasses"')
     expect(list).toContain('accessibilityLabel="Actions for Willow"')
     expect(list).toContain('accessibilityLabel="Actions for Gripz"')
@@ -220,7 +224,8 @@ describe('workspace component accessibility contracts', () => {
     expect(html.match(/<button/g)).toHaveLength(3)
     expect(html).toContain('role="group"')
     expect(html).toContain('aria-pressed="true"')
-    expect(html).toContain('aria-label="Search products and models"')
+    expect(html).toContain('label="Search products and models"')
+    expect(html).toContain('labelAccessibilityVisibility="exclusive"')
     expect(html).toContain('value="black"')
   })
 
@@ -268,6 +273,13 @@ describe('workspace component accessibility contracts', () => {
     buttonWithLabel(setup, 'Add try-on').props.onClick()
     expect(onSetupAction).toHaveBeenCalledWith(setupAction)
 
+    // A guide action carrying an href is a Shopify admin destination (theme
+    // editor, Managed Pricing). It used to render as <s-button href
+    // target="_top">, which App Bridge intercepts, and onAction() handles only
+    // the dialog-opening ids -- so "Add to theme" and "View plans" rendered and
+    // did nothing at all. They now go through TopLevelAdminAction, which opens
+    // the destination imperatively, so there is deliberately no href/target on
+    // the button and onAction is not called for these.
     const onRecoveryAction = vi.fn()
     const recoveryAction = { id: 'plans', label: 'View plans', href: '/plans' }
     const recovery = WorkspaceGuide({
@@ -275,10 +287,16 @@ describe('workspace component accessibility contracts', () => {
       onAction: onRecoveryAction,
     })
     const recoveryButton = buttonWithLabel(recovery, 'View plans')
+    expect(recoveryButton.props.href).toBeUndefined()
+    expect(recoveryButton.props.target).toBeUndefined()
+    expect(recoveryButton.props.icon).toBe('external')
+
+    const open = vi.fn()
+    vi.stubGlobal('window', { open })
     recoveryButton.props.onClick()
-    expect(recoveryButton.props.href).toBe('/plans')
-    expect(recoveryButton.props.target).toBe('_top')
-    expect(onRecoveryAction).toHaveBeenCalledWith(recoveryAction)
+    expect(open).toHaveBeenCalledWith('/plans', '_top')
+    vi.unstubAllGlobals()
+    expect(onRecoveryAction).not.toHaveBeenCalled()
   })
 
   it('dispatches primary preview and model actions with the exact mapping', () => {
@@ -328,10 +346,21 @@ describe('workspace component accessibility contracts', () => {
       onChangeModel,
       onRemove: vi.fn(),
     })
+    // Same fix as the guide: this row action was an <s-button href
+    // target="_top">, which App Bridge intercepts, so "View plans" (and
+    // "Add to theme") rendered but never navigated. TopLevelAdminAction opens
+    // the admin destination from a click handler instead, so the href/target
+    // are deliberately absent and onClick is now the thing that works.
     const plansLink = buttonWithLabel(withPricing, 'View plans')
-    expect(plansLink.props.href).toBe('/plans')
-    expect(plansLink.props.target).toBe('_top')
-    expect(plansLink.props.onClick).toBeUndefined()
+    expect(plansLink.props.href).toBeUndefined()
+    expect(plansLink.props.target).toBeUndefined()
+    expect(plansLink.props.icon).toBe('external')
+
+    const open = vi.fn()
+    vi.stubGlobal('window', { open })
+    plansLink.props.onClick()
+    expect(open).toHaveBeenCalledWith('/plans', '_top')
+    vi.unstubAllGlobals()
 
     const withoutPricing = ProductOperationsList({
       mappings: [mapping],
