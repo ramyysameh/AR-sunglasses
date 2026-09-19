@@ -8,6 +8,7 @@ import { handleProductAction } from '../productActions.server'
 import { loadWorkspace } from '../workspace.server'
 import { AddTryOnFlow } from '../components/AddTryOnFlow'
 import ModelPicker from '../components/ModelPicker'
+import PlanUsage from '../components/PlanUsage'
 import PreviewPanel from '../components/PreviewPanel'
 import ProductOperationsList, { filterWorkspaceMappings } from '../components/ProductOperationsList'
 import TopLevelAdminAction from '../components/TopLevelAdminAction'
@@ -286,6 +287,7 @@ export default function Workspace() {
             </TopLevelAdminAction>
           </div>
         )}
+        <PlanUsage usage={data.usage} />
         <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />
         {hasOperations && (
           <>

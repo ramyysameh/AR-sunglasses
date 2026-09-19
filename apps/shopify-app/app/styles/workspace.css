@@ -102,3 +102,28 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+.workspace-plan {
+  padding: 12px;
+}
+.workspace-plan-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.workspace-plan-track {
+  height: 8px;
+  border-radius: 4px;
+  background: #e3e3e3;
+  overflow: hidden;
+}
+.workspace-plan-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: #303030;
+}
+.workspace-plan-fill.is-full {
+  background: #b98900;
+}
