@@ -27,7 +27,7 @@ describe('workspace data', () => {
   it.each([
     ['live', 'live'],
     ['not_on_theme', 'add-to-theme'],
-    ['check_fit', 'model-issue'],
+    ['check_fit', 'review-fit'],
     ['unknown', 'model-issue'],
   ])('normalizes %s as %s', (source, expected) => {
     expect(normalizeWorkspaceStatus({ id: source })).toBe(expected)
@@ -51,10 +51,37 @@ describe('workspace data', () => {
     })
   })
 
+  it('guides a fit review to the review itself, not to swapping the model', () => {
+    const guide = workspaceGuide({
+      assets: [{ id: 'asset-1' }],
+      mappings: [
+        { id: 'theme', status: 'add-to-theme', product: { title: 'Theme product' } },
+        { id: 'fit', status: 'review-fit', product: { title: 'Fit product' } },
+      ],
+      usage: { atLimit: false },
+    })
+
+    expect(guide).toEqual({
+      kind: 'recovery',
+      title: 'Review how a model fits',
+      detail: 'Fit product',
+      action: { id: 'review-fit', mappingId: 'fit', label: 'Review fit' },
+    })
+  })
+
+  it.each([
+    [1, '1 product is ready'],
+    [3, '3 products are ready'],
+  ])('pluralizes the all-live summary for %i product(s)', (count, detail) => {
+    const mappings = Array.from({ length: count }, (_, index) => ({ id: `m${index}`, status: 'live' }))
+    expect(workspaceGuide({ assets: [{ id: 'a' }], mappings, usage: { atLimit: false } }).detail).toBe(detail)
+  })
+
   it('groups issues before theme work and live rows without reordering peers', () => {
     const mappings = [
       { id: 'live-newer', status: 'live' },
       { id: 'theme-newer', status: 'add-to-theme' },
+      { id: 'fit', status: 'review-fit' },
       { id: 'issue', status: 'model-issue' },
       { id: 'theme-older', status: 'add-to-theme' },
       { id: 'live-older', status: 'live' },
@@ -62,6 +89,7 @@ describe('workspace data', () => {
 
     expect(sortWorkspaceMappings(mappings).map((mapping) => mapping.id)).toEqual([
       'issue',
+      'fit',
       'theme-newer',
       'theme-older',
       'live-newer',

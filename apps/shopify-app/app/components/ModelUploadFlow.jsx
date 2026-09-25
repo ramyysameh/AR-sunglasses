@@ -5,6 +5,9 @@ import { useAppBridge } from '@shopify/app-bridge-react'
 
 const MAX_UPLOAD_BYTES = 25 * 1048576
 const UPLOAD_GUIDANCE = 'Choose a .glb file up to 25 MB.'
+// What a merchant sees when the transfer itself fails. The technical cause
+// (HTTP status, CORS, a malformed response) goes to the console, not the banner.
+export const UPLOAD_FAILED_MESSAGE = "The upload didn't finish. Check your connection and try again."
 
 export function uploadValidationError(file) {
   if (!file || !file.name.toLowerCase().endsWith('.glb')) return UPLOAD_GUIDANCE
@@ -89,7 +92,8 @@ async function postUploadJson(body, signal) {
   try {
     data = JSON.parse(text)
   } catch {
-    throw new Error(`Server error (HTTP ${res.status})`)
+    console.error(`model upload: non-JSON response (HTTP ${res.status})`)
+    throw new Error(UPLOAD_FAILED_MESSAGE)
   }
   if (data.error) throw new Error(data.error)
   return data
@@ -201,11 +205,15 @@ function UploadContent({ cancellationCoordinator, embedded, onBusyChange, onUplo
         xhr.onload = () => {
           cancellationCoordinator.detachXhr(xhr)
           if (xhr.status >= 200 && xhr.status < 300) resolve(undefined)
-          else reject(new Error(`Upload failed (${xhr.status})`))
+          else {
+            console.error(`model upload: storage PUT failed (HTTP ${xhr.status})`)
+            reject(new Error(UPLOAD_FAILED_MESSAGE))
+          }
         }
         xhr.onerror = () => {
           cancellationCoordinator.detachXhr(xhr)
-          reject(new Error('Upload failed (network/CORS)'))
+          console.error('model upload: storage PUT network/CORS error')
+          reject(new Error(UPLOAD_FAILED_MESSAGE))
         }
         xhr.onabort = () => reject(new DOMException('Upload canceled', 'AbortError'))
         xhr.send(pendingFile)
@@ -218,7 +226,13 @@ function UploadContent({ cancellationCoordinator, embedded, onBusyChange, onUplo
       finalizeForm.append('storageRef', storageRef)
       finalizeForm.append('filename', pendingFile.name)
       const { uploaded } = await postUploadJson(finalizeForm, signal)
-      const asset = normalizeUploadedAsset(uploaded)
+      let asset
+      try {
+        asset = normalizeUploadedAsset(uploaded)
+      } catch (error) {
+        console.error('model upload:', error)
+        throw new Error(UPLOAD_FAILED_MESSAGE)
+      }
       if (!signal.aborted) {
         onUploaded?.(asset)
         shopify.toast.show('Model uploaded')

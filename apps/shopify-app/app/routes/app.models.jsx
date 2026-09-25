@@ -120,6 +120,8 @@ export const action = async ({ request }) => {
   return { error: 'Unknown action.' }
 }
 
+const ADD_TRY_ON_HREF = '/app?add=1'
+
 export function modelName(asset) {
   return asset.label?.trim() || asset.filename || `Model ${asset.id.slice(0, 8)}`
 }
@@ -355,14 +357,22 @@ export default function Models() {
 
   return (
     <s-page heading="Models">
+      {/* Models are uploaded inside Add try-on (Models is a library, not an
+          upload surface). The ?add=1 deep link opens that flow, whose first step
+          offers an upload, so this page always has a way forward. */}
+      <s-button slot="primary-action" href={ADD_TRY_ON_HREF}>
+        Add try-on
+      </s-button>
       <s-section heading="Model library">
         {assets.length === 0 ? (
           <s-stack direction="block" gap="base">
             <s-text type="strong">Your model library is empty</s-text>
             <s-paragraph>
-              Upload a model while setting up try-on for a product.
+              Upload a .glb eyewear model when you add try-on to a product.
             </s-paragraph>
-            <s-link href="/app">Set up try-on</s-link>
+            <s-stack direction="inline">
+              <s-button variant="primary" href={ADD_TRY_ON_HREF}>Upload a model</s-button>
+            </s-stack>
           </s-stack>
         ) : (
           <s-grid
@@ -395,7 +405,7 @@ export default function Models() {
                           guidance walks a merchant into a Models card that
                           just says "Ready" with no action. */}
                       <s-badge tone={asset.needsReview ? 'warning' : 'success'}>
-                        {asset.needsReview ? 'Review fit' : 'Ready'}
+                        {asset.needsReview ? 'Needs fit review' : 'Ready'}
                       </s-badge>
                       {asset.needsReview && (
                         <s-button

@@ -321,4 +321,26 @@ describe('ModelPicker (assets shaped like the Models route loader)', () => {
     expect(html.match(/<model-viewer/g) ?? []).toHaveLength(0)
     expect(html.match(/Loading 3D preview/g)).toHaveLength(1)
   })
+
+  it('gives Models a way to upload instead of a dead end', () => {
+    const html = renderToStaticMarkup(React.createElement(Models))
+    expect(html).toMatch(/<s-page heading="Models"><s-button slot="primary-action" href="\/app\?add=1">\s*Add try-on\s*<\/s-button>/)
+
+    routeState.loaderData = { assets: [], themeUrl: 'https://admin.shopify.com/theme' }
+    const empty = renderToStaticMarkup(React.createElement(Models))
+    expect(empty).toContain('Your model library is empty')
+    expect(empty).toContain('<s-button variant="primary" href="/app?add=1">Upload a model</s-button>')
+  })
+
+  it('names a model that needs review as a state, with Review fit as the action', () => {
+    const html = renderToStaticMarkup(React.createElement(Models))
+    expect(html).toContain('<s-badge tone="warning">Needs fit review</s-badge>')
+    expect(html).toContain('>Review fit</s-button>')
+  })
+
+  it('points the empty model picker at the upload flow that exists', () => {
+    const html = renderToStaticMarkup(React.createElement(ModelPicker, { assets: [], value: '', onChange: vi.fn() }))
+    expect(html).toContain('href="/app?add=1"')
+    expect(html).not.toContain('href="/app/models"')
+  })
 })

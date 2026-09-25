@@ -4,6 +4,7 @@ import {
   attachDropRejectedListener,
   DropZoneField,
   ModelUploadFlow,
+  UPLOAD_FAILED_MESSAGE,
   uploadModalReducer,
   uploadValidationError,
 } from '../app/components/ModelUploadFlow.jsx'
@@ -144,6 +145,45 @@ describe('ModelUploadFlow', () => {
     expect(xhr.send).toHaveBeenCalledWith(file)
     expect(onUploaded).toHaveBeenCalledWith({ ...asset, id: 'asset-1' })
     expect(onUploaded).not.toHaveBeenCalledWith(responseEnvelope)
+  })
+
+  it('shows a merchant-facing banner, not the HTTP detail, when the file transfer fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      status: 200,
+      text: async () => JSON.stringify({
+        uploadUrl: 'https://uploads.example.test/model',
+        storageRef: 'temp/model.glb',
+      }),
+    }))
+    const xhr = {
+      abort: vi.fn(),
+      open: vi.fn(),
+      send: vi.fn(),
+      setRequestHeader: vi.fn(),
+      status: 403,
+      upload: {},
+    }
+    xhr.send.mockImplementation(() => xhr.onload())
+    vi.stubGlobal('XMLHttpRequest', vi.fn(() => xhr))
+
+    const onUploaded = vi.fn()
+    const flow = ModelUploadFlow({ embedded: true, onUploaded })
+    let content = flow.type(flow.props)
+    findElement(content, DropZoneField).props.onInput({
+      currentTarget: { files: [new File(['glb'], 'frame.glb', { type: 'model/gltf-binary' })] },
+    })
+    content = flow.type(flow.props)
+    await findElement(content, 's-button').props.onClick()
+    content = flow.type(flow.props)
+
+    const banner = findElement(content, 's-banner')
+    expect(banner.props.heading).toBe('Could not upload model')
+    expect(banner.props.children).toBe(UPLOAD_FAILED_MESSAGE)
+    expect(banner.props.children).not.toMatch(/403|CORS|HTTP/)
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('403'))
+    expect(onUploaded).not.toHaveBeenCalled()
+    consoleError.mockRestore()
   })
 })
 

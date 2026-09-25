@@ -5,6 +5,12 @@
 
 > **Why a new audit:** `UI-REVIEW.md` (21/24) describes the pre-redesign app. It cites `ProductIndex.jsx` and a standalone Products page, but `app.products.jsx` now just redirects to `/app` and the Workspace redesign replaced that UI. Its score doesn't apply to the current code.
 
+## Fix status
+
+Fixed on this branch: **#1** (fit review keeps its own status, warning tone, and a Review fit action), **#2** (Models has an Add try-on primary action and an upload button in its empty state, both via the existing `/app?add=1` deep link, and the picker copy points there too), **#3** (Help is in the nav and the Workspace aside), **#4** (row actions are secondary), **#7** (upload errors are in merchant language, with technical detail logged), **#9** (badges name states), **#10** (the row menu no longer repeats the row's button), **#13** (pluralization), **#18** (banner headings), and **#6** (the welcome screen's Choose a plan is a primary button, with the raw link kept as a fallback).
+
+Still open: #5, #8, #11, #12, #14–17, #19.
+
 ## Scorecard
 
 | Pillar | Score | One-line reason |
