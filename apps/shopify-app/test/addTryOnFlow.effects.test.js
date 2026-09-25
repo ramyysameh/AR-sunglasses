@@ -139,7 +139,7 @@ describe('AddTryOnFlow lifecycle effects', () => {
     const props = { assets, open: true, onClose, onPublished: vi.fn() }
     const flow = renderFlow(props, modalElement)
 
-    button(flow, 'Close').props.onClick()
+    button(flow, 'Cancel').props.onClick()
     expect(onClose).not.toHaveBeenCalled()
     modalElement.emit('afterhide')
     modalElement.emit('afterhide')
@@ -204,9 +204,9 @@ describe('AddTryOnFlow lifecycle effects', () => {
     findElements(flow, 'form')[0].props.onSubmit()
     flow = renderFlow(props, modalElement)
 
-    expect(button(flow, 'Close').props.disabled).toBe(true)
+    expect(button(flow, 'Cancel').props.disabled).toBe(true)
     expect(button(flow, 'Back').props.disabled).toBe(true)
-    button(flow, 'Close').props.onClick()
+    button(flow, 'Cancel').props.onClick()
     button(flow, 'Back').props.onClick()
     modalElement.emit('afterhide')
     flow = renderFlow(props, modalElement)
@@ -283,7 +283,7 @@ describe('AddTryOnFlow lifecycle effects', () => {
     runtime.fetcher.data = { error: 'Old failure' }
     flow = renderFlow(props, modalElement)
     expect(flowState().error).toBe('Old failure')
-    button(flow, 'Close').props.onClick()
+    button(flow, 'Cancel').props.onClick()
     modalElement.emit('afterhide')
     renderFlow({ ...props, open: false }, modalElement)
     renderFlow(props, modalElement)

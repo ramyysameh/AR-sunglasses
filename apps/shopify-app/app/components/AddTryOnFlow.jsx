@@ -3,7 +3,7 @@ import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { useFetcher } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { ModelUploadFlow } from './ModelUploadFlow'
-import ModelViewer from './ModelViewer'
+import ModelPicker from './ModelPicker'
 import PreviewPanel from './PreviewPanel'
 
 export const initialAddTryOnState = {
@@ -26,6 +26,11 @@ export function addTryOnReducer(state, action) {
       }
     case 'model-selected':
       return { ...state, modelAsset: action.asset, step: 'product', error: null }
+    // Picking in the list only selects; Continue (`next`) advances. An upload
+    // still advances straight away via `model-selected`, since finishing an
+    // upload is already the merchant's decision.
+    case 'model-picked':
+      return { ...state, modelAsset: action.asset, error: null }
     case 'product-selected':
       return { ...state, product: action.product, step: 'review', error: null }
     case 'next':
@@ -49,7 +54,7 @@ export function addTryOnReducer(state, action) {
   }
 }
 
-function isReady(asset) {
+export function isReady(asset) {
   return !asset.status || asset.status.toLowerCase() === 'ready'
 }
 
@@ -75,33 +80,33 @@ function productFromSelection(product) {
   }
 }
 
-function ModelStep({ assets, onSelect }) {
+// Same picker as Change model (search, compact list, one preview), so choosing
+// frames works the same way everywhere and scales past a handful of models.
+function ModelStep({ assets, selectedId, onPick, onUploaded }) {
   const readyAssets = assets.filter(isReady)
 
   if (readyAssets.length === 0) {
     return (
       <s-stack direction="block" gap="base">
         <s-paragraph>Upload a .glb eyewear model to start setting up try-on.</s-paragraph>
-        <ModelUploadFlow embedded onUploaded={onSelect} />
+        <ModelUploadFlow embedded onUploaded={onUploaded} />
       </s-stack>
     )
   }
 
   return (
     <s-stack direction="block" gap="base">
-      <s-heading>Choose a model</s-heading>
-      {readyAssets.map((asset) => (
-        <s-box key={asset.id} padding="base" borderWidth="base" borderRadius="base">
-          <s-stack direction="block" gap="small-500">
-            <ModelViewer src={`/models/${asset.id}.glb`} alt={modelName(asset)} />
-            <s-text type="strong">{modelName(asset)}</s-text>
-            <s-button onClick={() => onSelect(asset)}>Use {modelName(asset)}</s-button>
-          </s-stack>
-        </s-box>
-      ))}
+      <ModelPicker
+        assets={readyAssets}
+        value={selectedId ?? ''}
+        onChange={(id) => {
+          const asset = readyAssets.find((candidate) => candidate.id === id)
+          if (asset) onPick(asset)
+        }}
+      />
       <s-divider></s-divider>
-      <s-heading>Upload a new model</s-heading>
-      <ModelUploadFlow embedded onUploaded={onSelect} />
+      <s-heading>Or upload a new model</s-heading>
+      <ModelUploadFlow embedded onUploaded={onUploaded} />
     </s-stack>
   )
 }
@@ -227,45 +232,64 @@ export function AddTryOnFlow({ assets, initialModelId, open, onClose, onPublishe
       }
     : null
   const hasReadyModels = assets.some(isReady)
+  // One heading per step, carried by the modal itself; the step number tells
+  // the merchant how much is left.
+  const STEPS = { model: 1, product: 2, review: 3 }
   const heading = state.step === 'model'
     ? (hasReadyModels ? 'Choose a model' : 'Upload a model')
-    : 'Set up try-on'
+    : state.step === 'product' ? 'Choose a product' : 'Review and publish'
 
   return (
     <s-modal ref={modalRef} id="add-tryon-flow" heading={heading}>
-      {state.step === 'model' && (
-        <ModelStep assets={assets} onSelect={(asset) => dispatch({ type: 'model-selected', asset })} />
-      )}
+      <s-stack direction="block" gap="base">
+        <s-text color="subdued">Step {STEPS[state.step]} of 3</s-text>
+        {state.step === 'model' && (
+          <ModelStep
+            assets={assets}
+            selectedId={state.modelAsset?.id}
+            onPick={(asset) => dispatch({ type: 'model-picked', asset })}
+            onUploaded={(asset) => dispatch({ type: 'model-selected', asset })}
+          />
+        )}
 
-      {state.step === 'product' && state.modelAsset && (
-        <s-stack direction="block" gap="base">
-          <s-heading>Choose a product</s-heading>
-          <s-stack direction="inline" gap="base" alignItems="center">
-            <s-button onClick={pickProduct} icon="product">
-              {state.product ? 'Change product' : 'Select product'}
-            </s-button>
-            {state.product && <ProductSummary product={state.product} />}
+        {state.step === 'product' && state.modelAsset && (
+          <s-stack direction="block" gap="base">
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <s-button onClick={pickProduct} icon="product">
+                {state.product ? 'Change product' : 'Select product'}
+              </s-button>
+              {state.product && <ProductSummary product={state.product} />}
+            </s-stack>
           </s-stack>
-        </s-stack>
-      )}
+        )}
 
-      {state.step === 'review' && previewMapping && (
-        <s-stack direction="block" gap="large-100">
-          <s-heading>Review try-on</s-heading>
-          <ProductSummary product={state.product} />
-          <s-text type="strong">{modelName(state.modelAsset)}</s-text>
-          <PreviewPanel mapping={previewMapping} showPhonePreview={false} />
-          {state.error && (
-            <s-banner heading="Could not publish try-on" tone="critical">
-              {state.error}
-            </s-banner>
-          )}
-        </s-stack>
-      )}
+        {state.step === 'review' && previewMapping && (
+          <s-stack direction="block" gap="large-100">
+            <ProductSummary product={state.product} />
+            <s-text type="strong">{modelName(state.modelAsset)}</s-text>
+            <PreviewPanel mapping={previewMapping} showPhonePreview={false} />
+            {state.error && (
+              <s-banner heading="Could not publish try-on" tone="critical">
+                {state.error}
+              </s-banner>
+            )}
+          </s-stack>
+        )}
+      </s-stack>
 
-      <s-button slot="secondary-actions" onClick={close} disabled={state.publishing}>Close</s-button>
+      <s-button slot="secondary-actions" onClick={close} disabled={state.publishing}>Cancel</s-button>
       {state.step !== 'model' && (
         <s-button slot="secondary-actions" onClick={back} disabled={state.publishing}>Back</s-button>
+      )}
+      {state.step === 'model' && hasReadyModels && (
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          disabled={!state.modelAsset}
+          onClick={() => dispatch({ type: 'next' })}
+        >
+          Continue
+        </s-button>
       )}
       {state.step === 'review' && state.modelAsset && state.product && (
         <fetcher.Form method="post" onSubmit={beginPublishing}>

@@ -17,7 +17,6 @@ export default function WorkspaceGuide({ guide, onAction }) {
 
   return (
     <s-box
-      className="workspace-guide-panel"
       padding="base"
       border="base"
       borderRadius="base"

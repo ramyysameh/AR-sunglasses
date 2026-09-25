@@ -31,7 +31,13 @@ export const action = async ({ request }) => {
     try {
       return Response.json(await presignModelUpload())
     } catch (e) {
-      return Response.json({ error: e.message }, { status: 500 })
+      // A storage/credentials failure means nothing to a merchant; log it
+      // and tell them what they can do.
+      console.error('model upload presign failed', e)
+      return Response.json(
+        { error: "The upload couldn't start. Try again in a moment." },
+        { status: 500 },
+      )
     }
   }
 

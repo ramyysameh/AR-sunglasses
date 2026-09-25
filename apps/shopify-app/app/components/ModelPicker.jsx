@@ -92,7 +92,7 @@ export default function ModelPicker({ assets, value, onChange }) {
   if (assets.length === 0) {
     return (
       <s-paragraph>
-        Upload a model on the <s-link href="/app/models">Models</s-link> page first.
+        No models yet. <s-link href="/app?add=1">Upload one with Add try-on</s-link>.
       </s-paragraph>
     )
   }

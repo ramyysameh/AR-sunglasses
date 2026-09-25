@@ -2,9 +2,13 @@
 import StatusBadge from './StatusBadge'
 import TopLevelAdminAction from './TopLevelAdminAction'
 
+// Badges name the state; the Actions column names what to do about it. A
+// badge reading "Add to theme" next to an "Add to theme" button said the same
+// thing twice and never said what was actually wrong.
 const STATUS_DETAILS = {
   live: { label: 'Live', tone: 'success' },
-  'add-to-theme': { label: 'Add to theme', tone: 'warning' },
+  'review-fit': { label: 'Needs fit review', tone: 'warning' },
+  'add-to-theme': { label: 'Not on theme', tone: 'warning' },
   'model-issue': { label: 'Model issue', tone: 'critical' },
   'plan-limit': { label: 'Plan limit', tone: 'warning' },
 }
@@ -35,6 +39,7 @@ export function primaryActionFor(mapping, pricingUrl) {
   if (mapping.status === 'add-to-theme') {
     return { id: 'theme', label: 'Add to theme', href: mapping.themeUrl }
   }
+  if (mapping.status === 'review-fit') return { id: 'review-fit', label: 'Review fit' }
   if (mapping.status === 'model-issue') return { id: 'choose-model', label: 'Choose model' }
   if (
     mapping.status === 'plan-limit'
@@ -77,12 +82,23 @@ function ProductImage({ product }) {
   )
 }
 
-function PrimaryAction({ action, mapping, onPreview, onChangeModel }) {
+// Row actions are secondary on purpose: Polaris keeps one primary action per
+// page, and on this page that is the page's Add try-on and the guide's next
+// step. A primary button in every row flattened that hierarchy.
+function PrimaryAction({ action, mapping, onPreview, onChangeModel, onReviewFit }) {
   if (!action) return null
 
   if (action.id === 'preview') {
     return (
-      <s-button variant="primary" onClick={() => onPreview(mapping)}>
+      <s-button variant="secondary" onClick={() => onPreview(mapping)}>
+        {action.label}
+      </s-button>
+    )
+  }
+
+  if (action.id === 'review-fit' && onReviewFit) {
+    return (
+      <s-button variant="secondary" onClick={() => onReviewFit(mapping)}>
         {action.label}
       </s-button>
     )
@@ -90,7 +106,7 @@ function PrimaryAction({ action, mapping, onPreview, onChangeModel }) {
 
   if (action.id === 'choose-model') {
     return (
-      <s-button variant="primary" onClick={() => onChangeModel(mapping)}>
+      <s-button variant="secondary" onClick={() => onChangeModel(mapping)}>
         {action.label}
       </s-button>
     )
@@ -104,7 +120,7 @@ function PrimaryAction({ action, mapping, onPreview, onChangeModel }) {
     return (
       <TopLevelAdminAction
         href={action.href}
-        variant="primary"
+        variant="secondary"
         accessibilityLabel={action.label}
       >
         {action.label}
@@ -122,6 +138,7 @@ export default function ProductOperationsList({
   guidedMappingId = null,
   onPreview,
   onChangeModel,
+  onReviewFit,
   onRemove,
 }) {
   if (mappings.length === 0) {
@@ -171,6 +188,7 @@ export default function ProductOperationsList({
                     mapping={mapping}
                     onPreview={onPreview}
                     onChangeModel={onChangeModel}
+                    onReviewFit={onReviewFit}
                   />
                   <s-button
                     variant="tertiary"
@@ -182,8 +200,14 @@ export default function ProductOperationsList({
                     id={`workspace-actions-${mapping.id}`}
                     accessibilityLabel={`Actions for ${title}`}
                   >
-                    <s-button icon="view" onClick={() => onPreview(mapping)}>Preview</s-button>
-                    <s-button icon="edit" onClick={() => onChangeModel(mapping)}>Change model</s-button>
+                    {/* The menu holds what the row button does not, so no
+                        action appears twice in one row. */}
+                    {primaryAction?.id !== 'preview' && (
+                      <s-button icon="view" onClick={() => onPreview(mapping)}>Preview</s-button>
+                    )}
+                    {primaryAction?.id !== 'choose-model' && (
+                      <s-button icon="edit" onClick={() => onChangeModel(mapping)}>Change model</s-button>
+                    )}
                     <s-button icon="delete" tone="critical" onClick={() => onRemove(mapping)}>
                       Remove try-on
                     </s-button>

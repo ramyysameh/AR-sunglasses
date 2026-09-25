@@ -8,6 +8,7 @@ import prisma from '../db.server'
 import { getActivePlanName } from '../billing.server'
 import { deleteModelGlb } from '../storage.server'
 import { themeEditorUrl } from '../adminLinks.server'
+import { planUsage } from '../planUsage.server'
 // A .server.js import used only inside the loader below (never referenced
 // from the component body) is stripped from the client bundle by the
 // `.server.js` naming convention -- same pattern app.products.jsx already
@@ -18,6 +19,7 @@ import { themeEditorUrl } from '../adminLinks.server'
 import { needsFitReview } from '../tryonStatus.server'
 import ModelViewer from '../components/ModelViewer'
 import ModelFitReview from '../components/ModelFitReview'
+import TopLevelAdminAction from '../components/TopLevelAdminAction'
 import {
   attachDropRejectedListener,
   createUploadCancellationCoordinator,
@@ -51,14 +53,22 @@ export const loader = async ({ request }) => {
   // (App Store rejection Ref 127328).
   const activePlan = await getActivePlanName(admin, session.shop)
   if (!activePlan) {
-    return { assets: [], themeUrl }
+    return { assets: [], themeUrl, atLimit: false, pricingUrl: null }
   }
-  const assets = await prisma.modelAsset.findMany({
-    where: { shop: session.shop },
-    orderBy: { createdAt: 'desc' },
-    include: { _count: { select: { mappings: true } } },
-  })
+  const [assets, used] = await Promise.all([
+    prisma.modelAsset.findMany({
+      where: { shop: session.shop },
+      orderBy: { createdAt: 'desc' },
+      include: { _count: { select: { mappings: true } } },
+    }),
+    prisma.productMapping.count({ where: { shop: session.shop } }),
+  ])
+  // Same limit the Workspace enforces: at the limit, "Add try-on" here would
+  // open a flow whose publish can only fail, so the page offers the upgrade.
+  const usage = planUsage({ planName: activePlan, used, shop: session.shop })
   return {
+    atLimit: usage.atLimit,
+    pricingUrl: usage.pricingUrl,
     assets: assets.map(({ _count, ...a }) => ({
       ...a,
       mappingCount: _count.mappings,
@@ -119,6 +129,8 @@ export const action = async ({ request }) => {
   // of JSON. See app/routes/api.model-upload.jsx.
   return { error: 'Unknown action.' }
 }
+
+const ADD_TRY_ON_HREF = '/app?add=1'
 
 export function modelName(asset) {
   return asset.label?.trim() || asset.filename || `Model ${asset.id.slice(0, 8)}`
@@ -328,7 +340,7 @@ function ReviewFitModal({ asset, themeUrl, session, onDismiss }) {
 }
 
 export default function Models() {
-  const { assets, themeUrl } = useLoaderData()
+  const { assets, themeUrl, atLimit = false, pricingUrl = null } = useLoaderData()
   const shopify = useAppBridge()
   const [renameModal, dispatchRenameModal] = useReducer(modalSessionReducer, {
     modelId: null,
@@ -355,14 +367,28 @@ export default function Models() {
 
   return (
     <s-page heading="Models">
+      {/* Models are uploaded inside Add try-on (Models is a library, not an
+          upload surface). The ?add=1 deep link opens that flow, whose first step
+          offers an upload, so this page always has a way forward. */}
+      {atLimit ? (
+        <TopLevelAdminAction slot="primary-action" href={pricingUrl} accessibilityLabel="Upgrade plan to add try-on to more products">
+          Upgrade plan
+        </TopLevelAdminAction>
+      ) : (
+        <s-button slot="primary-action" href={ADD_TRY_ON_HREF}>
+          Add try-on
+        </s-button>
+      )}
       <s-section heading="Model library">
         {assets.length === 0 ? (
           <s-stack direction="block" gap="base">
             <s-text type="strong">Your model library is empty</s-text>
             <s-paragraph>
-              Upload a model while setting up try-on for a product.
+              Upload a .glb eyewear model when you add try-on to a product.
             </s-paragraph>
-            <s-link href="/app">Set up try-on</s-link>
+            <s-stack direction="inline">
+              <s-button variant="primary" href={ADD_TRY_ON_HREF}>Upload a model</s-button>
+            </s-stack>
           </s-stack>
         ) : (
           <s-grid
@@ -395,11 +421,23 @@ export default function Models() {
                           guidance walks a merchant into a Models card that
                           just says "Ready" with no action. */}
                       <s-badge tone={asset.needsReview ? 'warning' : 'success'}>
-                        {asset.needsReview ? 'Review fit' : 'Ready'}
+                        {asset.needsReview ? 'Needs fit review' : 'Ready'}
                       </s-badge>
-                      {asset.needsReview && (
+                    </s-stack>
+                    {showFilename && <s-text color="subdued">{asset.filename}</s-text>}
+                    {asset.mappingCount > 0 ? (
+                      <s-text color="subdued">
+                        Used by {asset.mappingCount} product{asset.mappingCount === 1 ? '' : 's'}.{' '}
+                        <s-link href={`/app?q=${encodeURIComponent(displayName)}`}>View products</s-link>
+                        {/* Says why Delete is missing instead of just hiding it. */}
+                        {' '}Remove it from {asset.mappingCount === 1 ? 'that product' : 'those products'} to delete it.
+                      </s-text>
+                    ) : (
+                      <s-text color="subdued">Not used by any products</s-text>
+                    )}
+                    <s-stack direction="inline" gap="small-500">
+                      {asset.needsReview ? (
                         <s-button
-                          variant="tertiary"
                           commandFor="review-model-fit"
                           command="--show"
                           accessibilityLabel={`Review fit for ${displayName}`}
@@ -407,18 +445,14 @@ export default function Models() {
                         >
                           Review fit
                         </s-button>
+                      ) : !atLimit && (
+                        <s-button
+                          href={`/app?add=1&model=${encodeURIComponent(asset.id)}`}
+                          accessibilityLabel={`Add try-on with ${displayName}`}
+                        >
+                          Add try-on
+                        </s-button>
                       )}
-                    </s-stack>
-                    {showFilename && <s-text color="subdued">{asset.filename}</s-text>}
-                    {asset.mappingCount > 0 ? (
-                      <s-text color="subdued">
-                        Used by {asset.mappingCount} product{asset.mappingCount === 1 ? '' : 's'}.{' '}
-                        <s-link href="/app">View products</s-link>
-                      </s-text>
-                    ) : (
-                      <s-text color="subdued">Not used by any products</s-text>
-                    )}
-                    <s-stack direction="inline" gap="small-500">
                       <s-button
                         icon="edit"
                         onClick={() => dispatchRenameModal({ type: 'open', modelId: asset.id })}

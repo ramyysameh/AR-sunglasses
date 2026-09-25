@@ -65,6 +65,7 @@ global.React = React
 const {
   default: Workspace,
   initialAddRequest,
+  ReviewFitDialog,
 } = await import('../app/routes/app._index.jsx')
 
 const readyAsset = { id: 'ready-model', label: 'Ready model', status: 'ready' }
@@ -247,6 +248,9 @@ describe('Workspace route composition', () => {
       .toEqual({ open: true, modelId: undefined })
     expect(initialAddRequest('?add=1&model=uppercase', [{ id: 'uppercase', status: 'READY' }]))
       .toEqual({ open: true, modelId: 'uppercase' })
+    // At the plan limit the deep link does not open a flow that can only fail.
+    expect(initialAddRequest('?add=1&model=ready-model', [readyAsset], true))
+      .toEqual({ open: false, modelId: undefined })
     expect(initialAddRequest('?model=ready-model', [readyAsset])).toEqual({ open: false, modelId: undefined })
   })
 
@@ -332,5 +336,36 @@ describe('Workspace route composition', () => {
     flow.props.onPublished()
     expect(harness.toast).toHaveBeenCalledWith('Try-on published')
     expect(harness.revalidate).toHaveBeenCalledTimes(1)
+  })
+
+  it('reviews a fit in place and offers a model swap from the review', () => {
+    const mapping = { id: 'fit', productId: 'gid://shopify/Product/1', modelAssetId: 'asset-1', status: 'review-fit', product: { title: 'Aria' } }
+    const onChooseModel = vi.fn()
+    const dialog = ReviewFitDialog({ mapping, themeUrl: '/theme', onChooseModel })
+    const html = renderToStaticMarkup(dialog)
+
+    expect(dialog.props.id).toBe('workspace-review-fit')
+    expect(dialog.props.heading).toBe('Review fit for Aria')
+    expect(html).toContain('Review the fit')
+    const review = [dialog.props.children].flat(Infinity).find((child) => child?.props?.modelAssetId)
+    expect(review.props).toMatchObject({ modelAssetId: 'asset-1', themeUrl: '/theme' })
+    const swap = findElements(dialog, 's-button').find((button) => button.props.children === 'Choose a different model')
+    swap.props.onClick()
+    expect(harness.modalHide).toHaveBeenCalledWith('workspace-review-fit')
+    expect(onChooseModel).toHaveBeenCalledWith(mapping)
+  })
+
+  it('links Help from the workspace support panel', () => {
+    const html = renderToStaticMarkup(render(baseData()))
+    expect(html).toContain('<s-link href="/app/additional">Help and troubleshooting</s-link>')
+  })
+
+  it('opens with the search from ?q= so Models can link to one model\'s products', () => {
+    const page = render(baseData({
+      mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }],
+      counts: { all: 1, live: 1, needsAttention: 0 },
+    }), '?q=Pelmo')
+    const filters = findElements(page, WorkspaceFilters)[0]
+    expect(filters.props.query).toBe('Pelmo')
   })
 })

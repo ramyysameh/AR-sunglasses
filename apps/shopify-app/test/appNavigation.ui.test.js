@@ -24,11 +24,13 @@ global.React = React
 const { default: App } = await import('../app/routes/app.jsx')
 
 describe('app navigation', () => {
-  it('keeps only Workspace and Models as global destinations', () => {
+  it('keeps Workspace, Models and Help as the only global destinations', () => {
     const html = renderToStaticMarkup(React.createElement(App))
 
-    expect(html.match(/<s-link /g)).toHaveLength(2)
-    expect(html).toContain('<s-link href="/app">Workspace</s-link>')
+    expect(html.match(/<s-link /g)).toHaveLength(3)
+    // Help was a routed page with no way to reach it.
+    expect(html).toContain('<s-link href="/app/additional">Help</s-link>')
+    expect(html).toContain('<s-link href="/app" rel="home">Workspace</s-link>')
     expect(html).toContain('<s-link href="/app/models">Models</s-link>')
   })
 })

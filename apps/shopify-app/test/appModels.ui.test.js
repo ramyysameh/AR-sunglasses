@@ -207,7 +207,8 @@ describe('Models UI behavior', () => {
     // links at the Workspace. The merchant-facing copy stays "Review fit"
     // (the status id is still `check_fit`) -- that wording matches the action
     // every review surface actually offers.
-    expect(html).toContain('href="/app"')
+    // "View products" opens the Workspace already searched for this model.
+    expect(html).toContain('href="/app?q=Pelmo%20black"')
     expect(html).toContain('Review fit')
     expect(html).not.toMatch(/Check fit/)
     expect(html).not.toMatch(/A1 pipeline|calibrat|manual anchor|geometric confidence/i)
@@ -320,5 +321,50 @@ describe('ModelPicker (assets shaped like the Models route loader)', () => {
     expect(html).toContain('s-search-field')
     expect(html.match(/<model-viewer/g) ?? []).toHaveLength(0)
     expect(html.match(/Loading 3D preview/g)).toHaveLength(1)
+  })
+
+  it('gives Models a way to upload instead of a dead end', () => {
+    const html = renderToStaticMarkup(React.createElement(Models))
+    expect(html).toMatch(/<s-page heading="Models"><s-button slot="primary-action" href="\/app\?add=1">\s*Add try-on\s*<\/s-button>/)
+
+    routeState.loaderData = { assets: [], themeUrl: 'https://admin.shopify.com/theme' }
+    const empty = renderToStaticMarkup(React.createElement(Models))
+    expect(empty).toContain('Your model library is empty')
+    expect(empty).toContain('<s-button variant="primary" href="/app?add=1">Upload a model</s-button>')
+  })
+
+  it('names a model that needs review as a state, with Review fit as the action', () => {
+    const html = renderToStaticMarkup(React.createElement(Models))
+    expect(html).toContain('<s-badge tone="warning">Needs fit review</s-badge>')
+    expect(html).toContain('>Review fit</s-button>')
+  })
+
+  it('points the empty model picker at the upload flow that exists', () => {
+    const html = renderToStaticMarkup(React.createElement(ModelPicker, { assets: [], value: '', onChange: vi.fn() }))
+    expect(html).toContain('href="/app?add=1"')
+    expect(html).not.toContain('href="/app/models"')
+  })
+
+  it('puts each card action in the action row and explains a missing Delete', () => {
+    const html = renderToStaticMarkup(React.createElement(Models))
+
+    // Ready, in-use model: Add try-on deep link, no Delete, and a reason why.
+    expect(html).toContain('<s-button href="/app?add=1&amp;model=used-model" accessibilityLabel="Add try-on with Pelmo black">Add try-on</s-button>')
+    expect(html).toContain('Remove it from those products to delete it.')
+    // Model that needs review: Review fit is a regular action, not squeezed
+    // into the heading row as a tertiary link.
+    expect(html).toMatch(/<s-button commandFor="review-model-fit" command="--show" accessibilityLabel="Review fit for aviator.glb">Review fit<\/s-button>/)
+    expect(html).not.toContain('accessibilityLabel="Add try-on with aviator.glb"')
+  })
+
+  it('offers an upgrade instead of Add try-on at the plan limit', () => {
+    routeState.loaderData = { ...routeState.loaderData, atLimit: true, pricingUrl: '/plans' }
+    const html = renderToStaticMarkup(React.createElement(Models))
+
+    expect(html).toContain('>Upgrade plan</s-button>')
+    expect(html).toMatch(/<s-button slot="primary-action"[^>]*accessibilityLabel="Upgrade plan to add try-on to more products"/)
+    expect(html).not.toContain('/app?add=1')
+    // Review fit is not an add, so it stays available.
+    expect(html).toContain('>Review fit</s-button>')
   })
 })

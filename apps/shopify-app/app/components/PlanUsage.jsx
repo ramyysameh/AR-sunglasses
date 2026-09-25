@@ -28,21 +28,21 @@ export default function PlanUsage({ usage }) {
 
   if (usage.unlimited) {
     return (
-      <section className="workspace-panel workspace-plan" aria-label="Plan usage">
+      <s-section accessibilityLabel="Plan usage">
         <s-stack direction="block" gap="small-200">
           <s-text type="strong">{planName}</s-text>
           <s-text color="subdued">
             {usage.used} {usage.used === 1 ? 'product' : 'products'} using try-on
           </s-text>
         </s-stack>
-      </section>
+      </s-section>
     )
   }
 
   const remaining = Math.max(0, usage.limit - usage.used)
 
   return (
-    <section className="workspace-panel workspace-plan" aria-label="Plan usage">
+    <s-section accessibilityLabel="Plan usage">
       <s-stack direction="block" gap="base">
         <div className="workspace-plan-head">
           <s-stack direction="block" gap="small-200">
@@ -80,6 +80,6 @@ export default function PlanUsage({ usage }) {
             : 'Upgrade to add more products'}
         </s-text>
       </s-stack>
-    </section>
+    </s-section>
   )
 }

@@ -9,7 +9,7 @@ const productGid = `gid://shopify/Product/${tag}`
 // be exercised from the same mock -- see billing.server.js's
 // getActivePlanName, which treats an empty activeSubscriptions array (or no
 // ACTIVE entry in it) as "no active plan".
-const subscriptionState = vi.hoisted(() => ({ active: true }))
+const subscriptionState = vi.hoisted(() => ({ active: true, plan: 'Pro' }))
 
 // Admin mock: active subscription (by default) + product lookup response.
 vi.mock('../app/shopify.server.js', () => ({
@@ -22,7 +22,7 @@ vi.mock('../app/shopify.server.js', () => ({
             return new Response(JSON.stringify({
               data: {
                 currentAppInstallation: {
-                  activeSubscriptions: subscriptionState.active ? [{ name: 'Pro', status: 'ACTIVE' }] : [],
+                  activeSubscriptions: subscriptionState.active ? [{ name: subscriptionState.plan, status: 'ACTIVE' }] : [],
                 },
               },
             }))
@@ -41,6 +41,7 @@ const { loader } = await import('../app/routes/app.models.jsx')
 
 beforeEach(async () => {
   subscriptionState.active = true
+  subscriptionState.plan = 'Pro'
   await prisma.productMapping.deleteMany({ where: { shop } })
   await prisma.modelAsset.deleteMany({ where: { shop } })
 })
@@ -156,5 +157,34 @@ describe('app.models loader needsReview', () => {
 
     expect(found).toBeTruthy()
     expect(found.needsReview).toBe(false)
+  })
+})
+
+describe('app.models loader plan limit', () => {
+  it('reports the limit so Models can offer an upgrade instead of a failing Add try-on', async () => {
+    const asset = await prisma.modelAsset.create({
+      data: { shop, storageRef: `${tag}/limit.glb`, fitMetadata: { version: 'eyewear-v1' }, status: 'ready' },
+    })
+    const mapTo = (count) => prisma.productMapping.createMany({
+      data: Array.from({ length: count }, (_, index) => ({
+        shop,
+        productId: `gid://shopify/Product/${tag}${index}`,
+        modelAssetId: asset.id,
+      })),
+    })
+
+    subscriptionState.plan = 'Starter'
+    await mapTo(9)
+    let result = await loader({ request: new Request('https://x/app/models') })
+    expect(result.atLimit).toBe(false)
+
+    await prisma.productMapping.create({ data: { shop, productId: `gid://shopify/Product/${tag}last`, modelAssetId: asset.id } })
+    result = await loader({ request: new Request('https://x/app/models') })
+    expect(result.atLimit).toBe(true)
+    expect(typeof result.pricingUrl).toBe('string')
+
+    subscriptionState.plan = 'Pro'
+    result = await loader({ request: new Request('https://x/app/models') })
+    expect(result).toMatchObject({ atLimit: false, pricingUrl: null })
   })
 })

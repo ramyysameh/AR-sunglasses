@@ -10,14 +10,19 @@ import { productStatus } from './tryonStatus.server.js'
 
 const STATUS_PRIORITY = {
   'model-issue': 0,
-  'add-to-theme': 1,
-  live: 2,
+  'review-fit': 1,
+  'add-to-theme': 2,
+  live: 3,
 }
 
 export function normalizeWorkspaceStatus(status) {
   const id = typeof status === 'string' ? status : status?.id
   if (id === 'live') return 'live'
   if (id === 'not_on_theme' || id === 'add-to-theme') return 'add-to-theme'
+  // A model that needs its fit reviewed is not broken: it keeps the same
+  // "Review fit" name and warning weight it has on the Models page, and
+  // resolves through the fit review rather than a model swap.
+  if (id === 'check_fit' || id === 'review-fit') return 'review-fit'
   return 'model-issue'
 }
 
@@ -56,6 +61,15 @@ export function workspaceGuide({ assets, mappings, usage }) {
       action: { id: 'choose-model', mappingId: issue.id, label: 'Choose model' },
     }
   }
+  const review = mappings.find((mapping) => mapping.status === 'review-fit')
+  if (review) {
+    return {
+      kind: 'recovery',
+      title: 'Review how a model fits',
+      detail: review.product?.title,
+      action: { id: 'review-fit', mappingId: review.id, label: 'Review fit' },
+    }
+  }
   const theme = mappings.find((mapping) => mapping.status === 'add-to-theme')
   if (theme) {
     return {
@@ -76,7 +90,7 @@ export function workspaceGuide({ assets, mappings, usage }) {
   return {
     kind: 'complete',
     title: 'Everything is live',
-    detail: `${mappings.length} products are ready`,
+    detail: `${mappings.length} ${mappings.length === 1 ? 'product is' : 'products are'} ready`,
     action: null,
   }
 }

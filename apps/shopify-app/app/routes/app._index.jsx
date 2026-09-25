@@ -6,7 +6,8 @@ import { useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-ro
 import { authenticate } from '../shopify.server'
 import { handleProductAction } from '../productActions.server'
 import { loadWorkspace } from '../workspace.server'
-import { AddTryOnFlow } from '../components/AddTryOnFlow'
+import { AddTryOnFlow, isReady as isReadyModel } from '../components/AddTryOnFlow'
+import ModelFitReview from '../components/ModelFitReview'
 import ModelPicker from '../components/ModelPicker'
 import PlanUsage from '../components/PlanUsage'
 import PreviewPanel from '../components/PreviewPanel'
@@ -29,9 +30,11 @@ function isReady(asset) {
   return typeof asset.status === 'string' && asset.status.toLowerCase() === 'ready'
 }
 
-export function initialAddRequest(search, assets) {
+export function initialAddRequest(search, assets, atLimit = false) {
   const params = new URLSearchParams(search)
-  if (params.get('add') !== '1') return { open: false, modelId: undefined }
+  // At the plan limit the flow can only end in a failed publish; the page's
+  // plan meter carries the upgrade action instead.
+  if (params.get('add') !== '1' || atLimit) return { open: false, modelId: undefined }
   const requestedId = params.get('model')
   const modelId = assets.some((asset) => asset.id === requestedId && isReady(asset))
     ? requestedId
@@ -97,6 +100,11 @@ export function ChangeModelDialog({ mapping, assets, onDone, session = 0 }) {
     && submission.productId === mapping?.productId
     && submission.modelAssetId === modelAssetId,
   )
+  // Same choice Add try-on offers (ready models only), plus the product's
+  // current model so the picker can show what is selected today.
+  const choosableAssets = assets.filter((asset) => (
+    isReadyModel(asset) || asset.id === mapping?.modelAssetId
+  ))
   const submitDisabled = !mapping
     || !modelAssetId
     || (modelAssetId === mapping.modelAssetId && !retryable)
@@ -140,8 +148,10 @@ export function ChangeModelDialog({ mapping, assets, onDone, session = 0 }) {
     <s-modal ref={modalRef} id="workspace-change-model" heading={`Change model for ${mapping?.product?.title ?? 'product'}`}>
       <s-stack direction="block" gap="base">
         <s-paragraph>Choose the frames shoppers should see for this product.</s-paragraph>
-        {mapping && <ModelPicker assets={assets} value={modelAssetId} onChange={selectModel} />}
-        {fetcher.data?.error && <s-banner tone="critical">{fetcher.data.error}</s-banner>}
+        {mapping && <ModelPicker assets={choosableAssets} value={modelAssetId} onChange={selectModel} />}
+        {fetcher.data?.error && (
+          <s-banner heading="Could not change model" tone="critical">{fetcher.data.error}</s-banner>
+        )}
       </s-stack>
       <s-button slot="secondary-actions" commandFor="workspace-change-model" command="--hide">Cancel</s-button>
       <fetcher.Form
@@ -175,7 +185,9 @@ export function RemoveTryOnDialog({ mapping, onDone }) {
   return (
     <s-modal id="workspace-remove-tryon" heading={`Remove try-on from ${mapping?.product?.title ?? 'this product'}?`}>
       <s-paragraph>Shoppers will no longer see try-on on this product page.</s-paragraph>
-      {fetcher.data?.error && <s-banner tone="critical">{fetcher.data.error}</s-banner>}
+      {fetcher.data?.error && (
+        <s-banner heading="Could not remove try-on" tone="critical">{fetcher.data.error}</s-banner>
+      )}
       <s-button slot="secondary-actions" commandFor="workspace-remove-tryon" command="--hide">Cancel</s-button>
       <fetcher.Form
         method="post"
@@ -189,17 +201,44 @@ export function RemoveTryOnDialog({ mapping, onDone }) {
   )
 }
 
+// Opened from a "Needs fit review" row or the guide. The review itself is
+// the shared ModelFitReview surface (same as Models); swapping frames is the
+// other way to resolve a fit the merchant is not happy with, so it is offered
+// here rather than only in the row menu.
+export function ReviewFitDialog({ mapping, themeUrl, onChooseModel }) {
+  const shopify = useAppBridge()
+
+  const chooseModel = () => {
+    if (!mapping) return
+    shopify.modal.hide('workspace-review-fit')
+    onChooseModel(mapping)
+  }
+
+  return (
+    <s-modal id="workspace-review-fit" heading={`Review fit for ${mapping?.product?.title ?? 'product'}`}>
+      {mapping && <ModelFitReview modelAssetId={mapping.modelAssetId} themeUrl={themeUrl} />}
+      <s-button slot="secondary-actions" commandFor="workspace-review-fit" command="--hide">Close</s-button>
+      <s-button slot="primary-action" disabled={!mapping} onClick={chooseModel}>
+        Choose a different model
+      </s-button>
+    </s-modal>
+  )
+}
+
 export default function Workspace() {
   const data = useLoaderData()
   const location = useLocation()
   const revalidator = useRevalidator()
   const shopify = useAppBridge()
-  const initialRequest = initialAddRequest(location.search, data.assets)
+  const initialRequest = initialAddRequest(location.search, data.assets, data.usage?.atLimit)
   const [status, setStatus] = useState('all')
-  const [query, setQuery] = useState('')
+  // Models' "View products" links here with ?q=<model name> so the list opens
+  // already narrowed to that model's products.
+  const [query, setQuery] = useState(new URLSearchParams(location.search).get('q') ?? '')
   const [addTryOnOpen, setAddTryOnOpen] = useState(initialRequest.open)
   const [initialModelId] = useState(initialRequest.modelId)
   const [previewMapping, setPreviewMapping] = useState(null)
+  const [reviewMapping, setReviewMapping] = useState(null)
   const [changeMapping, setChangeMapping] = useState(null)
   const [changeDialogSession, setChangeDialogSession] = useState(0)
   const [removeMapping, setRemoveMapping] = useState(null)
@@ -216,7 +255,7 @@ export default function Workspace() {
   const visibleMappings = filterWorkspaceMappings(data.mappings, { status, query })
   const hasOperations = data.mappings.length > 0
   const guideAction = data.guide.action
-  const guidedMappingId = guideAction?.id === 'choose-model'
+  const guidedMappingId = guideAction?.id === 'choose-model' || guideAction?.id === 'review-fit'
     ? guideAction.mappingId
     : guideAction?.id === 'theme'
       ? data.mappings.find((mapping) => mapping.themeUrl === guideAction.href)?.id ?? null
@@ -229,10 +268,18 @@ export default function Workspace() {
       const mapping = data.mappings.find((candidate) => candidate.id === guideAction.mappingId)
       if (mapping) openChangeModel(mapping)
     }
+    if (guideAction.id === 'review-fit') {
+      const mapping = data.mappings.find((candidate) => candidate.id === guideAction.mappingId)
+      if (mapping) openReviewFit(mapping)
+    }
   }
   const openPreview = (mapping) => {
     setPreviewMapping(mapping)
     shopify.modal.show('workspace-preview')
+  }
+  const openReviewFit = (mapping) => {
+    setReviewMapping(mapping)
+    shopify.modal.show('workspace-review-fit')
   }
   const openChangeModel = (mapping) => {
     setChangeMapping(mapping)
@@ -275,7 +322,8 @@ export default function Workspace() {
         {hasOperations && (
           <>
             <WorkspaceFilters counts={data.counts} status={status} query={query} onStatusChange={setStatus} onQueryChange={setQuery} />
-            <section className="workspace-panel" aria-label="Product operations">
+            {/* A native Polaris card; padding="none" lets the table run to its edges. */}
+            <s-section padding="none" accessibilityLabel="Product operations">
               <ProductOperationsList
                 mappings={visibleMappings}
                 totalCount={data.mappings.length}
@@ -283,9 +331,10 @@ export default function Workspace() {
                 guidedMappingId={guidedMappingId}
                 onPreview={openPreview}
                 onChangeModel={openChangeModel}
+                onReviewFit={openReviewFit}
                 onRemove={openRemove}
               />
-            </section>
+            </s-section>
           </>
         )}
       </div>
@@ -295,10 +344,12 @@ export default function Workspace() {
       <s-modal id="workspace-preview" heading={`Preview ${previewMapping?.product?.title ?? 'try-on'}`}>
         {previewMapping && <PreviewPanel mapping={previewMapping} />}
       </s-modal>
+      <ReviewFitDialog mapping={reviewMapping} themeUrl={data.themeUrl} onChooseModel={openChangeModel} />
       <ChangeModelDialog key={changeMapping?.id ?? 'no-change'} mapping={changeMapping} assets={data.assets} onDone={refreshWorkspace} session={changeDialogSession} />
       <RemoveTryOnDialog key={removeMapping?.id ?? 'no-remove'} mapping={removeMapping} onDone={refreshWorkspace} />
 
       <s-section slot="aside" heading="Support">
+        <s-paragraph><s-link href="/app/additional">Help and troubleshooting</s-link></s-paragraph>
         <s-paragraph><s-link href="/privacy" target="_blank">Privacy policy</s-link></s-paragraph>
         <s-paragraph>Need help? <s-link href="mailto:zendolabs@gmail.com">Contact support</s-link>.</s-paragraph>
       </s-section>

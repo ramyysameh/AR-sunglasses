@@ -317,6 +317,40 @@ describe('workspace component accessibility contracts', () => {
     expect(onChangeModel).toHaveBeenCalledWith(rows[1])
   })
 
+  it('keeps row actions secondary so the page keeps one primary action', () => {
+    const html = renderToStaticMarkup(React.createElement(ProductOperationsList, {
+      mappings: [...rows, { id: 'fit', status: 'review-fit', product: { title: 'Aria' }, modelAsset: { displayName: 'Smoke' } }],
+      pricingUrl: '/plans',
+      onPreview: vi.fn(),
+      onChangeModel: vi.fn(),
+      onReviewFit: vi.fn(),
+      onRemove: vi.fn(),
+    }))
+
+    expect(html).not.toContain('variant="primary"')
+  })
+
+  it('labels a fit review as a warning and resolves it with the fit review', () => {
+    const fitRow = { id: 'fit', status: 'review-fit', product: { title: 'Aria' }, modelAsset: { displayName: 'Smoke' } }
+    const onReviewFit = vi.fn()
+    const onChangeModel = vi.fn()
+    const list = ProductOperationsList({
+      mappings: [fitRow],
+      pricingUrl: '/plans',
+      onPreview: vi.fn(),
+      onChangeModel,
+      onReviewFit,
+      onRemove: vi.fn(),
+    })
+
+    expect(primaryActionFor(fitRow, '/plans')).toEqual({ id: 'review-fit', label: 'Review fit' })
+    expect(renderToStaticMarkup(list)).toContain('<s-badge tone="warning">Needs fit review</s-badge>')
+    expect(renderToStaticMarkup(list)).not.toContain('Model issue')
+    buttonWithLabel(list, 'Review fit').props.onClick()
+    expect(onReviewFit).toHaveBeenCalledWith(fitRow)
+    expect(onChangeModel).not.toHaveBeenCalled()
+  })
+
   it('does not repeat the guide action in the matching product row', () => {
     const list = ProductOperationsList({
       mappings: [rows[2]],
@@ -328,7 +362,8 @@ describe('workspace component accessibility contracts', () => {
     })
 
     expect(buttonWithLabel(list, 'Add to theme')).toBeUndefined()
-    expect(renderToStaticMarkup(list)).toContain('>Add to theme<')
+    // The row still says what is wrong, as a state rather than an action.
+    expect(renderToStaticMarkup(list)).toContain('>Not on theme<')
   })
 
   it('links plan-limit recovery only to page pricing and never changes the model', () => {
@@ -390,19 +425,20 @@ describe('workspace component accessibility contracts', () => {
     expect(html).toContain('aria-label="No image available for Gripz"')
     expect(html).toContain('>Live<')
     expect(html).toContain('>Model issue<')
-    expect(html).toContain('>Add to theme<')
+    expect(html).toContain('<s-badge tone="warning">Not on theme</s-badge>')
     expect(html.match(/<s-menu/g)).toHaveLength(3)
     const menuLabels = [...html.matchAll(/<s-menu[^>]*>(.*?)<\/s-menu>/g)]
       .map(([, menu]) => [...menu.matchAll(/<s-button[^>]*>(.*?)<\/s-button>/g)]
         .map(([, label]) => label))
+    // The menu leaves out whatever the row's own button already does.
     expect(menuLabels).toEqual([
-      ['Preview', 'Change model', 'Remove try-on'],
-      ['Preview', 'Change model', 'Remove try-on'],
+      ['Change model', 'Remove try-on'],
+      ['Preview', 'Remove try-on'],
       ['Preview', 'Change model', 'Remove try-on'],
     ])
-    expect(html.match(/>Preview<\/s-button>/g)).toHaveLength(4)
+    expect(html.match(/>Preview<\/s-button>/g)).toHaveLength(3)
     expect(html.match(/>Choose model<\/s-button>/g)).toHaveLength(1)
-    expect(html.match(/>Change model<\/s-button>/g)).toHaveLength(3)
+    expect(html.match(/>Change model<\/s-button>/g)).toHaveLength(2)
     expect(html.match(/>Remove try-on<\/s-button>/g)).toHaveLength(3)
     expect(html).not.toContain('View plans</s-button>')
   })

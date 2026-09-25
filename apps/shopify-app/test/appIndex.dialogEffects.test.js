@@ -279,3 +279,21 @@ describe('change model retry submission', () => {
     })
   })
 })
+
+describe('change model choices', () => {
+  it('offers ready models plus the current one, matching Add try-on', () => {
+    const dialog = renderDialog(ChangeModelDialog, {
+      mapping: { ...mapping, modelAssetId: 'current-needs-review' },
+      assets: [
+        { id: 'current-needs-review', status: 'needs_manual' },
+        { id: 'ready-model', status: 'ready' },
+        { id: 'other-needs-review', status: 'needs_manual' },
+      ],
+      onDone: vi.fn(),
+      session: 1,
+    })
+    const picker = findElements(dialog, ModelPicker)[0]
+
+    expect(picker.props.assets.map((asset) => asset.id)).toEqual(['current-needs-review', 'ready-model'])
+  })
+})

@@ -69,13 +69,19 @@ export default function App() {
                 time from your Shopify admin.
               </s-paragraph>
 
-              <s-paragraph>
-                {/* Deliberately a plain <a target="_top"> -- see the comment
-                    above this return for why this one control stays primitive. */}
-                <a href={pricingUrl} target="_top" rel="noreferrer">
+              <s-stack direction="block" gap="small-200">
+                {/* The screen's one action, so it reads as a button. It opens the
+                    pricing page from a click handler, which App Bridge does not
+                    intercept (same approach as TopLevelAdminAction). */}
+                <s-button variant="primary" onClick={() => window.open(pricingUrl, "_top")}>
                   Choose a plan
-                </a>
-              </s-paragraph>
+                </s-button>
+                <s-text color="subdued">
+                  {/* Deliberately a plain <a target="_top"> -- see the comment
+                      above this return for why a primitive fallback stays. */}
+                  Button not working? <a href={pricingUrl} target="_top" rel="noreferrer">Open plans</a>
+                </s-text>
+              </s-stack>
             </s-stack>
           </s-section>
 
@@ -95,8 +101,11 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
-        <s-link href="/app">Workspace</s-link>
+        {/* rel="home" makes this the landing page and, per App Bridge, keeps it
+            out of the menu list: the app's name in the sidebar already goes here. */}
+        <s-link href="/app" rel="home">Workspace</s-link>
         <s-link href="/app/models">Models</s-link>
+        <s-link href="/app/additional">Help</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>
