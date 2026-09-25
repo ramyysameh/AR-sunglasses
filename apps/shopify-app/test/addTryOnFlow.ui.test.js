@@ -165,16 +165,33 @@ describe('AddTryOnFlow interactions', () => {
     })
 
     expect(button(flow, 'Select product')).toBeDefined()
-    expect(button(flow, 'Use Ready frames')).toBeUndefined()
+    expect(findComponent(flow, 'ModelPicker')).toBeNull()
   })
 
-  it('does not expose the product picker until a model exists', () => {
+  it('does not expose the product picker until a model is picked and confirmed', () => {
     let flow = AddTryOnFlow({ assets, open: true, onClose: vi.fn(), onPublished: vi.fn() })
     expect(button(flow, 'Select product')).toBeUndefined()
+    expect(button(flow, 'Continue').props.disabled).toBe(true)
 
-    button(flow, 'Use Ready frames').props.onClick()
+    findComponent(flow, 'ModelPicker').props.onChange('ready-model')
+    flow = AddTryOnFlow({ assets, open: true, onClose: vi.fn(), onPublished: vi.fn() })
+    // Picking selects; it does not jump ahead on its own.
+    expect(harness.reducerState).toMatchObject({ step: 'model', modelAsset: assets[0] })
+    expect(button(flow, 'Continue').props.disabled).toBe(false)
+
+    button(flow, 'Continue').props.onClick()
     flow = AddTryOnFlow({ assets, open: true, onClose: vi.fn(), onPublished: vi.fn() })
     expect(button(flow, 'Select product')).toBeDefined()
+    expect(flow.props.heading).toBe('Choose a product')
+  })
+
+  it('offers only ready models through the shared picker, not one 3D preview per model', () => {
+    const flow = AddTryOnFlow({ assets, open: true, onClose: vi.fn(), onPublished: vi.fn() })
+    const picker = findComponent(flow, 'ModelPicker')
+
+    expect(picker.props.assets.map((asset) => asset.id)).toEqual(['ready-model'])
+    expect(findComponent(flow, 'ModelViewer')).toBeNull()
+    expect(flow.props.heading).toBe('Choose a model')
   })
 
   it('uses a direct upload-first screen when the merchant has no models', () => {
@@ -182,7 +199,8 @@ describe('AddTryOnFlow interactions', () => {
 
     expect(flow.props.heading).toBe('Upload a model')
     expect(findElements(flow, 's-divider')).toHaveLength(0)
-    expect(button(flow, 'Use Ready frames')).toBeUndefined()
+    expect(findComponent(flow, 'ModelPicker')).toBeNull()
+    expect(button(flow, 'Continue')).toBeUndefined()
   })
 
   it('auto-selects a finalized embedded upload and advances to product selection', () => {

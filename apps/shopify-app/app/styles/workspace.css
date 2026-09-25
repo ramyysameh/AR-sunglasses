@@ -4,19 +4,12 @@
   padding-block: 16px 24px;
 }
 
-
-.workspace-guide-panel,
-.workspace-panel {
-  border: 1px solid #dedede;
-  border-radius: 6px;
-  background: #fff;
-}
+/* Cards come from Polaris (s-section, and s-box border="base" for the guide);
+   no hand-drawn panel borders here, which used to double up on the guide. */
 
 .workspace-setup-action {
   min-width: 160px;
 }
-
-.workspace-panel { overflow: hidden; }
 
 .workspace-summary {
   display: grid;
@@ -91,10 +84,6 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
-}
-
-.workspace-plan {
-  padding: 12px;
 }
 .workspace-plan-head {
   display: flex;

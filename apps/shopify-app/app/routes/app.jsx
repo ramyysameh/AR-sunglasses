@@ -101,7 +101,9 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
-        <s-link href="/app">Workspace</s-link>
+        {/* rel="home" makes this the landing page and, per App Bridge, keeps it
+            out of the menu list: the app's name in the sidebar already goes here. */}
+        <s-link href="/app" rel="home">Workspace</s-link>
         <s-link href="/app/models">Models</s-link>
         <s-link href="/app/additional">Help</s-link>
       </s-app-nav>

@@ -207,7 +207,8 @@ describe('Models UI behavior', () => {
     // links at the Workspace. The merchant-facing copy stays "Review fit"
     // (the status id is still `check_fit`) -- that wording matches the action
     // every review surface actually offers.
-    expect(html).toContain('href="/app"')
+    // "View products" opens the Workspace already searched for this model.
+    expect(html).toContain('href="/app?q=Pelmo%20black"')
     expect(html).toContain('Review fit')
     expect(html).not.toMatch(/Check fit/)
     expect(html).not.toMatch(/A1 pipeline|calibrat|manual anchor|geometric confidence/i)
@@ -342,5 +343,17 @@ describe('ModelPicker (assets shaped like the Models route loader)', () => {
     const html = renderToStaticMarkup(React.createElement(ModelPicker, { assets: [], value: '', onChange: vi.fn() }))
     expect(html).toContain('href="/app?add=1"')
     expect(html).not.toContain('href="/app/models"')
+  })
+
+  it('puts each card action in the action row and explains a missing Delete', () => {
+    const html = renderToStaticMarkup(React.createElement(Models))
+
+    // Ready, in-use model: Add try-on deep link, no Delete, and a reason why.
+    expect(html).toContain('<s-button href="/app?add=1&amp;model=used-model" accessibilityLabel="Add try-on with Pelmo black">Add try-on</s-button>')
+    expect(html).toContain('Remove it from those products to delete it.')
+    // Model that needs review: Review fit is a regular action, not squeezed
+    // into the heading row as a tertiary link.
+    expect(html).toMatch(/<s-button commandFor="review-model-fit" command="--show" accessibilityLabel="Review fit for aviator.glb">Review fit<\/s-button>/)
+    expect(html).not.toContain('accessibilityLabel="Add try-on with aviator.glb"')
   })
 })

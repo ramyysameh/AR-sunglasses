@@ -6,7 +6,7 @@ import { useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-ro
 import { authenticate } from '../shopify.server'
 import { handleProductAction } from '../productActions.server'
 import { loadWorkspace } from '../workspace.server'
-import { AddTryOnFlow } from '../components/AddTryOnFlow'
+import { AddTryOnFlow, isReady as isReadyModel } from '../components/AddTryOnFlow'
 import ModelFitReview from '../components/ModelFitReview'
 import ModelPicker from '../components/ModelPicker'
 import PlanUsage from '../components/PlanUsage'
@@ -98,6 +98,11 @@ export function ChangeModelDialog({ mapping, assets, onDone, session = 0 }) {
     && submission.productId === mapping?.productId
     && submission.modelAssetId === modelAssetId,
   )
+  // Same choice Add try-on offers (ready models only), plus the product's
+  // current model so the picker can show what is selected today.
+  const choosableAssets = assets.filter((asset) => (
+    isReadyModel(asset) || asset.id === mapping?.modelAssetId
+  ))
   const submitDisabled = !mapping
     || !modelAssetId
     || (modelAssetId === mapping.modelAssetId && !retryable)
@@ -141,7 +146,7 @@ export function ChangeModelDialog({ mapping, assets, onDone, session = 0 }) {
     <s-modal ref={modalRef} id="workspace-change-model" heading={`Change model for ${mapping?.product?.title ?? 'product'}`}>
       <s-stack direction="block" gap="base">
         <s-paragraph>Choose the frames shoppers should see for this product.</s-paragraph>
-        {mapping && <ModelPicker assets={assets} value={modelAssetId} onChange={selectModel} />}
+        {mapping && <ModelPicker assets={choosableAssets} value={modelAssetId} onChange={selectModel} />}
         {fetcher.data?.error && (
           <s-banner heading="Could not change model" tone="critical">{fetcher.data.error}</s-banner>
         )}
@@ -225,7 +230,9 @@ export default function Workspace() {
   const shopify = useAppBridge()
   const initialRequest = initialAddRequest(location.search, data.assets)
   const [status, setStatus] = useState('all')
-  const [query, setQuery] = useState('')
+  // Models' "View products" links here with ?q=<model name> so the list opens
+  // already narrowed to that model's products.
+  const [query, setQuery] = useState(new URLSearchParams(location.search).get('q') ?? '')
   const [addTryOnOpen, setAddTryOnOpen] = useState(initialRequest.open)
   const [initialModelId] = useState(initialRequest.modelId)
   const [previewMapping, setPreviewMapping] = useState(null)
@@ -313,7 +320,8 @@ export default function Workspace() {
         {hasOperations && (
           <>
             <WorkspaceFilters counts={data.counts} status={status} query={query} onStatusChange={setStatus} onQueryChange={setQuery} />
-            <section className="workspace-panel" aria-label="Product operations">
+            {/* A native Polaris card; padding="none" lets the table run to its edges. */}
+            <s-section padding="none" accessibilityLabel="Product operations">
               <ProductOperationsList
                 mappings={visibleMappings}
                 totalCount={data.mappings.length}
@@ -324,7 +332,7 @@ export default function Workspace() {
                 onReviewFit={openReviewFit}
                 onRemove={openRemove}
               />
-            </section>
+            </s-section>
           </>
         )}
       </div>

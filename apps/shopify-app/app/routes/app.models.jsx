@@ -407,9 +407,21 @@ export default function Models() {
                       <s-badge tone={asset.needsReview ? 'warning' : 'success'}>
                         {asset.needsReview ? 'Needs fit review' : 'Ready'}
                       </s-badge>
-                      {asset.needsReview && (
+                    </s-stack>
+                    {showFilename && <s-text color="subdued">{asset.filename}</s-text>}
+                    {asset.mappingCount > 0 ? (
+                      <s-text color="subdued">
+                        Used by {asset.mappingCount} product{asset.mappingCount === 1 ? '' : 's'}.{' '}
+                        <s-link href={`/app?q=${encodeURIComponent(displayName)}`}>View products</s-link>
+                        {/* Says why Delete is missing instead of just hiding it. */}
+                        {' '}Remove it from {asset.mappingCount === 1 ? 'that product' : 'those products'} to delete it.
+                      </s-text>
+                    ) : (
+                      <s-text color="subdued">Not used by any products</s-text>
+                    )}
+                    <s-stack direction="inline" gap="small-500">
+                      {asset.needsReview ? (
                         <s-button
-                          variant="tertiary"
                           commandFor="review-model-fit"
                           command="--show"
                           accessibilityLabel={`Review fit for ${displayName}`}
@@ -417,18 +429,14 @@ export default function Models() {
                         >
                           Review fit
                         </s-button>
+                      ) : (
+                        <s-button
+                          href={`/app?add=1&model=${encodeURIComponent(asset.id)}`}
+                          accessibilityLabel={`Add try-on with ${displayName}`}
+                        >
+                          Add try-on
+                        </s-button>
                       )}
-                    </s-stack>
-                    {showFilename && <s-text color="subdued">{asset.filename}</s-text>}
-                    {asset.mappingCount > 0 ? (
-                      <s-text color="subdued">
-                        Used by {asset.mappingCount} product{asset.mappingCount === 1 ? '' : 's'}.{' '}
-                        <s-link href="/app">View products</s-link>
-                      </s-text>
-                    ) : (
-                      <s-text color="subdued">Not used by any products</s-text>
-                    )}
-                    <s-stack direction="inline" gap="small-500">
                       <s-button
                         icon="edit"
                         onClick={() => dispatchRenameModal({ type: 'open', modelId: asset.id })}

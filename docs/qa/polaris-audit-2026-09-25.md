@@ -7,9 +7,24 @@
 
 ## Fix status
 
-Fixed on this branch: **#1** (fit review keeps its own status, warning tone, and a Review fit action), **#2** (Models has an Add try-on primary action and an upload button in its empty state, both via the existing `/app?add=1` deep link, and the picker copy points there too), **#3** (Help is in the nav and the Workspace aside), **#4** (row actions are secondary), **#7** (upload errors are in merchant language, with technical detail logged), **#9** (badges name states), **#10** (the row menu no longer repeats the row's button), **#13** (pluralization), **#18** (banner headings), and **#6** (the welcome screen's Choose a plan is a primary button, with the raw link kept as a fallback).
+**Fixed on this branch:**
+- **Pass 1:** #1, #2, #3, #4, #6, #7, #9, #10, #13, #18.
+- **Pass 2:**
+  - **#5 (partly):** the product table and plan meter are now `s-section` cards, and the doubled guide border and hand-drawn panel CSS are gone.
+  - **#8:** Add try-on and Change model both use `ModelPicker` and offer only ready models, plus the current model when changing.
+  - **#11 (Delete half):** in-use model cards say why there's no Delete.
+  - **#12:** "Step N of 3", one heading per step, Cancel instead of Close, and Continue after picking a model.
+  - **#14:** `rel="home"`, confirmed in `@shopify/app-bridge-types`.
+  - **#15:** ready model cards get **Add try-on** (`/app?add=1&model=…`), and "View products" opens the Workspace searched for that model (`/app?q=…`).
+  - **#19:** Review fit moved into the card's action row.
 
-Still open: #5, #8, #11, #12, #14–17, #19.
+**Deliberately left:**
+- **#5 (rest):** the status filter cards are still custom `<button>`s with hard-coded colors. Moving them into `s-table`'s filters slot changes the page layout, and that needs a live look first.
+- **#11 (Add try-on half):** it stays disabled at the plan limit. The plan meter directly below says "Upgrade to add more products" and has an Upgrade button, and adding a fourth route to pricing would undo an earlier deliberate cleanup.
+- **#16:** the unreachable `plan-limit` status is kept. It has explicit defensive tests.
+- **#17:** the native upload `<progress>` is kept. There's no Polaris web-component equivalent.
+
+**Needs a product decision:** reviewing a fit never clears "Needs fit review". The status depends only on the asset's readiness and confidence, and there's no "mark as reviewed" state.
 
 ## Scorecard
 

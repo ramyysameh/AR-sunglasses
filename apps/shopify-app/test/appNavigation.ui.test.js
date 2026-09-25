@@ -30,7 +30,7 @@ describe('app navigation', () => {
     expect(html.match(/<s-link /g)).toHaveLength(3)
     // Help was a routed page with no way to reach it.
     expect(html).toContain('<s-link href="/app/additional">Help</s-link>')
-    expect(html).toContain('<s-link href="/app">Workspace</s-link>')
+    expect(html).toContain('<s-link href="/app" rel="home">Workspace</s-link>')
     expect(html).toContain('<s-link href="/app/models">Models</s-link>')
   })
 })

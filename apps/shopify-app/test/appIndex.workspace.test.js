@@ -356,4 +356,13 @@ describe('Workspace route composition', () => {
     const html = renderToStaticMarkup(render(baseData()))
     expect(html).toContain('<s-link href="/app/additional">Help and troubleshooting</s-link>')
   })
+
+  it('opens with the search from ?q= so Models can link to one model\'s products', () => {
+    const page = render(baseData({
+      mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }],
+      counts: { all: 1, live: 1, needsAttention: 0 },
+    }), '?q=Pelmo')
+    const filters = findElements(page, WorkspaceFilters)[0]
+    expect(filters.props.query).toBe('Pelmo')
+  })
 })
