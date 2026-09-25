@@ -30,9 +30,11 @@ function isReady(asset) {
   return typeof asset.status === 'string' && asset.status.toLowerCase() === 'ready'
 }
 
-export function initialAddRequest(search, assets) {
+export function initialAddRequest(search, assets, atLimit = false) {
   const params = new URLSearchParams(search)
-  if (params.get('add') !== '1') return { open: false, modelId: undefined }
+  // At the plan limit the flow can only end in a failed publish; the page's
+  // plan meter carries the upgrade action instead.
+  if (params.get('add') !== '1' || atLimit) return { open: false, modelId: undefined }
   const requestedId = params.get('model')
   const modelId = assets.some((asset) => asset.id === requestedId && isReady(asset))
     ? requestedId
@@ -228,7 +230,7 @@ export default function Workspace() {
   const location = useLocation()
   const revalidator = useRevalidator()
   const shopify = useAppBridge()
-  const initialRequest = initialAddRequest(location.search, data.assets)
+  const initialRequest = initialAddRequest(location.search, data.assets, data.usage?.atLimit)
   const [status, setStatus] = useState('all')
   // Models' "View products" links here with ?q=<model name> so the list opens
   // already narrowed to that model's products.

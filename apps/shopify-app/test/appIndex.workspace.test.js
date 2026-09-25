@@ -248,6 +248,9 @@ describe('Workspace route composition', () => {
       .toEqual({ open: true, modelId: undefined })
     expect(initialAddRequest('?add=1&model=uppercase', [{ id: 'uppercase', status: 'READY' }]))
       .toEqual({ open: true, modelId: 'uppercase' })
+    // At the plan limit the deep link does not open a flow that can only fail.
+    expect(initialAddRequest('?add=1&model=ready-model', [readyAsset], true))
+      .toEqual({ open: false, modelId: undefined })
     expect(initialAddRequest('?model=ready-model', [readyAsset])).toEqual({ open: false, modelId: undefined })
   })
 

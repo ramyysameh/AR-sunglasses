@@ -24,7 +24,11 @@
 - **#16:** the unreachable `plan-limit` status is kept. It has explicit defensive tests.
 - **#17:** the native upload `<progress>` is kept. There's no Polaris web-component equivalent.
 
-**Needs a product decision:** reviewing a fit never clears "Needs fit review". The status depends only on the asset's readiness and confidence, and there's no "mark as reviewed" state.
+**Dropped for now:** a "mark as reviewed" action. "Needs fit review" still depends only on the asset's readiness and confidence, so a merchant who reviews a fit and is happy with it keeps seeing the status.
+
+**Follow-up fixed:** at the plan limit, Models swaps its Add try-on buttons for **Upgrade plan**, and the Workspace ignores the `?add=1` deep link. Before, both opened a flow whose publish could only fail.
+
+**Still needs a live, authenticated admin session:** layout checks at 320px, 768px, and desktop width; keyboard-only testing of the guide, table, filters, row menus, and every modal (including focus return); and confirming that in-app `s-button href` navigation and the review-fit → change-model handoff work in App Bridge.
 
 ## Scorecard
 

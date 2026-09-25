@@ -356,4 +356,15 @@ describe('ModelPicker (assets shaped like the Models route loader)', () => {
     expect(html).toMatch(/<s-button commandFor="review-model-fit" command="--show" accessibilityLabel="Review fit for aviator.glb">Review fit<\/s-button>/)
     expect(html).not.toContain('accessibilityLabel="Add try-on with aviator.glb"')
   })
+
+  it('offers an upgrade instead of Add try-on at the plan limit', () => {
+    routeState.loaderData = { ...routeState.loaderData, atLimit: true, pricingUrl: '/plans' }
+    const html = renderToStaticMarkup(React.createElement(Models))
+
+    expect(html).toContain('>Upgrade plan</s-button>')
+    expect(html).toMatch(/<s-button slot="primary-action"[^>]*accessibilityLabel="Upgrade plan to add try-on to more products"/)
+    expect(html).not.toContain('/app?add=1')
+    // Review fit is not an add, so it stays available.
+    expect(html).toContain('>Review fit</s-button>')
+  })
 })

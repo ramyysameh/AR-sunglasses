@@ -8,6 +8,7 @@ import prisma from '../db.server'
 import { getActivePlanName } from '../billing.server'
 import { deleteModelGlb } from '../storage.server'
 import { themeEditorUrl } from '../adminLinks.server'
+import { planUsage } from '../planUsage.server'
 // A .server.js import used only inside the loader below (never referenced
 // from the component body) is stripped from the client bundle by the
 // `.server.js` naming convention -- same pattern app.products.jsx already
@@ -18,6 +19,7 @@ import { themeEditorUrl } from '../adminLinks.server'
 import { needsFitReview } from '../tryonStatus.server'
 import ModelViewer from '../components/ModelViewer'
 import ModelFitReview from '../components/ModelFitReview'
+import TopLevelAdminAction from '../components/TopLevelAdminAction'
 import {
   attachDropRejectedListener,
   createUploadCancellationCoordinator,
@@ -51,14 +53,22 @@ export const loader = async ({ request }) => {
   // (App Store rejection Ref 127328).
   const activePlan = await getActivePlanName(admin, session.shop)
   if (!activePlan) {
-    return { assets: [], themeUrl }
+    return { assets: [], themeUrl, atLimit: false, pricingUrl: null }
   }
-  const assets = await prisma.modelAsset.findMany({
-    where: { shop: session.shop },
-    orderBy: { createdAt: 'desc' },
-    include: { _count: { select: { mappings: true } } },
-  })
+  const [assets, used] = await Promise.all([
+    prisma.modelAsset.findMany({
+      where: { shop: session.shop },
+      orderBy: { createdAt: 'desc' },
+      include: { _count: { select: { mappings: true } } },
+    }),
+    prisma.productMapping.count({ where: { shop: session.shop } }),
+  ])
+  // Same limit the Workspace enforces: at the limit, "Add try-on" here would
+  // open a flow whose publish can only fail, so the page offers the upgrade.
+  const usage = planUsage({ planName: activePlan, used, shop: session.shop })
   return {
+    atLimit: usage.atLimit,
+    pricingUrl: usage.pricingUrl,
     assets: assets.map(({ _count, ...a }) => ({
       ...a,
       mappingCount: _count.mappings,
@@ -330,7 +340,7 @@ function ReviewFitModal({ asset, themeUrl, session, onDismiss }) {
 }
 
 export default function Models() {
-  const { assets, themeUrl } = useLoaderData()
+  const { assets, themeUrl, atLimit = false, pricingUrl = null } = useLoaderData()
   const shopify = useAppBridge()
   const [renameModal, dispatchRenameModal] = useReducer(modalSessionReducer, {
     modelId: null,
@@ -360,9 +370,15 @@ export default function Models() {
       {/* Models are uploaded inside Add try-on (Models is a library, not an
           upload surface). The ?add=1 deep link opens that flow, whose first step
           offers an upload, so this page always has a way forward. */}
-      <s-button slot="primary-action" href={ADD_TRY_ON_HREF}>
-        Add try-on
-      </s-button>
+      {atLimit ? (
+        <TopLevelAdminAction slot="primary-action" href={pricingUrl} accessibilityLabel="Upgrade plan to add try-on to more products">
+          Upgrade plan
+        </TopLevelAdminAction>
+      ) : (
+        <s-button slot="primary-action" href={ADD_TRY_ON_HREF}>
+          Add try-on
+        </s-button>
+      )}
       <s-section heading="Model library">
         {assets.length === 0 ? (
           <s-stack direction="block" gap="base">
@@ -429,7 +445,7 @@ export default function Models() {
                         >
                           Review fit
                         </s-button>
-                      ) : (
+                      ) : !atLimit && (
                         <s-button
                           href={`/app?add=1&model=${encodeURIComponent(asset.id)}`}
                           accessibilityLabel={`Add try-on with ${displayName}`}
