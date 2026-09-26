@@ -54,8 +54,10 @@ export function addTryOnReducer(state, action) {
   }
 }
 
+// A flagged model the merchant reviewed and accepted is ready to use too;
+// otherwise Models would call it Ready while the pickers left it out.
 export function isReady(asset) {
-  return !asset.status || asset.status.toLowerCase() === 'ready'
+  return !asset.status || asset.status.toLowerCase() === 'ready' || Boolean(asset.fitReviewedAt)
 }
 
 export function modelName(asset) {

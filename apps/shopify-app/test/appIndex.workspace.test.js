@@ -7,6 +7,7 @@ import ProductOperationsList, { primaryActionFor } from '../app/components/Produ
 import { AddTryOnFlow } from '../app/components/AddTryOnFlow.jsx'
 import TopLevelAdminAction from '../app/components/TopLevelAdminAction.jsx'
 import PlanUsage from '../app/components/PlanUsage.jsx'
+import ModelFitReview from '../app/components/ModelFitReview.jsx'
 
 const harness = vi.hoisted(() => ({
   data: null,
@@ -18,6 +19,7 @@ const harness = vi.hoisted(() => ({
   fetcher: {
     data: null,
     state: 'idle',
+    submit: vi.fn(),
     // eslint-disable-next-line react/prop-types -- lightweight fetcher form double
     Form: ({ children, ...props }) => React.createElement('form', props, children),
   },
@@ -28,6 +30,7 @@ const harness = vi.hoisted(() => ({
 vi.mock('react', async (importOriginal) => ({
   ...(await importOriginal()),
   useCallback: (callback) => callback,
+  useEffect: () => undefined,
   useRef: (initial) => {
     const index = harness.stateIndex++
     if (harness.state[index] === undefined) harness.state[index] = { current: initial }
@@ -104,6 +107,7 @@ beforeEach(() => {
   harness.state = []
   harness.stateIndex = 0
   harness.revalidate.mockReset()
+  harness.fetcher.submit.mockReset()
   harness.toast.mockReset()
   harness.modalShow.mockReset()
   harness.modalHide.mockReset()
@@ -248,6 +252,9 @@ describe('Workspace route composition', () => {
       .toEqual({ open: true, modelId: undefined })
     expect(initialAddRequest('?add=1&model=uppercase', [{ id: 'uppercase', status: 'READY' }]))
       .toEqual({ open: true, modelId: 'uppercase' })
+    // A flagged model the merchant reviewed can be handed off like a ready one.
+    expect(initialAddRequest('?add=1&model=reviewed', [{ id: 'reviewed', status: 'needs_manual', fitReviewedAt: '2026-09-20' }]))
+      .toEqual({ open: true, modelId: 'reviewed' })
     // At the plan limit the deep link does not open a flow that can only fail.
     expect(initialAddRequest('?add=1&model=ready-model', [readyAsset], true))
       .toEqual({ open: false, modelId: undefined })
@@ -303,8 +310,15 @@ describe('Workspace route composition', () => {
   ])('keeps setup focused and adds operations only when there are mapped products for %s merchants', (_state, data, hasOperations = true) => {
     const page = render(data)
     expect(findComponent(page, WorkspaceGuide)).toBeDefined()
-    expect(Boolean(findComponent(page, WorkspaceFilters))).toBe(hasOperations)
-    expect(Boolean(findComponent(page, ProductOperationsList))).toBe(hasOperations)
+    const list = findComponent(page, ProductOperationsList)
+    expect(Boolean(list)).toBe(hasOperations)
+    // Filters render inside the table's own filter bar, not above the card.
+    expect(findComponent(page, WorkspaceFilters)).toBeUndefined()
+    if (hasOperations) {
+      const filters = list.props.renderFilters('filters')
+      expect(filters.type).toBe(WorkspaceFilters)
+      expect(filters.props.slot).toBe('filters')
+    }
     expect(findComponent(page, AddTryOnFlow)).toBeDefined()
   })
 
@@ -347,9 +361,20 @@ describe('Workspace route composition', () => {
     expect(dialog.props.id).toBe('workspace-review-fit')
     expect(dialog.props.heading).toBe('Review fit for Aria')
     expect(html).toContain('Review the fit')
-    const review = [dialog.props.children].flat(Infinity).find((child) => child?.props?.modelAssetId)
+    const review = findComponent(dialog, ModelFitReview)
     expect(review.props).toMatchObject({ modelAssetId: 'asset-1', themeUrl: '/theme' })
-    const swap = findElements(dialog, 's-button').find((button) => button.props.children === 'Choose a different model')
+    const buttons = findElements(dialog, 's-button')
+    // Accepting the fit is the primary outcome of a review.
+    const accept = buttons.find((button) => button.props.slot === 'primary-action')
+    expect(accept.props.children).toBe('Mark as reviewed')
+    accept.props.onClick()
+    expect(harness.fetcher.submit).toHaveBeenCalledWith(
+      { intent: 'mark-fit-reviewed', modelAssetId: 'asset-1' },
+      { method: 'POST' },
+    )
+
+    const swap = buttons.find((button) => button.props.children === 'Choose a different model')
+    expect(swap.props.slot).toBe('secondary-actions')
     swap.props.onClick()
     expect(harness.modalHide).toHaveBeenCalledWith('workspace-review-fit')
     expect(onChooseModel).toHaveBeenCalledWith(mapping)
@@ -365,7 +390,7 @@ describe('Workspace route composition', () => {
       mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }],
       counts: { all: 1, live: 1, needsAttention: 0 },
     }), '?q=Pelmo')
-    const filters = findElements(page, WorkspaceFilters)[0]
+    const filters = findComponent(page, ProductOperationsList).props.renderFilters('filters')
     expect(filters.props.query).toBe('Pelmo')
   })
 })

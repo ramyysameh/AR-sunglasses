@@ -64,7 +64,8 @@ export default function HelpPage() {
         <s-paragraph>
           Use a .glb file no larger than 25 MB. If the upload finishes with a
           Needs fit review status instead of Ready, open it on the Models page and
-          use Review fit to check its scale before assigning it to products.
+          use Review fit to check its scale. Once it looks right, choose Mark as
+          reviewed.
         </s-paragraph>
         <s-paragraph>
           <s-link href="/app/models">Open Models</s-link>

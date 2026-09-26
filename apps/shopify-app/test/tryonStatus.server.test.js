@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { productStatus } from '../app/tryonStatus.server.js'
+import { needsFitReview, productStatus } from '../app/tryonStatus.server.js'
 
 const seen = new Date('2026-09-01T00:00:00Z')
 const ready = { status: 'ready', confidence: 0.9 }
@@ -82,5 +82,24 @@ describe('productStatus', () => {
     for (const word of ['geometric', 'confidence', 'anchor', 'calibrat', 'needs_manual']) {
       expect(labels).not.toContain(word)
     }
+  })
+})
+
+describe('needsFitReview once the merchant has reviewed the fit', () => {
+  const reviewedAt = new Date('2026-09-20T00:00:00Z')
+
+  it.each([
+    ['a model that needs manual review', { status: 'needs_manual', confidence: 0.9 }],
+    ['a low-confidence ready model', { status: 'ready', confidence: 0.2 }],
+  ])('clears for %s', (_label, asset) => {
+    expect(needsFitReview(asset)).toBe(true)
+    expect(needsFitReview({ ...asset, fitReviewedAt: reviewedAt })).toBe(false)
+  })
+
+  it('lets a reviewed product move on to its theme or live status', () => {
+    const flagged = { status: 'needs_manual', confidence: 0.9 }
+    expect(productStatus({ blockSeenAt: seen, modelAsset: flagged })).toMatchObject({ id: 'check_fit' })
+    expect(productStatus({ blockSeenAt: seen, modelAsset: { ...flagged, fitReviewedAt: reviewedAt } }))
+      .toMatchObject({ id: 'live' })
   })
 })

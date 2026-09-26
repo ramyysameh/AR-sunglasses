@@ -81,6 +81,21 @@ export async function mapProductToModel(prisma, shop, productId, modelAssetId, p
   })
 }
 
+/**
+ * Record that the merchant reviewed a model's fit and accepted it, which
+ * clears "Needs fit review" (tryonStatus.server.js). Scoped to the shop: an id
+ * from another shop matches nothing.
+ * @returns {Promise<boolean>} whether a model was updated
+ */
+export async function markFitReviewed(prisma, shop, modelAssetId, now = new Date()) {
+  if (typeof modelAssetId !== 'string' || !modelAssetId) return false
+  const { count } = await prisma.modelAsset.updateMany({
+    where: { id: modelAssetId, shop },
+    data: { fitReviewedAt: now },
+  })
+  return count > 0
+}
+
 export async function listMappings(prisma, shop) {
   return prisma.productMapping.findMany({
     where: { shop },

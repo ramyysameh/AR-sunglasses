@@ -367,4 +367,10 @@ describe('ModelPicker (assets shaped like the Models route loader)', () => {
     // Review fit is not an add, so it stays available.
     expect(html).toContain('>Review fit</s-button>')
   })
+
+  it('lets the merchant accept a reviewed fit from the Models review dialog', () => {
+    const html = renderToStaticMarkup(React.createElement(Models))
+    const modal = html.slice(html.indexOf('<s-modal id="review-model-fit"'))
+    expect(modal).toMatch(/<s-button slot="primary-action" variant="primary"[^>]*>Mark as reviewed<\/s-button>/)
+  })
 })

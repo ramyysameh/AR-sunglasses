@@ -54,6 +54,9 @@ model ModelAsset {
   fitMetadata Json
   confidence  Float?
   status      String   @default("ready")
+  // Set when the merchant reviewed a flagged fit and accepted it; clears
+  // "Needs fit review" (tryonStatus.server.js's needsFitReview).
+  fitReviewedAt DateTime?
   createdAt   DateTime @default(now())
   mappings    ProductMapping[]
 
