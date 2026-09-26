@@ -7,6 +7,7 @@ import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
 import { getActivePlanName } from '../billing.server'
 import { deleteModelGlb } from '../storage.server'
+import { markFitReviewed } from '../models.server'
 import { themeEditorUrl } from '../adminLinks.server'
 import { planUsage } from '../planUsage.server'
 // A .server.js import used only inside the loader below (never referenced
@@ -19,6 +20,7 @@ import { planUsage } from '../planUsage.server'
 import { needsFitReview } from '../tryonStatus.server'
 import ModelViewer from '../components/ModelViewer'
 import ModelFitReview from '../components/ModelFitReview'
+import { useMarkFitReviewed } from '../components/useMarkFitReviewed'
 import TopLevelAdminAction from '../components/TopLevelAdminAction'
 import {
   attachDropRejectedListener,
@@ -98,6 +100,11 @@ export const action = async ({ request }) => {
     })
     if (count === 0) return { error: 'That model no longer exists.' }
     return { renamed: true }
+  }
+
+  if (intent === 'mark-fit-reviewed') {
+    const reviewed = await markFitReviewed(prisma, session.shop, form.get('modelAssetId')?.toString())
+    return reviewed ? { fitReviewed: true } : { error: 'That model no longer exists.' }
   }
 
   if (intent === 'delete') {
@@ -324,6 +331,7 @@ function ReviewFitModalContent({ asset, themeUrl }) {
 
 function ReviewFitModal({ asset, themeUrl, session, onDismiss }) {
   const modalRef = useModalEvents({ onAfterHide: onDismiss })
+  const markReviewed = useMarkFitReviewed('review-model-fit')
 
   return (
     <s-modal
@@ -331,9 +339,23 @@ function ReviewFitModal({ asset, themeUrl, session, onDismiss }) {
       id="review-model-fit"
       heading={asset ? `Review fit for ${modelName(asset)}` : 'Review fit'}
     >
-      <ReviewFitModalContent key={session} asset={asset} themeUrl={themeUrl} />
+      <s-stack direction="block" gap="base">
+        <ReviewFitModalContent key={session} asset={asset} themeUrl={themeUrl} />
+        {markReviewed.error && (
+          <s-banner heading="Could not mark fit as reviewed" tone="critical">{markReviewed.error}</s-banner>
+        )}
+      </s-stack>
       <s-button slot="secondary-actions" commandFor="review-model-fit" command="--hide">
         Close
+      </s-button>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        disabled={!asset || markReviewed.busy}
+        {...(markReviewed.busy ? { loading: true } : {})}
+        onClick={() => markReviewed.submit(asset?.id)}
+      >
+        Mark as reviewed
       </s-button>
     </s-modal>
   )

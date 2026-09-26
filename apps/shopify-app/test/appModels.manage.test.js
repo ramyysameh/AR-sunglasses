@@ -19,7 +19,7 @@ vi.mock('../app/shopify.server.js', () => ({
 vi.mock('../app/storage.server.js', () => ({ deleteModelGlb: async () => {} }))
 
 const prisma = (await import('../app/db.server.js')).default
-const { action } = await import('../app/routes/app.models.jsx')
+const { action, loader } = await import('../app/routes/app.models.jsx')
 
 const post = (fields) =>
   action({ request: new Request('https://x/app/models', { method: 'POST', body: new URLSearchParams(fields) }) })
@@ -68,5 +68,27 @@ describe('models delete', () => {
     const res = await post({ intent: 'delete', modelAssetId: assetId })
     expect(res.error).toMatch(/1 product/)
     expect(await prisma.modelAsset.findUnique({ where: { id: assetId } })).not.toBeNull()
+  })
+})
+
+describe('models mark fit reviewed', () => {
+  it('clears Needs fit review for the model', async () => {
+    await prisma.modelAsset.update({ where: { id: assetId }, data: { status: 'needs_manual' } })
+    expect((await loader({ request: new Request('https://x/app/models') })).assets[0].needsReview).toBe(true)
+
+    expect(await post({ intent: 'mark-fit-reviewed', modelAssetId: assetId })).toEqual({ fitReviewed: true })
+
+    expect((await prisma.modelAsset.findUnique({ where: { id: assetId } })).fitReviewedAt).toBeInstanceOf(Date)
+    expect((await loader({ request: new Request('https://x/app/models') })).assets[0].needsReview).toBe(false)
+  })
+
+  it('refuses a model from another shop and leaves it flagged', async () => {
+    const other = await prisma.modelAsset.create({
+      data: { shop: `other-${tag}.myshopify.com`, storageRef: `${tag}/r.glb`, fitMetadata: {}, status: 'needs_manual' },
+    })
+    expect(await post({ intent: 'mark-fit-reviewed', modelAssetId: other.id }))
+      .toEqual({ error: 'That model no longer exists.' })
+    expect((await prisma.modelAsset.findUnique({ where: { id: other.id } })).fitReviewedAt).toBeNull()
+    await prisma.modelAsset.delete({ where: { id: other.id } })
   })
 })

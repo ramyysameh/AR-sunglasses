@@ -325,4 +325,13 @@ describe('AddTryOnFlow interactions', () => {
     expect(findComponent(flow, 'PreviewPanel').props.showPhonePreview).toBe(false)
     expect(button(flow, 'Publish try-on').props.slot).toBe('primary-action')
   })
+
+  it('offers a flagged model once its fit was reviewed', () => {
+    const reviewed = { id: 'reviewed-model', label: 'Reviewed frames', status: 'needs_manual', fitReviewedAt: '2026-09-20T00:00:00Z' }
+    const flow = AddTryOnFlow({ assets: [...assets, reviewed], open: true, onClose: vi.fn(), onPublished: vi.fn() })
+
+    expect(findComponent(flow, 'ModelPicker').props.assets.map((asset) => asset.id))
+      .toEqual(['ready-model', 'reviewed-model'])
+    expect(initialModelAsset([reviewed], 'reviewed-model')).toEqual(reviewed)
+  })
 })

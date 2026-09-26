@@ -15,10 +15,15 @@ export const LOW_CONFIDENCE = 0.6
  * the other. Exported standalone (not just embedded in productStatus)
  * because the Models loader has a bare asset, not a `{ mapping }` with
  * `lastSeenLiveAt` -- it has no use for the rest of productStatus's shape.
- * @param {{ status: string, confidence?: number|null }} asset
+ *
+ * Once the merchant reviews the fit and accepts it (`fitReviewedAt`), the
+ * question is answered and the model no longer needs review. The storefront
+ * serves the model either way; this only drives what the admin asks for.
+ * @param {{ status: string, confidence?: number|null, fitReviewedAt?: Date|string|null }} asset
  * @returns {boolean}
  */
 export function needsFitReview(asset) {
+  if (asset.fitReviewedAt) return false
   const lowConfidence = typeof asset.confidence === 'number' && asset.confidence < LOW_CONFIDENCE
   return asset.status !== 'ready' || lowConfidence
 }

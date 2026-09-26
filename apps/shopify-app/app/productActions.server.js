@@ -1,5 +1,5 @@
 import prisma from './db.server'
-import { mapProductToModel } from './models.server'
+import { mapProductToModel, markFitReviewed } from './models.server'
 import { publishMapping, unpublishMapping } from './tryonMetafield.server'
 import { deleteMappingWithRecovery } from './productMappingRecovery.server'
 import { getActivePlanName, planLimit } from './billing.server'
@@ -56,6 +56,11 @@ export async function handleProductAction({ request, admin, shop }) {
       }
     }
     return { mapped: true }
+  }
+
+  if (intent === 'mark-fit-reviewed') {
+    const reviewed = await markFitReviewed(prisma, shop, form.get('modelAssetId')?.toString())
+    return reviewed ? { fitReviewed: true } : { error: 'That model no longer exists.' }
   }
 
   if (intent !== 'unmap') {

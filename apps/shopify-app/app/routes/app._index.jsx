@@ -8,6 +8,7 @@ import { handleProductAction } from '../productActions.server'
 import { loadWorkspace } from '../workspace.server'
 import { AddTryOnFlow, isReady as isReadyModel } from '../components/AddTryOnFlow'
 import ModelFitReview from '../components/ModelFitReview'
+import { useMarkFitReviewed } from '../components/useMarkFitReviewed'
 import ModelPicker from '../components/ModelPicker'
 import PlanUsage from '../components/PlanUsage'
 import PreviewPanel from '../components/PreviewPanel'
@@ -27,6 +28,7 @@ function resolveEngineUrl(request) {
 }
 
 function isReady(asset) {
+  if (asset.fitReviewedAt) return true
   return typeof asset.status === 'string' && asset.status.toLowerCase() === 'ready'
 }
 
@@ -207,6 +209,7 @@ export function RemoveTryOnDialog({ mapping, onDone }) {
 // here rather than only in the row menu.
 export function ReviewFitDialog({ mapping, themeUrl, onChooseModel }) {
   const shopify = useAppBridge()
+  const markReviewed = useMarkFitReviewed('workspace-review-fit')
 
   const chooseModel = () => {
     if (!mapping) return
@@ -216,10 +219,27 @@ export function ReviewFitDialog({ mapping, themeUrl, onChooseModel }) {
 
   return (
     <s-modal id="workspace-review-fit" heading={`Review fit for ${mapping?.product?.title ?? 'product'}`}>
-      {mapping && <ModelFitReview modelAssetId={mapping.modelAssetId} themeUrl={themeUrl} />}
+      <s-stack direction="block" gap="base">
+        {mapping && <ModelFitReview modelAssetId={mapping.modelAssetId} themeUrl={themeUrl} />}
+        {markReviewed.error && (
+          <s-banner heading="Could not mark fit as reviewed" tone="critical">{markReviewed.error}</s-banner>
+        )}
+      </s-stack>
       <s-button slot="secondary-actions" commandFor="workspace-review-fit" command="--hide">Close</s-button>
-      <s-button slot="primary-action" disabled={!mapping} onClick={chooseModel}>
+      <s-button slot="secondary-actions" disabled={!mapping} onClick={chooseModel}>
         Choose a different model
+      </s-button>
+      {/* Accepting the fit is the common outcome of a review, so it is the
+          primary action; it clears "Needs fit review" for every product using
+          this model. */}
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        disabled={!mapping || markReviewed.busy}
+        {...(markReviewed.busy ? { loading: true } : {})}
+        onClick={() => markReviewed.submit(mapping?.modelAssetId)}
+      >
+        Mark as reviewed
       </s-button>
     </s-modal>
   )

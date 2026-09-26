@@ -25,13 +25,27 @@
 - **#16:** the unreachable `plan-limit` status is kept. It has explicit defensive tests.
 - **#17:** the native upload `<progress>` is kept. There's no Polaris web-component equivalent.
 
-**Dropped for now:** a "mark as reviewed" action. "Needs fit review" still depends only on the asset's readiness and confidence, so a merchant who reviews a fit and is happy with it keeps seeing the status.
-
-**Follow-up fixed:** at the plan limit, Models swaps its Add try-on buttons for **Upgrade plan**, and the Workspace ignores the `?add=1` deep link. Before, both opened a flow whose publish could only fail.
+**Pass 4, mark as reviewed:** both review dialogs (Workspace and Models) have a primary **Mark as reviewed** action. It sets a new `ModelAsset.fitReviewedAt` (migration `20260926000000_model_fit_reviewed`), and `needsFitReview` stops flagging a reviewed model. That clears "Needs fit review" on every product using the model, and lets the model appear in the Add try-on and Change model pickers. The action is shop-scoped. The storefront is unaffected, because `getTryonConfig` serves a mapped model whatever its status.
 
 **Still needs a live, authenticated admin session:** layout checks at 320px, 768px, and desktop width; keyboard-only testing of the guide, table, filters, row menus, and every modal (including focus return); and confirming that in-app `s-button href` navigation and the review-fit → change-model handoff work in App Bridge.
 
-## Scorecard
+## Rescore — 2026-09-26
+
+Source-level, after passes 1–4. There was still no authenticated admin session, and this environment's network policy blocks `cdn.shopify.com`, so the Polaris runtime couldn't be loaded to render pages in a browser either.
+
+| Pillar | Baseline | Now | Why |
+|---|---:|---:|---|
+| Shopify-native visual system | 2 | 4 | Every surface is a Polaris component (sections, table, filter bar, select, search). The only custom CSS left is the plan meter, which has no Polaris equivalent. |
+| Information hierarchy | 2 | 4 | One primary action per page. Row actions are secondary, badges name states, and no action repeats within a row. |
+| Merchant journey & task clarity | 2 | 4 | No dead ends or unreachable pages. Recovery actions match the problem, plan-limit paths lead to Upgrade, and "Needs fit review" can now be resolved. |
+| Interaction & feedback | 3 | 4 | Errors are in merchant language and every banner has a heading. Failures keep the merchant's work and offer a retry, and Add try-on has explicit steps. |
+| Responsive behavior | 3 | 3 | Structurally sound: `listSlot`, auto-fit grid, table filters slot. Not observed at 320px, 768px, or desktop width. |
+| Accessibility | 3 | 3 | Labelled fields, no custom controls, Polaris-drawn focus. Keyboard-only use and focus return haven't been observed. |
+| **Total** | **15** | **22** | |
+
+The last two points need observation, not code: the live checks below. No known defect holds either pillar down.
+
+## Scorecard (baseline, 2026-09-25)
 
 | Pillar | Score | One-line reason |
 |---|---:|---|
