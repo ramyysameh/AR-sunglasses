@@ -24,6 +24,13 @@
   path, because then we cannot know the app's origin and a guessed URL would be
   worse than no signal.
 {% endcomment %}
+{% comment %}
+  Ties each button to its own dialog for the declarative commandfor/command
+  attributes below. Section + block id, so the same block rendered twice on one
+  page (a quick-view drawer beside the main product) still gets distinct ids.
+{% endcomment %}
+{% assign dialog_id = 'ar-tryon-dialog-' | append: section.id | append: '-' | append: block.id %}
+
 {% assign app_origin = '' %}
 {% if block.settings.engine_url contains '/tryon/' %}
   {% assign app_origin = block.settings.engine_url | split: '/tryon/' | first %}
@@ -39,7 +46,7 @@
   {% endif %}
   {{ block.shopify_attributes }}
 >
-  <button class="ar-tryon__open" type="button">
+  <button class="ar-tryon__open" type="button" commandfor="{{ dialog_id }}" command="show-modal">
     <svg class="ar-tryon__open-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3h5Z"></path>
       <circle cx="12" cy="13" r="3"></circle>
@@ -47,8 +54,8 @@
     <span>{{ block.settings.button_label | default: 'Try on' }}</span>
   </button>
 
-  <dialog class="ar-tryon__dialog" aria-label="Sunglasses virtual try-on">
-    <button class="ar-tryon__close" type="button" aria-label="Close try-on">
+  <dialog id="{{ dialog_id }}" class="ar-tryon__dialog" aria-label="Sunglasses virtual try-on">
+    <button class="ar-tryon__close" type="button" aria-label="Close try-on" commandfor="{{ dialog_id }}" command="close">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="m18 6-12 12M6 6l12 12"></path>
       </svg>
@@ -68,7 +75,38 @@
 
 <script>
   (() => {
-    const root = document.currentScript.previousElementSibling
+    // Opening and closing must not depend on this script running for THIS
+    // copy of the markup. Themes re-render the product section on variant
+    // change (section rendering API) and some navigate between pages without
+    // a full load; both insert fresh markup whose inline script never runs, so
+    // a listener bound here left the new button dead until a refresh.
+    //
+    // The buttons carry commandfor/command, which open the dialog with no
+    // script at all. For browsers without Invoker Commands, one click listener
+    // on the document covers every button that ever appears on the page --
+    // installed once, by whichever block instance runs first.
+    if (!window.__arTryonWired) {
+      window.__arTryonWired = true
+      const nativeCommands = 'command' in HTMLButtonElement.prototype
+      document.addEventListener('click', (event) => {
+        if (nativeCommands) return
+        const trigger = event.target instanceof Element
+          ? event.target.closest('.ar-tryon__open, .ar-tryon__close')
+          : null
+        if (!trigger) return
+        const root = trigger.closest('.ar-tryon')
+        const dialog = root && root.querySelector('.ar-tryon__dialog')
+        if (!dialog) return
+        if (trigger.classList.contains('ar-tryon__close')) dialog.close()
+        else if (!dialog.open) dialog.showModal()
+      })
+    }
+
+    // Null when this script was inserted after parsing, e.g. by a theme that
+    // re-creates script tags after swapping in new section HTML.
+    const script = document.currentScript
+    const root = script && script.previousElementSibling
+    if (!root || !root.classList.contains('ar-tryon')) return
 
     // The admin's "Add to theme" deep link carries addAppBlockId, which ADDS an
     // instance of this block every time it is followed -- Shopify offers no
@@ -91,10 +129,6 @@
       }
       return
     }
-
-    const dialog = root.querySelector('.ar-tryon__dialog')
-    root.querySelector('.ar-tryon__open').addEventListener('click', () => dialog.showModal())
-    root.querySelector('.ar-tryon__close').addEventListener('click', () => dialog.close())
 
     // Report that the button is on the storefront. Without this the app can
     // only observe a shopper CLICKING try-on -- the engine iframe is lazy and
