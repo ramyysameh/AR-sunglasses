@@ -25,3 +25,7 @@ public/calibrated/
 # (scripts/verify-raw-passthrough.mjs, ?model=). Customer assets and several MB
 # each -- kept on disk, never committed.
 public/models/_*.glb
+
+# MediaPipe wasm, copied from node_modules by scripts/copy-mediapipe.mjs before
+# dev/build. The built copy under apps/shopify-app/public/tryon/ is committed.
+public/mediapipe/*/

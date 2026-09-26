@@ -54,7 +54,10 @@ uri = "/webhooks/shop/redact"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products,write_metaobjects,write_metaobject_definitions"
+# write_products only: it covers the product metafields that gate the theme
+# block and the product lookups. The app-data metafield (app installation owner)
+# needs no scope. Nothing uses metaobjects, and App Review rejects unused scopes.
+scopes = "write_products"
 
 [auth]
 # Path is /auth/callback, not the legacy /api/auth: shopify.server.js sets

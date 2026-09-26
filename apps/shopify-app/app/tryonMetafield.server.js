@@ -97,3 +97,46 @@ export async function unpublishMapping(admin, productId) {
     throw tagged('METAFIELD_DELETE_FAILED', real.map((e) => e.message).join('; '))
   }
 }
+
+/**
+ * Storefront access after a subscription lapses, mirrored into an app-data
+ * metafield (owner: this app's installation) that the theme block reads as
+ * `app.metafields.tryon.serve_until`. Product metafields alone kept the Try on
+ * button up forever on a lapsed shop, opening to a try-on that could only fail.
+ *
+ * A date, not a boolean: grace is a window (billing.server.js GRACE_PERIOD_DAYS)
+ * and no event fires when it ends, so the block compares it with the render
+ * time itself. Absent means "no limit", so installs that predate this, comped
+ * shops, and active subscriptions all keep their button.
+ */
+export const ACCESS_NAMESPACE = 'tryon'
+export const ACCESS_KEY = 'serve_until'
+
+const APP_INSTALLATION_QUERY = `#graphql
+  query TryonAppInstallation { currentAppInstallation { id } }`
+
+/**
+ * @param {{graphql: Function}} admin
+ * @param {Date|null} graceEndsAt set while lapsed; null once active again
+ */
+export async function syncStorefrontAccess(admin, graceEndsAt) {
+  const res = await admin.graphql(APP_INSTALLATION_QUERY)
+  const body = await res.json()
+  const ownerId = body?.data?.currentAppInstallation?.id
+  if (!ownerId) {
+    throw tagged('APP_INSTALLATION_MISSING', 'no currentAppInstallation id')
+  }
+  const identifier = { ownerId, namespace: ACCESS_NAMESPACE, key: ACCESS_KEY }
+
+  if (graceEndsAt) {
+    const errors = await mutate(admin, SET_MUTATION, {
+      metafields: [{ ...identifier, type: 'date_time', value: new Date(graceEndsAt).toISOString() }],
+    }, 'metafieldsSet')
+    if (errors.length) throw tagged('METAFIELD_SET_FAILED', errors.map((e) => e.message).join('; '))
+    return
+  }
+
+  const errors = await mutate(admin, DELETE_MUTATION, { metafields: [identifier] }, 'metafieldsDelete')
+  const real = errors.filter((e) => !ALREADY_GONE.test(e?.message ?? ''))
+  if (real.length) throw tagged('METAFIELD_DELETE_FAILED', real.map((e) => e.message).join('; '))
+}

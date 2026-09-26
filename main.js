@@ -4,6 +4,7 @@ import { checkEnvironment } from './src/support/capabilities.js'
 import { defaultGlassesKey, registerRuntimeGlassesConfig } from './src/config/arConfig.js'
 import { toEngineModelConfig } from './src/tryon/fitMetadataAdapter.js'
 import { buildRegisterModelUrl } from './src/tryon/registerModelUrl.js'
+import { fetchRemoteConfig, isValidConfigPayload } from './src/tryon/remoteConfig.js'
 
 const video = document.getElementById('camera-feed')
 const canvas = document.getElementById('overlay-canvas')
@@ -29,8 +30,12 @@ const REMOTE_SKU_KEY = '__remote__'
 /**
  * Fetches this shop+product's fit metadata and model URL from the Shopify app
  * backend and adapts it into the engine's model-config shape. Returns the SKU
- * key to load, or null if the remote config is unavailable/params are absent —
- * callers must fall back to the existing default SKU behavior in that case.
+ * key to load, or null only when there is no shop/product (local development,
+ * where the bundled default frame is the point).
+ *
+ * With a shop and product, a failure THROWS instead of falling back: showing
+ * the bundled demo frame there meant a shopper could try on glasses that were
+ * not the product on the page. See src/tryon/remoteConfig.js.
  * @returns {Promise<string | null>}
  */
 async function resolveRemoteSkuKey() {
@@ -38,33 +43,9 @@ async function resolveRemoteSkuKey() {
     return null
   }
 
-  try {
-    const srcParam = src ? `&src=${encodeURIComponent(src)}` : ''
-    const response = await fetch(`/api/tryon-config?shop=${encodeURIComponent(shop)}&productId=${encodeURIComponent(productId)}${srcParam}`)
-    if (!response.ok) {
-      throw new Error(`tryon-config request failed with status ${response.status}`)
-    }
-
-    const { fitMetadata, modelUrl } = await response.json()
-
-    const isValidPayload = Boolean(modelUrl) &&
-      fitMetadata &&
-      typeof fitMetadata === 'object' &&
-      Number.isFinite(fitMetadata.frameWidthMeters) &&
-      fitMetadata.bridgeAnchor &&
-      fitMetadata.leftHinge &&
-      fitMetadata.rightHinge
-
-    if (!isValidPayload) {
-      throw new Error('invalid tryon-config payload')
-    }
-
-    const engineModelConfig = toEngineModelConfig(fitMetadata, modelUrl)
-    return registerRuntimeGlassesConfig(REMOTE_SKU_KEY, engineModelConfig)
-  } catch (error) {
-    console.warn('Falling back to default frame — could not load remote try-on config:', error)
-    return null
-  }
+  const { fitMetadata, modelUrl: servedUrl } = await fetchRemoteConfig({ shop, productId, src })
+  const engineModelConfig = toEngineModelConfig(fitMetadata, servedUrl)
+  return registerRuntimeGlassesConfig(REMOTE_SKU_KEY, engineModelConfig)
 }
 
 /**
@@ -85,16 +66,9 @@ async function resolveBlockModelKey() {
       throw new Error(`register-model request failed with status ${response.status}`)
     }
 
-    const { fitMetadata, modelUrl: servedUrl } = await response.json()
-    const isValidPayload = Boolean(servedUrl) &&
-      fitMetadata &&
-      typeof fitMetadata === 'object' &&
-      Number.isFinite(fitMetadata.frameWidthMeters) &&
-      fitMetadata.bridgeAnchor &&
-      fitMetadata.leftHinge &&
-      fitMetadata.rightHinge
-
-    if (!isValidPayload) {
+    const payload = await response.json()
+    const { fitMetadata, modelUrl: servedUrl } = payload
+    if (!isValidConfigPayload(payload)) {
       throw new Error('invalid register-model payload')
     }
 
@@ -136,16 +110,9 @@ async function resolveLocalFitKey() {
       throw new Error(`fit file request failed with status ${response.status}`)
     }
 
-    const { fitMetadata, modelUrl: servedUrl } = await response.json()
-    const isValidPayload = Boolean(servedUrl) &&
-      fitMetadata &&
-      typeof fitMetadata === 'object' &&
-      Number.isFinite(fitMetadata.frameWidthMeters) &&
-      fitMetadata.bridgeAnchor &&
-      fitMetadata.leftHinge &&
-      fitMetadata.rightHinge
-
-    if (!isValidPayload) {
+    const payload = await response.json()
+    const { fitMetadata, modelUrl: servedUrl } = payload
+    if (!isValidConfigPayload(payload)) {
       throw new Error('invalid fit file payload')
     }
 
@@ -289,7 +256,10 @@ async function main() {
   }
 }
 
-window.addEventListener('beforeunload', () => {
+// pagehide also covers the theme block unloading this frame when the shopper
+// closes the try-on, and pages entering the back/forward cache, where
+// beforeunload never fires. Either way the camera must be released.
+window.addEventListener('pagehide', () => {
   tryOnEngine?.destroy?.()
 })
 

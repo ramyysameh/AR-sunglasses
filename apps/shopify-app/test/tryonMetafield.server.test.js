@@ -3,6 +3,9 @@ import {
   publishMapping,
   publishMappings,
   unpublishMapping,
+  syncStorefrontAccess,
+  ACCESS_NAMESPACE,
+  ACCESS_KEY,
   TRYON_NAMESPACE,
   TRYON_KEY,
 } from '../app/tryonMetafield.server.js'
@@ -116,5 +119,43 @@ describe('namespace', () => {
   it('matches the reserved prefix the theme block reads', () => {
     expect(TRYON_NAMESPACE).toBe('$app:tryon')
     expect(TRYON_KEY).toBe('enabled')
+  })
+})
+
+describe('syncStorefrontAccess', () => {
+  const installation = { data: { currentAppInstallation: { id: 'gid://shopify/AppInstallation/9' } } }
+  const identifier = { ownerId: 'gid://shopify/AppInstallation/9', namespace: ACCESS_NAMESPACE, key: ACCESS_KEY }
+
+  it('records when a lapsed shop\'s grace ends, on the app installation', async () => {
+    const admin = stubAdmin(installation, ok('metafieldsSet'))
+    await syncStorefrontAccess(admin, new Date('2026-10-03T12:00:00Z'))
+
+    expect(admin.calls[1].query).toContain('metafieldsSet')
+    expect(admin.calls[1].variables.metafields).toEqual([
+      { ...identifier, type: 'date_time', value: '2026-10-03T12:00:00.000Z' },
+    ])
+  })
+
+  it('clears the limit once the plan is active again', async () => {
+    const admin = stubAdmin(installation, ok('metafieldsDelete'))
+    await syncStorefrontAccess(admin, null)
+
+    expect(admin.calls[1].query).toContain('metafieldsDelete')
+    expect(admin.calls[1].variables.metafields).toEqual([identifier])
+  })
+
+  it('treats an already-missing limit as cleared', async () => {
+    const admin = stubAdmin(installation, {
+      data: { metafieldsDelete: { userErrors: [{ field: null, message: 'Metafield not found' }] } },
+    })
+    await expect(syncStorefrontAccess(admin, null)).resolves.toBeUndefined()
+  })
+
+  it('fails loudly when the installation cannot be resolved or the write is refused', async () => {
+    await expect(syncStorefrontAccess(stubAdmin({ data: {} }), null)).rejects.toMatchObject({ code: 'APP_INSTALLATION_MISSING' })
+    const refused = stubAdmin(installation, {
+      data: { metafieldsSet: { userErrors: [{ field: 'value', message: 'invalid' }] } },
+    })
+    await expect(syncStorefrontAccess(refused, new Date())).rejects.toMatchObject({ code: 'METAFIELD_SET_FAILED' })
   })
 })

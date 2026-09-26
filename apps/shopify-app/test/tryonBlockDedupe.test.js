@@ -16,7 +16,14 @@ const scriptBody = liquid.slice(
 function makeRoot({ designMode = false, installedUrl = null } = {}) {
   const open = { addEventListener: vi.fn() }
   const close = { addEventListener: vi.fn() }
-  const dialog = { showModal: vi.fn(), close: vi.fn() }
+  const listeners = {}
+  const dialog = {
+    showModal: vi.fn(),
+    close: vi.fn(),
+    addEventListener: vi.fn((type, fn) => { listeners[type] = fn }),
+    fire: (type) => listeners[type]?.(),
+  }
+  const frame = { src: '', dataset: { src: 'https://app.test/tryon/index.html?shop=s&productId=p' } }
   const dataset = {}
   if (designMode) dataset.arTryonDesignMode = 'true'
   if (installedUrl) dataset.arTryonInstalledUrl = installedUrl
@@ -29,9 +36,12 @@ function makeRoot({ designMode = false, installedUrl = null } = {}) {
       if (sel === '.ar-tryon__dialog') return dialog
       if (sel === '.ar-tryon__open') return open
       if (sel === '.ar-tryon__close') return close
+      if (sel === '.ar-tryon__frame') return frame
       return null
     },
     _open: open,
+    _dialog: dialog,
+    _frame: frame,
   }
 }
 
@@ -115,5 +125,51 @@ describe('try-on block duplicate handling', () => {
     expect(roots[1].removed).toBe(false)
     expect(roots[1].innerHTML).toContain('more than once')
     expect(roots[1]._open.addEventListener).not.toHaveBeenCalled()
+  })
+})
+
+describe('try-on camera lifecycle', () => {
+  it('does not load the engine (or ask for the camera) until the shopper opens the try-on', () => {
+    const roots = [makeRoot()]
+    runFor(0, roots)
+    expect(roots[0]._frame.src).toBe('')
+
+    roots[0]._open.addEventListener.mock.calls[0][1]()
+    expect(roots[0]._frame.src).toBe(roots[0]._frame.dataset.src)
+    expect(roots[0]._dialog.showModal).toHaveBeenCalled()
+  })
+
+  it('unloads the engine when the dialog closes, so the camera stops', () => {
+    const roots = [makeRoot()]
+    runFor(0, roots)
+    roots[0]._open.addEventListener.mock.calls[0][1]()
+
+    // Fires for the close button, Escape, and programmatic close alike.
+    roots[0]._dialog.fire('close')
+    expect(roots[0]._frame.src).toBe('about:blank')
+
+    // Reopening starts a fresh session.
+    roots[0]._open.addEventListener.mock.calls[0][1]()
+    expect(roots[0]._frame.src).toBe(roots[0]._frame.dataset.src)
+  })
+
+  it('ships no src on the iframe, so nothing loads before the shopper asks', () => {
+    const iframe = liquid.slice(liquid.indexOf('<iframe'), liquid.indexOf('</iframe>'))
+    expect(iframe).toContain('data-src=')
+    expect(iframe).not.toMatch(/\ssrc=/)
+  })
+})
+
+describe('try-on block after a subscription lapses', () => {
+  it('hides the button once the recorded grace period has ended', () => {
+    // Liquid is not executed in tests; this pins the gate's shape.
+    expect(liquid).toContain('app.metafields.tryon.serve_until.value')
+    expect(liquid).toMatch(/\{% if now_s > serve_until_s %\}\s*\{% assign tryon_enabled = false %\}/)
+    // The gate is evaluated before the button is rendered.
+    expect(liquid.indexOf('serve_until')).toBeLessThan(liquid.indexOf('{% if tryon_enabled %}'))
+  })
+
+  it('tells the merchant why the button is hidden in the theme editor', () => {
+    expect(liquid).toContain('your AR Try-on plan has ended')
   })
 })

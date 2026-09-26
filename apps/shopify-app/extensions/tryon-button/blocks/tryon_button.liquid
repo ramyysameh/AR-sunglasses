@@ -18,6 +18,22 @@
 {% assign tryon_enabled = block.settings.product.metafields["$app:tryon"].enabled.value %}
 
 {% comment %}
+  After a subscription lapses, the app records when its grace period ends in an
+  app-data metafield. Past that moment the button stays hidden instead of
+  opening a try-on that can only say "not available". Absent means no limit.
+{% endcomment %}
+{% assign tryon_suspended = false %}
+{% assign serve_until = app.metafields.tryon.serve_until.value %}
+{% if serve_until != blank %}
+  {% assign serve_until_s = serve_until | date: '%s' | plus: 0 %}
+  {% assign now_s = 'now' | date: '%s' | plus: 0 %}
+  {% if now_s > serve_until_s %}
+    {% assign tryon_enabled = false %}
+    {% assign tryon_suspended = true %}
+  {% endif %}
+{% endif %}
+
+{% comment %}
   Where to report that this block rendered. Derived from engine_url rather than
   hard-coded so a merchant running their own instance reports to their own app.
   Skipped entirely if engine_url has been pointed somewhere without the /tryon/
@@ -54,11 +70,15 @@
       </svg>
     </button>
     {% if block.settings.engine_url != blank %}
+      {% comment %}
+        data-src, not src: the engine (and the camera) start only when the
+        shopper opens the dialog, and the script below unloads it on close.
+      {% endcomment %}
       <iframe
         class="ar-tryon__frame"
         allow="camera; fullscreen"
-        src="{{ block.settings.engine_url }}?shop={{ shop.permanent_domain | url_encode }}&productId={{ product_gid | url_encode }}{% if block.settings.model_url != blank %}&model={{ block.settings.model_url | url_encode }}{% endif %}&gscale={{ block.settings.gscale }}"
-        loading="lazy"
+        title="Virtual try-on camera view"
+        data-src="{{ block.settings.engine_url }}?shop={{ shop.permanent_domain | url_encode }}&productId={{ product_gid | url_encode }}{% if block.settings.model_url != blank %}&model={{ block.settings.model_url | url_encode }}{% endif %}&gscale={{ block.settings.gscale }}"
       ></iframe>
     {% else %}
       <p class="ar-tryon__missing">Set the try-on engine URL in the block settings.</p>
@@ -93,8 +113,21 @@
     }
 
     const dialog = root.querySelector('.ar-tryon__dialog')
-    root.querySelector('.ar-tryon__open').addEventListener('click', () => dialog.showModal())
+    const frame = root.querySelector('.ar-tryon__frame')
+    root.querySelector('.ar-tryon__open').addEventListener('click', () => {
+      // Load the engine only now: the camera must not start before the shopper
+      // asks for the try-on.
+      if (frame && frame.dataset.src) frame.src = frame.dataset.src
+      dialog.showModal()
+    })
     root.querySelector('.ar-tryon__close').addEventListener('click', () => dialog.close())
+    // Closing only hides a <dialog>; the iframe, the engine and the camera
+    // stream would keep running until the shopper left the page. Unloading the
+    // frame stops the camera the moment the try-on closes, however it closes
+    // (close button, Escape, or the dialog being closed programmatically).
+    dialog.addEventListener('close', () => {
+      if (frame) frame.src = 'about:blank'
+    })
 
     // Report that the button is on the storefront. Without this the app can
     // only observe a shopper CLICKING try-on -- the engine iframe is lazy and
@@ -256,9 +289,14 @@
 {% elsif request.design_mode %}
   <div class="ar-tryon__unmapped" {{ block.shopify_attributes }}>
     <p>
+      {% if tryon_suspended %}
+      <strong>AR Try-On</strong> — your AR Try-on plan has ended, so the button is hidden
+      on your storefront. Choose a plan in the AR Try-on app to turn it back on.
+      {% else %}
       <strong>AR Try-On</strong> — no model is mapped to this product yet, so the button
       stays hidden on your storefront. Map a model to it in the AR Try-on app, then reload
       the theme editor.
+      {% endif %}
     </p>
   </div>
   <style>

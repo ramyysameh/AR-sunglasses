@@ -5,7 +5,7 @@
  */
 export const meta = () => [{ title: "Privacy Policy — AR Try-on" }];
 
-const UPDATED = "22 July 2026";
+const UPDATED = "26 September 2026";
 const CONTACT = "zendolabs@gmail.com";
 
 export default function Privacy() {
@@ -57,6 +57,13 @@ export default function Privacy() {
         Services S3 (storage of merchant-uploaded models). Merchant data as
         described above is processed by these providers on our behalf. No shopper
         or camera data is sent to any of them, because none is ever collected.
+      </p>
+      <p>
+        When a shopper opens the try-on, their browser downloads the try-on
+        software, the face-tracking model and the eyewear model from our own
+        hosting on Vercel. As with any web request, Vercel sees the shopper&rsquo;s
+        IP address and browser type to deliver those files; we do not log or keep
+        them. No other third party is contacted.
       </p>
 
       <h2>Your rights</h2>

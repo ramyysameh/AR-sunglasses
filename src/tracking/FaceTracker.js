@@ -3,8 +3,17 @@
  */
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
 
-const DEFAULT_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'
-const DEFAULT_WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm'
+// Served from this engine's own origin, never a third party: the shopper's
+// browser must not reach Google or jsDelivr just to open the try-on (the
+// privacy policy says no shopper data goes anywhere else), and an outage there
+// must not break it. scripts/copy-mediapipe.mjs stages the wasm under a
+// versioned path; MEDIAPIPE_VERSION must match the installed package
+// (test/tryon/mediapipeAssets.test.js). The model is the float16 v1 face
+// landmarker, committed under public/mediapipe/.
+export const MEDIAPIPE_VERSION = '0.10.35'
+const BASE_URL = import.meta.env?.BASE_URL ?? '/'
+export const DEFAULT_MODEL_URL = `${BASE_URL}mediapipe/face_landmarker-float16-v1.task`
+export const DEFAULT_WASM_ROOT = `${BASE_URL}mediapipe/${MEDIAPIPE_VERSION}/wasm`
 
 export class FaceTracker {
   constructor(options = {}) {

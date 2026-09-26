@@ -8,9 +8,9 @@
     "apps/shopify-app"
   ],
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "build:engine": "vite build --base=/tryon/ --outDir apps/shopify-app/public/tryon --emptyOutDir",
+    "dev": "npm run assets:mediapipe && vite",
+    "build": "npm run assets:mediapipe && vite build",
+    "build:engine": "npm run assets:mediapipe && vite build --base=/tryon/ --outDir apps/shopify-app/public/tryon --emptyOutDir",
     "preview": "vite preview",
     "typecheck": "tsc -p jsconfig.json",
     "test": "vitest run",
@@ -20,8 +20,9 @@
     "inspect:models": "node scripts/inspect-models.mjs",
     "normalize:models": "node scripts/normalize-glasses-model.mjs",
     "compress:models": "node scripts/compress-models.mjs",
-    "harness": "vite --config harness/mock-server.config.mjs",
-    "harness:https": "vite --config harness/mock-server-https.config.mjs"
+    "harness": "npm run assets:mediapipe && vite --config harness/mock-server.config.mjs",
+    "harness:https": "npm run assets:mediapipe && vite --config harness/mock-server-https.config.mjs",
+    "assets:mediapipe": "node scripts/copy-mediapipe.mjs"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.4.0",
