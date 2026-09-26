@@ -175,15 +175,14 @@ describe('workspace component accessibility contracts', () => {
     expect(list).toContain('accessibilityLabel="Actions for Lumen"')
   })
 
-  it('keeps table rows aligned with their headers, filters scrollable, and motion reduced', () => {
-    const narrow = extractCssBlock(workspaceCss, '@media (max-width: 640px)')
-    const summary = extractCssBlock(narrow, '.workspace-summary')
+  it('keeps table rows aligned with their headers, motion reduced, and no hand-built filter styling', () => {
     const reducedMotion = extractCssBlock(workspaceCss, '@media (prefers-reduced-motion: reduce)')
     const reducedWorkspace = extractCssBlock(reducedMotion, '.workspace-shell *,\n  .workspace-shell *::before,\n  .workspace-shell *::after')
 
-    expect(summary).toMatch(/overflow-x:\s*auto/)
     expect(workspaceCss).not.toMatch(/\.workspace-row\s*\{[\s\S]*?display:\s*grid/)
-    expect(workspaceCss).toContain(':focus-visible')
+    // The filter cards were the last custom control; Polaris now draws the
+    // filter bar and every focus ring.
+    expect(workspaceCss).not.toMatch(/workspace-(filter|summary)|:focus-visible/)
     expect(reducedWorkspace).toMatch(/scroll-behavior:\s*auto\s*!important/)
     expect(reducedWorkspace).toMatch(/transition-duration:\s*0\.01ms\s*!important/)
     expect(reducedWorkspace).toMatch(/animation-duration:\s*0\.01ms\s*!important/)
@@ -212,7 +211,7 @@ describe('workspace component accessibility contracts', () => {
     expect(firstRun).not.toContain('No products match')
     expect(filtered).toContain('No products match these filters')
   })
-  it('exposes pressed summary buttons and a labelled product and model search', () => {
+  it('filters with a labelled Polaris search field and status select, not custom buttons', () => {
     const html = renderToStaticMarkup(React.createElement(WorkspaceFilters, {
       counts: { all: 3, live: 1, needsAttention: 2 },
       status: 'needs-attention',
@@ -221,12 +220,27 @@ describe('workspace component accessibility contracts', () => {
       onQueryChange: vi.fn(),
     }))
 
-    expect(html.match(/<button/g)).toHaveLength(3)
-    expect(html).toContain('role="group"')
-    expect(html).toContain('aria-pressed="true"')
+    expect(html).not.toContain('<button')
+    expect(html).toContain('<s-search-field')
     expect(html).toContain('label="Search products and models"')
-    expect(html).toContain('labelAccessibilityVisibility="exclusive"')
     expect(html).toContain('value="black"')
+    expect(html).toMatch(/<s-select label="Status" labelAccessibilityVisibility="exclusive" value="needs-attention">/)
+    expect([...html.matchAll(/<s-option ([^>]*)>([^<]*)<\/s-option>/g)].map(([, attrs, label]) => [label, attrs.includes('selected')]))
+      .toEqual([
+        ['All products (3)', false],
+        ['Live (1)', false],
+        ['Needs attention (2)', true],
+      ])
+    // No slot outside the table: a stray slot attribute would hide the bar.
+    expect(html).not.toContain('slot=')
+    expect(renderToStaticMarkup(React.createElement(WorkspaceFilters, {
+      counts: { all: 0, live: 0, needsAttention: 0 },
+      status: 'all',
+      query: '',
+      onStatusChange: vi.fn(),
+      onQueryChange: vi.fn(),
+      slot: 'filters',
+    }))).toMatch(/^<s-grid slot="filters"/)
   })
 
   it('reports the exact selected status and search value', () => {
@@ -240,14 +254,36 @@ describe('workspace component accessibility contracts', () => {
       onQueryChange,
     })
 
-    const buttons = findElements(filters, 'button')
-    buttons[2].props.onClick()
-    findElements(filters, 's-text-field')[0].props.onInput({
-      currentTarget: { value: 'Black frame' },
-    })
+    findElements(filters, 's-select')[0].props.onInput({ currentTarget: { value: 'needs-attention' } })
+    findElements(filters, 's-search-field')[0].props.onInput({ currentTarget: { value: 'Black frame' } })
 
     expect(onStatusChange).toHaveBeenCalledWith('needs-attention')
     expect(onQueryChange).toHaveBeenCalledWith('Black frame')
+  })
+
+  it('puts the filter bar in the table, and keeps it when nothing matches', () => {
+    const renderFilters = vi.fn((slot) => React.createElement('s-grid', slot ? { slot } : {}, 'filters'))
+    const table = renderToStaticMarkup(React.createElement(ProductOperationsList, {
+      mappings: rows,
+      pricingUrl: '/plans',
+      onPreview: vi.fn(),
+      onChangeModel: vi.fn(),
+      onRemove: vi.fn(),
+      renderFilters,
+    }))
+    expect(table).toMatch(/^<s-table variant="auto"><s-grid slot="filters">filters<\/s-grid>/)
+
+    const noMatches = renderToStaticMarkup(React.createElement(ProductOperationsList, {
+      mappings: [],
+      totalCount: 3,
+      pricingUrl: '/plans',
+      onPreview: vi.fn(),
+      onChangeModel: vi.fn(),
+      onRemove: vi.fn(),
+      renderFilters,
+    }))
+    expect(noMatches).toContain('<s-grid>filters</s-grid>')
+    expect(noMatches).toContain('No products match these filters')
   })
 
   it('renders completed guidance as a slim status row with no action', () => {

@@ -321,8 +321,8 @@ export default function Workspace() {
         <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />
         {hasOperations && (
           <>
-            <WorkspaceFilters counts={data.counts} status={status} query={query} onStatusChange={setStatus} onQueryChange={setQuery} />
-            {/* A native Polaris card; padding="none" lets the table run to its edges. */}
+            {/* A native Polaris card; padding="none" lets the table run to its edges.
+                Search and status live in the table's own filter bar. */}
             <s-section padding="none" accessibilityLabel="Product operations">
               <ProductOperationsList
                 mappings={visibleMappings}
@@ -333,6 +333,16 @@ export default function Workspace() {
                 onChangeModel={openChangeModel}
                 onReviewFit={openReviewFit}
                 onRemove={openRemove}
+                renderFilters={(slot) => (
+                  <WorkspaceFilters
+                    slot={slot}
+                    counts={data.counts}
+                    status={status}
+                    query={query}
+                    onStatusChange={setStatus}
+                    onQueryChange={setQuery}
+                  />
+                )}
               />
             </s-section>
           </>

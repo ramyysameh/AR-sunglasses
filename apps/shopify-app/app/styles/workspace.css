@@ -11,42 +11,8 @@
   min-width: 160px;
 }
 
-.workspace-summary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.workspace-filter {
-  display: flex;
-  min-height: 64px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px;
-  border: 1px solid #c9cccf;
-  border-radius: 6px;
-  background: #fff;
-  color: #202223;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.workspace-filter[aria-pressed='true'] {
-  border-color: #005bd3;
-  box-shadow: inset 0 0 0 1px #005bd3;
-}
-
-.workspace-filter:hover { background: #f6f6f7; }
-
-.workspace-filter:focus-visible,
-.workspace-action:focus-visible,
-.workspace-shell a:focus-visible,
-.workspace-shell button:focus-visible {
-  outline: 2px solid #005bd3;
-  outline-offset: 2px;
-}
+/* No focus-ring overrides: every control in the workspace is a Polaris
+   component, which draws its own focus indicator. */
 
 .workspace-product-placeholder {
   width: 40px;
@@ -60,19 +26,6 @@
 
 @media (max-width: 640px) {
   .workspace-shell { gap: 16px; }
-
-  .workspace-summary {
-    display: flex;
-    overflow-x: auto;
-    padding: 2px;
-    scroll-snap-type: x proximity;
-  }
-
-  .workspace-summary > * {
-    min-width: 148px;
-    scroll-snap-align: start;
-  }
-
 }
 
 @media (prefers-reduced-motion: reduce) {

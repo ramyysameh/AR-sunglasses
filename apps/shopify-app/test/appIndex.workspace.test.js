@@ -303,8 +303,15 @@ describe('Workspace route composition', () => {
   ])('keeps setup focused and adds operations only when there are mapped products for %s merchants', (_state, data, hasOperations = true) => {
     const page = render(data)
     expect(findComponent(page, WorkspaceGuide)).toBeDefined()
-    expect(Boolean(findComponent(page, WorkspaceFilters))).toBe(hasOperations)
-    expect(Boolean(findComponent(page, ProductOperationsList))).toBe(hasOperations)
+    const list = findComponent(page, ProductOperationsList)
+    expect(Boolean(list)).toBe(hasOperations)
+    // Filters render inside the table's own filter bar, not above the card.
+    expect(findComponent(page, WorkspaceFilters)).toBeUndefined()
+    if (hasOperations) {
+      const filters = list.props.renderFilters('filters')
+      expect(filters.type).toBe(WorkspaceFilters)
+      expect(filters.props.slot).toBe('filters')
+    }
     expect(findComponent(page, AddTryOnFlow)).toBeDefined()
   })
 
@@ -365,7 +372,7 @@ describe('Workspace route composition', () => {
       mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }],
       counts: { all: 1, live: 1, needsAttention: 0 },
     }), '?q=Pelmo')
-    const filters = findElements(page, WorkspaceFilters)[0]
+    const filters = findComponent(page, ProductOperationsList).props.renderFilters('filters')
     expect(filters.props.query).toBe('Pelmo')
   })
 })

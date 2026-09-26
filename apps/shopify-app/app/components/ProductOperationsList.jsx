@@ -140,6 +140,9 @@ export default function ProductOperationsList({
   onChangeModel,
   onReviewFit,
   onRemove,
+  // (slot) => filter bar. Rendered into s-table's filters slot, and above the
+  // "no matches" message so a search that matches nothing can be undone.
+  renderFilters = null,
 }) {
   if (mappings.length === 0) {
     if (totalCount === 0) {
@@ -150,11 +153,19 @@ export default function ProductOperationsList({
         </s-stack>
       )
     }
-    return <s-paragraph>No products match these filters.</s-paragraph>
+    return (
+      <s-box padding="base">
+        <s-stack direction="block" gap="base">
+          {renderFilters?.()}
+          <s-paragraph>No products match these filters.</s-paragraph>
+        </s-stack>
+      </s-box>
+    )
   }
 
   return (
     <s-table variant="auto">
+      {renderFilters?.('filters')}
       <s-table-header-row>
         <s-table-header listSlot="primary">Product</s-table-header>
         <s-table-header>Model</s-table-header>

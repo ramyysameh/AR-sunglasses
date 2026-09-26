@@ -17,9 +17,10 @@
   - **#14:** `rel="home"`, confirmed in `@shopify/app-bridge-types`.
   - **#15:** ready model cards get **Add try-on** (`/app?add=1&model=…`), and "View products" opens the Workspace searched for that model (`/app?q=…`).
   - **#19:** Review fit moved into the card's action row.
+- **Pass 3:**
+  - **#5 (rest):** search and status now sit in `s-table`'s `filters` slot as an `s-search-field` and a labelled `s-select`, with counts in the option labels. The custom `<button>` cards, their hard-coded colors, and the workspace's hand-written focus rings are gone. The audit suggested "a button group or choice chips", but neither fits: App Home has no tabs and no pressed-button state, `s-clickable-chip` can't announce which chip is selected, and `s-choice-list` doesn't expose its inline variant here. `s-select` is the accessible single choice. When a search matches nothing, the filter bar stays above the "No products match" message so the search can be undone.
 
 **Deliberately left:**
-- **#5 (rest):** the status filter cards are still custom `<button>`s with hard-coded colors. Moving them into `s-table`'s filters slot changes the page layout, and that needs a live look first.
 - **#11 (Add try-on half):** it stays disabled at the plan limit. The plan meter directly below says "Upgrade to add more products" and has an Upgrade button, and adding a fourth route to pricing would undo an earlier deliberate cleanup.
 - **#16:** the unreachable `plan-limit` status is kept. It has explicit defensive tests.
 - **#17:** the native upload `<progress>` is kept. There's no Polaris web-component equivalent.
