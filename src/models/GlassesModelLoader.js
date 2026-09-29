@@ -7,6 +7,16 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { getGlassesConfig } from '../config/arConfig.js'
 import { applyLensReflection } from '../core/lensReflection.js'
 import { applyFrameReflection } from '../core/frameReflection.js'
+import { fetchBytes } from '../support/fetchBytes.js'
+
+/**
+ * Downloads a model ahead of load(), so the download can start before the
+ * renderer that load() needs exists. See MediaPipeThreeProvider.init.
+ * @param {string} url
+ */
+export function fetchModelBytes(url) {
+  return fetchBytes(url, 'glasses model')
+}
 
 /**
  * Scales a freshly loaded scene to metres.
@@ -95,7 +105,14 @@ export class GlassesModelLoader {
     this.loader = null
   }
 
-  async load(url, configKey) {
+  /**
+   * @param {string} url
+   * @param {string} [configKey]
+   * @param {{ bytes?: Promise<ArrayBuffer | null> | ArrayBuffer | null }} [options]
+   *   `bytes`: `url` already downloaded (fetchModelBytes). Null means that
+   *   download failed, and the model is requested again the normal way.
+   */
+  async load(url, configKey, { bytes } = {}) {
     if (!this.loader) {
       await this.init()
     }
@@ -106,7 +123,12 @@ export class GlassesModelLoader {
       return this.cache.get(cacheKey).clone(true)
     }
 
-    const gltf = await this.loader.loadAsync(url)
+    const downloaded = await bytes
+    // parseAsync with the URL's base is exactly what loadAsync does once its own
+    // request completes -- external textures and buffers resolve the same way.
+    const gltf = downloaded
+      ? await this.loader.parseAsync(downloaded, THREE.LoaderUtils.extractUrlBase(url))
+      : await this.loader.loadAsync(url)
     const model = gltf.scene ?? gltf.scenes?.[0]
     const modelConfig = getGlassesConfig(configKey)
     const materialProfile = modelConfig.materialProfile ?? {}

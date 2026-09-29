@@ -234,13 +234,20 @@ function updateScan(scanState) {
   }
 }
 
-async function startEngine() {
+async function resolveSkuKey() {
   const remoteSkuKey = (await resolveLocalFitKey())
     ?? (await resolveBlockModelKey())
     ?? (await resolveRemoteSkuKey())
+  return remoteSkuKey ?? sku ?? defaultGlassesKey
+}
+
+async function startEngine() {
   const runtimeConfig = getTryOnRuntimeConfig({
     provider,
-    defaultSkuKey: remoteSkuKey ?? sku ?? defaultGlassesKey,
+    // Unresolved on purpose: /api/tryon-config takes 1-4 s, and only the
+    // glasses download needs its answer. The provider starts the camera and
+    // face tracker meanwhile -- see MediaPipeThreeProvider.init.
+    defaultSkuKey: resolveSkuKey(),
     video,
     canvas,
     loadingEl,

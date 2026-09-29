@@ -6,7 +6,7 @@
  */
 interface ArTryOnConfig {
   defaultProvider?: string
-  defaultSkuKey?: string
+  defaultSkuKey?: string | Promise<string>
   camera?: { width?: number; height?: number }
   skus?: Record<string, unknown>
   [key: string]: unknown

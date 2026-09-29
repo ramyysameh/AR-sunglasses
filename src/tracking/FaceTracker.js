@@ -2,6 +2,21 @@
  * MediaPipe FaceLandmarker wrapper that returns the raw per-frame result for the AR pipeline.
  */
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
+import { fetchBytes } from '../support/fetchBytes.js'
+
+/**
+ * A one-chunk stream over bytes that may still be downloading. A failed
+ * download errors the stream, so it surfaces from MediaPipe's own read.
+ * @param {Promise<ArrayBuffer>} bytes
+ */
+function readerFor(bytes) {
+  return new ReadableStream({
+    async start(controller) {
+      controller.enqueue(new Uint8Array(await bytes))
+      controller.close()
+    },
+  }).getReader()
+}
 
 const DEFAULT_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'
 const DEFAULT_WASM_ROOT = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm'
@@ -19,11 +34,17 @@ export class FaceTracker {
   }
 
   async init() {
+    // Given a modelAssetPath, MediaPipe only requests the model (~3.8 MB) once
+    // it has downloaded and compiled its WASM runtime (~3 MB), so the two
+    // largest downloads in the try-on ran back to back. Start the model now and
+    // hand MediaPipe a reader that waits on it: the WASM still loads exactly as
+    // before, but by the time MediaPipe asks for the model it is in flight or done.
+    const modelAssetBuffer = readerFor(fetchBytes(this.modelAssetPath, 'face tracker model'))
     const filesetResolver = await FilesetResolver.forVisionTasks(this.wasmRoot)
 
     this.faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
       baseOptions: {
-        modelAssetPath: this.modelAssetPath,
+        modelAssetBuffer,
         delegate: 'GPU',
       },
       runningMode: 'VIDEO',

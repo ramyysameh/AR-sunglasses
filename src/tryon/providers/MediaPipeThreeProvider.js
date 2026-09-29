@@ -4,7 +4,7 @@ import { LandmarkProcessor } from '../../tracking/LandmarkProcessor.js'
 import { VectorFilter } from '../../filters/VectorFilter.js'
 import { QuaternionFilter } from '../../filters/QuaternionFilter.js'
 import { FaceOccluder } from '../../occlusion/FaceOccluder.js'
-import { GlassesModelLoader } from '../../models/GlassesModelLoader.js'
+import { GlassesModelLoader, fetchModelBytes } from '../../models/GlassesModelLoader.js'
 import { DebugHUD } from '../../debug/DebugHUD.js'
 import { RenderLoop } from '../../core/RenderLoop.js'
 import { LocalFaceScanner } from '../../fit/LocalFaceScanner.js'
@@ -48,11 +48,37 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     }
 
     this._prepareDom()
+
+    // The camera prompt waits on the shopper; the face tracker (~7 MB from two
+    // CDNs) and the glasses GLB (1-4 MB) wait on the network. None needs the
+    // others, so all three start now. Run in sequence, every byte of those
+    // downloads sat behind the shopper's tap on "Allow".
+    //
+    // `defaultSkuKey` may be a promise: main.js resolves it from the shop's
+    // try-on config, and passes it unresolved so none of this waits on that
+    // request either. The GLB download starts the moment it resolves.
+    const skuKeyReady = Promise.resolve(config.defaultSkuKey)
+    const modelDownload = skuKeyReady.then((skuKey) => {
+      const url = getGlassesModelUrl(skuKey)
+      return { url, bytes: fetchModelBytes(url).catch(() => null) }
+    })
+    const trackerReady = new FaceTracker().init()
+    // Both are awaited below; this only keeps a failure that lands mid-prompt
+    // (or is never awaited, when the camera is refused) from reporting as unhandled.
+    for (const pending of [trackerReady, modelDownload]) pending.catch(() => {})
+
     this._setLoading('Starting camera...')
-    await this._startCamera()
+    try {
+      await this._startCamera()
+    } catch (error) {
+      // destroy() cannot reach a tracker it was never handed, so release this
+      // one here -- it holds a WebGL context -- once it finishes loading.
+      trackerReady.then((tracker) => tracker.dispose(), () => {})
+      throw error
+    }
 
     this._setLoading('Loading face tracker...')
-    this.faceTracker = await new FaceTracker().init()
+    this.faceTracker = await trackerReady
     this.landmarkProcessor = new LandmarkProcessor()
 
     this._setLoading('Bringing your look to life…')
@@ -82,7 +108,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
       lensReflection: this.renderLoop.lensReflection,
       frameReflection: this.renderLoop.frameReflection,
     }).init()
-    await this.loadSku(config.defaultSkuKey)
+    await this.loadSku(await skuKeyReady, await modelDownload)
 
     const faceOccluder = await new FaceOccluder().init(this.renderLoop.scene)
     this.renderLoop.setFaceOccluder(faceOccluder)
@@ -118,9 +144,16 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     this.emit('trackingLost', { provider: this.name })
   }
 
-  async loadSku(skuKey) {
+  /**
+   * @param {string} skuKey
+   * @param {{ url: string, bytes: Promise<ArrayBuffer | null> } | null} [download]
+   *   A download init started early; only used if it is for this SKU's model.
+   */
+  async loadSku(skuKey, download = null) {
     const modelConfig = getGlassesConfig(skuKey)
-    const glassesRoot = await this.glassesLoader.load(getGlassesModelUrl(skuKey), skuKey)
+    const url = getGlassesModelUrl(skuKey)
+    const bytes = download?.url === url ? download.bytes : null
+    const glassesRoot = await this.glassesLoader.load(url, skuKey, { bytes })
 
     this.currentSkuKey = skuKey
     this.renderLoop.setModelConfig(modelConfig)
