@@ -107,39 +107,45 @@ export function toClientGeneration(generation) {
  * row comes back `failed`, which is free and shows the merchant a message.
  */
 export async function createGeneration(prisma, { shop, shopGid, photoRefs = null, retryOf = null, now = new Date() }) {
-  let photoSetId = globalThis.crypto.randomUUID()
-  let retryIndex = 0
-  let parent = null
+  // The guard and the row it protects are created under one per-shop lock, so
+  // two concurrent starts can't both pass the same count.
+  const { generation, parent } = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${shop}))`
 
-  if (retryOf) {
-    parent = await prisma.modelGeneration.findFirst({ where: { id: retryOf, shop } })
-    if (!parent) throw tagged('NOT_FOUND', `generation ${retryOf} not found`)
-    if (!RETRYABLE_STATUSES.includes(parent.status)) {
-      throw tagged('NOT_RETRYABLE', `cannot retry a ${parent.status} generation`)
+    let photoSetId = globalThis.crypto.randomUUID()
+    let retryIndex = 0
+    let parentRow = null
+    let refs = photoRefs
+
+    if (retryOf) {
+      parentRow = await tx.modelGeneration.findFirst({ where: { id: retryOf, shop } })
+      if (!parentRow) throw tagged('NOT_FOUND', `generation ${retryOf} not found`)
+      if (!RETRYABLE_STATUSES.includes(parentRow.status)) {
+        throw tagged('NOT_RETRYABLE', `cannot retry a ${parentRow.status} generation`)
+      }
+      // Counting the set, not reading parent.retryIndex, so retrying an older
+      // attempt can't restart the count.
+      const setSize = await tx.modelGeneration.count({ where: { shop, photoSetId: parentRow.photoSetId } })
+      if (setSize > LIMITS.retries) throw tagged('RETRY_LIMIT', 'no retries left for this photo set')
+      refs = parentRow.photoRefs
+      photoSetId = parentRow.photoSetId
+      retryIndex = setSize
+    } else if (!validPhotoRefs(refs)) {
+      throw tagged('BAD_PHOTOS', 'expected 3 or 4 uploaded photos')
     }
-    // Counting the set, not reading parent.retryIndex, so retrying an older
-    // attempt can't restart the count.
-    const setSize = await prisma.modelGeneration.count({ where: { shop, photoSetId: parent.photoSetId } })
-    if (setSize > LIMITS.retries) throw tagged('RETRY_LIMIT', 'no retries left for this photo set')
-    photoRefs = parent.photoRefs
-    photoSetId = parent.photoSetId
-    retryIndex = setSize
-  } else if (!validPhotoRefs(photoRefs)) {
-    throw tagged('BAD_PHOTOS', 'expected 3 or 4 uploaded photos')
-  }
 
-  await assertWithinCostGuard(prisma, shop, now)
-  if (parent?.status === 'ready') await discardGeneration(prisma, shop, parent.id)
+    await assertWithinCostGuard(tx, shop, now)
 
-  const generation = await prisma.modelGeneration.create({
-    data: { shop, shopGid, photoRefs, photoSetId, retryIndex, status: 'queued', createdAt: now },
-  })
-  try {
-    const { providerJobId } = await startGeneration({ images: await photoUrls(photoRefs) })
-    return prisma.modelGeneration.update({
-      where: { id: generation.id },
-      data: { status: 'running', providerJobId, startedAt: now },
+    const created = await tx.modelGeneration.create({
+      data: { shop, shopGid, photoRefs: refs, photoSetId, retryIndex, status: 'queued', createdAt: now },
     })
+    return { generation: created, parent: parentRow }
+  })
+
+  // Slow network call: outside the transaction.
+  let providerJobId
+  try {
+    ;({ providerJobId } = await startGeneration({ images: await photoUrls(generation.photoRefs) }))
   } catch (error) {
     console.error('AI generation start failed', generation.id, error)
     return prisma.modelGeneration.update({
@@ -147,6 +153,15 @@ export async function createGeneration(prisma, { shop, shopGid, photoRefs = null
       data: { status: 'failed', error: 'start_failed' },
     })
   }
+
+  // A database error here must surface, not mark a live OpenAI job as failed.
+  const running = await prisma.modelGeneration.update({
+    where: { id: generation.id },
+    data: { status: 'running', providerJobId, startedAt: now },
+  })
+  // The unsaved result is only thrown away once its replacement is running.
+  if (parent?.status === 'ready') await discardGeneration(prisma, shop, parent.id)
+  return running
 }
 
 /** Throw away an unsaved result (free). Photos stay: a later retry reuses them. */
@@ -156,9 +171,12 @@ export async function discardGeneration(prisma, shop, generationId) {
   if (!['ready', 'failed'].includes(generation.status)) {
     throw tagged('NOT_READY', `cannot discard a ${generation.status} generation`)
   }
-  if (generation.glbRef) await deleteModelGlb(generation.glbRef)
-  return prisma.modelGeneration.update({
-    where: { id: generation.id },
+  // Conditional on the status we read, so a save that started meanwhile wins.
+  const { count } = await prisma.modelGeneration.updateMany({
+    where: { id: generation.id, status: generation.status },
     data: { status: 'discarded', glbRef: null },
   })
+  if (count === 0) throw tagged('NOT_READY', `generation ${generationId} changed state`)
+  if (generation.glbRef) await deleteModelGlb(generation.glbRef)
+  return prisma.modelGeneration.findUnique({ where: { id: generation.id } })
 }

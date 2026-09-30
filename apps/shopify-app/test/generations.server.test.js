@@ -164,16 +164,29 @@ describe('createGeneration', () => {
       .rejects.toMatchObject({ code: 'TOO_MANY_RUNNING' })
   })
 
-  it('refuses the 21st start in 24 hours, counting automatic retries, ignoring older rows', async () => {
-    const prisma = createFakePrisma()
+  it('counts starts and automatic retries in the last 24 hours, ignoring older rows', async () => {
     const recent = new Date(NOW.getTime() - 60 * 60 * 1000)
     const old = new Date(NOW.getTime() - 25 * 60 * 60 * 1000)
-    await seed(prisma, Array(15).fill('failed'), { createdAt: recent })
-    await seed(prisma, Array(4).fill('failed'), { createdAt: recent, autoRetried: true })
-    await seed(prisma, Array(10).fill('failed'), { createdAt: old, autoRetried: true })
-    // 15 + 4 rows + 4 automatic retries = 23 >= 20
-    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW }))
-      .rejects.toMatchObject({ code: 'DAILY_LIMIT' })
+    const input = { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW }
+
+    // 15 + 2 rows + 2 automatic retries = 19 < 20; the 10 old rows must not count.
+    const under = createFakePrisma()
+    await seed(under, Array(15).fill('failed'), { createdAt: recent })
+    await seed(under, Array(2).fill('failed'), { createdAt: recent, autoRetried: true })
+    await seed(under, Array(10).fill('failed'), { createdAt: old, autoRetried: true })
+    await expect(generations.createGeneration(under, input)).resolves.toMatchObject({ status: 'running' })
+
+    // 16 + 2 rows + 2 automatic retries = 20 >= 20.
+    const over = createFakePrisma()
+    await seed(over, Array(16).fill('failed'), { createdAt: recent })
+    await seed(over, Array(2).fill('failed'), { createdAt: recent, autoRetried: true })
+    await expect(generations.createGeneration(over, input)).rejects.toMatchObject({ code: 'DAILY_LIMIT' })
+  })
+
+  it('takes the per-shop lock before counting', async () => {
+    const prisma = createFakePrisma()
+    await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW })
+    expect(prisma.locks).toEqual([[SHOP]])
   })
 
   it('retries reuse the photo set, discard a ready parent, and stop after 3', async () => {
@@ -195,6 +208,44 @@ describe('createGeneration', () => {
 
     await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: third.id, now: NOW }))
       .rejects.toMatchObject({ code: 'RETRY_LIMIT' })
+  })
+
+  it('keeps a ready parent (and its GLB) when the guard refuses the retry', async () => {
+    const prisma = createFakePrisma()
+    const parent = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/p.glb' }) })
+    deps.objects.set('generations/p.glb', Buffer.from('p'))
+    await seed(prisma, ['running', 'running'])
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: parent.id, now: NOW }))
+      .rejects.toMatchObject({ code: 'TOO_MANY_RUNNING' })
+    expect((await prisma.modelGeneration.findUnique({ where: { id: parent.id } })).status).toBe('ready')
+    expect(deps.objects.has('generations/p.glb')).toBe(true)
+  })
+
+  it('keeps a ready parent (and its GLB) when the retry fails to start', async () => {
+    const prisma = createFakePrisma()
+    const parent = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/p.glb' }) })
+    deps.objects.set('generations/p.glb', Buffer.from('p'))
+    deps.start.mockRejectedValue(new Error('429'))
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const g = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: parent.id, now: NOW })
+      expect(g).toMatchObject({ status: 'failed', error: 'start_failed' })
+      expect(logged).toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+    expect((await prisma.modelGeneration.findUnique({ where: { id: parent.id } })).status).toBe('ready')
+    expect(deps.objects.has('generations/p.glb')).toBe(true)
+  })
+
+  it('does not mark the row failed when the update after a successful start throws', async () => {
+    const prisma = createFakePrisma()
+    const update = prisma.modelGeneration.update
+    prisma.modelGeneration.update = vi.fn().mockRejectedValue(new Error('db down'))
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW }))
+      .rejects.toThrow('db down')
+    expect(prisma.modelGeneration.update).toHaveBeenCalledTimes(1)
+    prisma.modelGeneration.update = update
   })
 
   it('will not retry a running or saved generation, or another shop\'s', async () => {
@@ -238,5 +289,20 @@ describe('discardGeneration', () => {
     const foreign = await prisma.modelGeneration.create({ data: row({ status: 'ready', shop: 'other.myshopify.com' }) })
     await expect(generations.discardGeneration(prisma, SHOP, running.id)).rejects.toMatchObject({ code: 'NOT_READY' })
     await expect(generations.discardGeneration(prisma, SHOP, foreign.id)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('loses to a save that starts between the read and the update, and keeps the GLB', async () => {
+    const prisma = createFakePrisma()
+    const ready = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/r.glb' }) })
+    deps.objects.set('generations/r.glb', Buffer.from('r'))
+    const findFirst = prisma.modelGeneration.findFirst
+    prisma.modelGeneration.findFirst = async (args) => {
+      const found = await findFirst(args)
+      await prisma.modelGeneration.update({ where: { id: ready.id }, data: { status: 'saving' } })
+      return found
+    }
+    await expect(generations.discardGeneration(prisma, SHOP, ready.id)).rejects.toMatchObject({ code: 'NOT_READY' })
+    expect(deps.objects.has('generations/r.glb')).toBe(true)
+    expect((await prisma.modelGeneration.findUnique({ where: { id: ready.id } })).status).toBe('saving')
   })
 })
