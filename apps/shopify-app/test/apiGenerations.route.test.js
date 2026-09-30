@@ -182,9 +182,31 @@ describe('generations/:id.glb', () => {
 describe('webhooks/openai', () => {
   const hook = (body = '{}') => ({ request: new Request('https://x/webhooks/openai', { method: 'POST', body, headers: { 'webhook-id': 'w1' } }) })
 
-  it('400s a bad signature', async () => {
+  it('400s a bad signature, logs why (message only), and advances nothing', async () => {
     h.unwrap.mockRejectedValue(new Error('invalid'))
-    expect((await webhook.action(hook())).status).toBe(400)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect((await webhook.action(hook('{"secret":"body"}'))).status).toBe(400)
+      expect(warn).toHaveBeenCalledWith('OpenAI webhook rejected', 'invalid')
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('secret')
+    } finally {
+      warn.mockRestore()
+    }
+    expect(h.gen.advance).not.toHaveBeenCalled()
+  })
+
+  it('ignores (200) a finished event without a response id, and warns', async () => {
+    h.unwrap.mockResolvedValue({ type: 'response.completed', data: {} })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const res = await webhook.action(hook())
+      expect(res.status).toBe(200)
+      expect(await res.text()).toBe('ignored')
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+    expect(h.gen.advance).not.toHaveBeenCalled()
   })
 
   it('advances the generation for a finished job, passing the raw body and headers', async () => {
