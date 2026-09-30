@@ -7,13 +7,17 @@ import { tagged } from './errors.server.js'
 // calibrate the uploaded GLB via A1, store the normalized bytes, and persist a
 // ModelAsset for the shop. Returns a summary for the admin route to display.
 // Throws (via calibrateUpload) when the model fails validation.
-export async function saveCalibratedModel(prisma, shop, glbBytes, filename = null) {
+// `id` fixes the asset's id (AI generations use the generation's id, so a save
+// that is re-run after a crash finds the asset instead of making a second one);
+// without it the database picks one.
+export async function saveCalibratedModel(prisma, shop, glbBytes, filename = null, { id } = {}) {
   const result = await calibrateUpload(glbBytes)
   const storageRef = `${globalThis.crypto.randomUUID()}.glb`
   await saveModelGlb(storageRef, result.storedGlb)
   const confidence = result.confidence?.overall ?? null
   const asset = await prisma.modelAsset.create({
     data: {
+      ...(id ? { id } : {}),
       shop,
       filename: filename || null,
       storageRef,

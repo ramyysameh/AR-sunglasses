@@ -562,8 +562,8 @@ describe('saveGeneration', () => {
     const g = await readyRow(prisma)
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
       .resolves.toEqual({ assetId: 'asset-1', paid: false })
-    const [, shopArg, bytes, filename] = deps.saveCalibratedModel.mock.calls[0]
-    expect([shopArg, bytes.toString(), filename]).toEqual([SHOP, 'glb', 'AI model'])
+    const [, shopArg, bytes, filename, options] = deps.saveCalibratedModel.mock.calls[0]
+    expect([shopArg, bytes.toString(), filename, options]).toEqual([SHOP, 'glb', 'AI model', { id: g.id }])
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({
       status: 'saved', paid: false, modelAssetId: 'asset-1', savedAt: NOW, glbRef: null,
     })
@@ -666,6 +666,51 @@ describe('saveGeneration', () => {
     expect(deps.report).not.toHaveBeenCalled()
   })
 
+  it('reuses the asset a crashed save already created: no second asset, one charge', async () => {
+    const prisma = createFakePrisma()
+    await seed(prisma, Array(10).fill('saved'))
+    const g = await readyRow(prisma)
+    // The asset row commits, then the connection drops before the reply.
+    deps.saveCalibratedModel.mockImplementationOnce(async (_prisma, shop, _bytes, _name, { id }) => {
+      prisma.modelAsset.assets.set(id, { id, shop })
+      throw new Error('connection reset')
+    })
+    const input = { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }
+    await expect(generations.saveGeneration(prisma, input)).rejects.toThrow('connection reset')
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'ready', paid: null })
+
+    await expect(generations.saveGeneration(prisma, input)).resolves.toEqual({ assetId: g.id, paid: true })
+    expect(deps.saveCalibratedModel).toHaveBeenCalledTimes(1)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } }))
+      .toMatchObject({ status: 'saved', modelAssetId: g.id, chargeReported: true })
+
+    await generations.listGenerations(prisma, SHOP, NOW)
+    expect(deps.report).toHaveBeenCalledTimes(1)
+    expect(deps.report).toHaveBeenCalledWith({ shopGid: SHOP_GID, idempotencyKey: `aimodel_${g.id}`, timestamp: NOW })
+  })
+
+  it('reuses the asset when a concurrent create wins the unique id (P2002)', async () => {
+    const prisma = createFakePrisma()
+    const g = await readyRow(prisma)
+    deps.saveCalibratedModel.mockImplementationOnce(async (_prisma, shop, _bytes, _name, { id }) => {
+      prisma.modelAsset.assets.set(id, { id, shop })
+      throw Object.assign(new Error('Unique constraint failed on the fields: (`id`)'), { code: 'P2002' })
+    })
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
+      .resolves.toEqual({ assetId: g.id, paid: false })
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'saved', modelAssetId: g.id })
+  })
+
+  it('does not reuse an asset with the same id that belongs to another shop', async () => {
+    const prisma = createFakePrisma()
+    const g = await readyRow(prisma)
+    prisma.modelAsset.assets.set(g.id, { id: g.id, shop: 'other.myshopify.com' })
+    deps.saveCalibratedModel.mockRejectedValueOnce(Object.assign(new Error('unique'), { code: 'P2002' }))
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
+      .rejects.toMatchObject({ code: 'P2002' })
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'ready', paid: null })
+  })
+
   it('still succeeds when deleting the pending model afterwards fails', async () => {
     const prisma = createFakePrisma()
     const g = await readyRow(prisma)
@@ -745,6 +790,33 @@ describe('listGenerations', () => {
     await generations.listGenerations(prisma, SHOP, NOW)
     expect(await prisma.modelGeneration.findUnique({ where: { id: stale.id } })).toMatchObject({ status: 'ready', paid: null })
     expect(await prisma.modelGeneration.findUnique({ where: { id: recent.id } })).toMatchObject({ status: 'saving', paid: true })
+  })
+
+  it('rolls a stuck saving row forward to saved when its asset exists, then reports the charge', async () => {
+    const prisma = createFakePrisma()
+    const stale = await prisma.modelGeneration.create({
+      data: row({ status: 'saving', paid: true, glbRef: 'generations/s.glb', updatedAt: new Date(NOW.getTime() - 16 * 60_000) }),
+    })
+    deps.objects.set('generations/s.glb', Buffer.from('s'))
+    prisma.modelAsset.assets.set(stale.id, { id: stale.id, shop: SHOP })
+    deps.report.mockResolvedValue(undefined)
+    await generations.listGenerations(prisma, SHOP, NOW)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: stale.id } })).toMatchObject({
+      status: 'saved', paid: true, modelAssetId: stale.id, savedAt: NOW, glbRef: null, chargeReported: true,
+    })
+    expect(deps.objects.has('generations/s.glb')).toBe(false)
+    expect(deps.report).toHaveBeenCalledTimes(1)
+    expect(deps.report).toHaveBeenCalledWith({ shopGid: SHOP_GID, idempotencyKey: `aimodel_${stale.id}`, timestamp: NOW })
+  })
+
+  it('reverts a stuck saving row whose asset id belongs to another shop', async () => {
+    const prisma = createFakePrisma()
+    const stale = await prisma.modelGeneration.create({
+      data: row({ status: 'saving', paid: true, updatedAt: new Date(NOW.getTime() - 16 * 60_000) }),
+    })
+    prisma.modelAsset.assets.set(stale.id, { id: stale.id, shop: 'other.myshopify.com' })
+    await generations.listGenerations(prisma, SHOP, NOW)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: stale.id } })).toMatchObject({ status: 'ready', paid: null })
   })
 
   it('leaves a saving row that already has its asset alone', async () => {

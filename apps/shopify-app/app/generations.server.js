@@ -316,6 +316,29 @@ export async function advanceByProviderJob(prisma, providerJobId, now = new Date
   return advanceGeneration(prisma, generation, now)
 }
 
+// A generation's ModelAsset has the generation's id, so the asset a crashed
+// save already created is found instead of made twice.
+async function ownAsset(prisma, shop, generationId) {
+  const asset = await prisma.modelAsset.findUnique({ where: { id: generationId } })
+  return asset?.shop === shop ? asset : null
+}
+
+async function assetForGeneration(prisma, shop, generation) {
+  const existing = await ownAsset(prisma, shop, generation.id)
+  if (existing) return { assetId: existing.id }
+  const bytes = await readModelGlb(generation.glbRef)
+  if (!bytes) throw tagged('GLB_MISSING', `pending model ${generation.glbRef} is gone`)
+  try {
+    return await saveCalibratedModel(prisma, shop, bytes, 'AI model', { id: generation.id })
+  } catch (error) {
+    // P2002: another save created it between our lookup and our create.
+    if (error?.code !== 'P2002') throw error
+    const raced = await ownAsset(prisma, shop, generation.id)
+    if (!raced) throw error
+    return { assetId: raced.id }
+  }
+}
+
 async function reportChargeFor(prisma, generation) {
   await reportModelCharge({
     shopGid: generation.shopGid,
@@ -332,8 +355,9 @@ async function reportChargeFor(prisma, generation) {
  * 1. Claim, under a per-shop advisory lock, so two simultaneous saves can't
  *    both take the last free slot; paid/free is decided here, once.
  * 2. Create the asset outside the transaction (S3 read + calibration are too
- *    slow to hold a pooled connection). If that fails, nothing was charged
- *    and the row goes back to ready.
+ *    slow to hold a pooled connection), with the generation's id, so a save
+ *    re-run after a crash reuses it. If that fails, nothing was charged and
+ *    the row goes back to ready.
  * 3. Charge. A failed report leaves the model saved; listGenerations re-sends
  *    it, and Shopify's permanent idempotency makes that safe.
  */
@@ -358,9 +382,7 @@ export async function saveGeneration(prisma, { shop, generationId, planName, acc
 
   let asset
   try {
-    const bytes = await readModelGlb(generation.glbRef)
-    if (!bytes) throw tagged('GLB_MISSING', `pending model ${generation.glbRef} is gone`)
-    asset = await saveCalibratedModel(prisma, shop, bytes, 'AI model')
+    asset = await assetForGeneration(prisma, shop, generation)
   } catch (error) {
     await prisma.modelGeneration.update({ where: { id: generation.id }, data: { status: 'ready', paid: null } })
     throw error
@@ -426,6 +448,35 @@ async function sweepExpired(prisma, shop, now) {
 }
 
 /**
+ * A crash or timeout between the save claim and the "saved" update leaves a
+ * row "saving" that would burn a free slot forever. After 15 minutes (longer
+ * than any function run, so an in-flight save is never touched):
+ * - if its asset was created, the save happened: roll it forward to "saved",
+ *   so the merchant keeps one model and a paid save is charged (below);
+ * - otherwise hand it back to "ready". The pending GLB is only deleted after
+ *   "saved", and the charge only happens after "saved", so nothing is lost or
+ *   billed.
+ */
+async function settleStuckSaves(prisma, shop, now) {
+  const stuck = await prisma.modelGeneration.findMany({
+    where: { shop, status: 'saving', modelAssetId: null, updatedAt: { lt: new Date(now.getTime() - LIMITS.timeoutMs) } },
+  })
+  for (const generation of stuck) {
+    const asset = await ownAsset(prisma, shop, generation.id)
+    const where = { id: generation.id, status: 'saving', modelAssetId: null }
+    if (!asset) {
+      await prisma.modelGeneration.updateMany({ where, data: { status: 'ready', paid: null } })
+      continue
+    }
+    const { count } = await prisma.modelGeneration.updateMany({
+      where,
+      data: { status: 'saved', modelAssetId: asset.id, savedAt: now, glbRef: null },
+    })
+    if (count > 0 && generation.glbRef) await deleteObjects([generation.glbRef])
+  }
+}
+
+/**
  * What the admin page shows, brought up to date first. Also the fallback that
  * collects finished jobs when a webhook was missed, and retries charge reports.
  */
@@ -438,15 +489,7 @@ export async function listGenerations(prisma, shop, now = new Date()) {
     data: { status: 'running' },
   })
 
-  // A crash or timeout between the claim and the "saved" update leaves a row
-  // "saving" that would burn a free slot forever. Hand it back after 15 minutes
-  // (longer than any function run, so an in-flight save is never reverted).
-  // The pending GLB is only deleted after "saved", and the charge only happens
-  // after "saved", so nothing is lost or billed.
-  await prisma.modelGeneration.updateMany({
-    where: { shop, status: 'saving', modelAssetId: null, updatedAt: { lt: new Date(now.getTime() - LIMITS.timeoutMs) } },
-    data: { status: 'ready', paid: null },
-  })
+  await settleStuckSaves(prisma, shop, now)
 
   const running = await prisma.modelGeneration.findMany({ where: { shop, status: 'running' } })
   for (const generation of running) {

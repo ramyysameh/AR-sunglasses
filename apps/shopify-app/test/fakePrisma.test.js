@@ -40,6 +40,18 @@ describe('fakePrisma', () => {
     await expect(modelGeneration.findMany({ orderBy: { createdAt: 'desc' } })).resolves.toHaveLength(1)
   })
 
+  it('has a seedable modelAsset delegate that only supports findUnique by id', async () => {
+    const prisma = createFakePrisma()
+    expect(await prisma.modelAsset.findUnique({ where: { id: 'a1' } })).toBeNull()
+    prisma.modelAsset.assets.set('a1', { id: 'a1', shop: BASE.shop })
+    const found = await prisma.modelAsset.findUnique({ where: { id: 'a1' } })
+    expect(found).toEqual({ id: 'a1', shop: BASE.shop })
+    found.shop = 'changed'
+    expect(prisma.modelAsset.assets.get('a1').shop).toBe(BASE.shop)
+    await expect(prisma.modelAsset.findUnique({ where: { id: 'a1', shop: BASE.shop } })).rejects.toThrow('fakePrisma: unsupported')
+    expect(Object.keys(prisma.modelAsset).sort()).toEqual(['assets', 'findUnique'])
+  })
+
   it('throws on operator objects in update data but accepts arrays and the calibration JSON', async () => {
     const { modelGeneration } = createFakePrisma()
     const created = await modelGeneration.create({ data: { ...BASE } })

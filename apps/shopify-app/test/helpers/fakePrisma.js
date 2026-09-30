@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
-// In-memory stand-in for the parts of Prisma that generations.server.js uses,
+// In-memory stand-in for the parts of Prisma that generations.server.js uses
+// (modelGeneration, plus modelAsset.findUnique by id),
 // so its tests never touch the shared Neon database. Supports equality,
 // { in }, { not }, { gte } and { lt } filters, orderBy { createdAt: 'desc' },
 // and plain-value updates -- nothing more. Anything else THROWS instead of
@@ -134,8 +135,19 @@ export function createFakePrisma() {
       return { count }
     },
   }
+  // saveGeneration / listGenerations only look an asset up by id; tests seed
+  // `assets` (id -> row) directly. Nothing else is modelled.
+  const assets = new Map()
+  const modelAsset = {
+    assets,
+    async findUnique({ where }) {
+      const id = idOnly(where, 'modelAsset.findUnique')
+      return copy(assets.get(id))
+    },
+  }
   const prisma = {
     modelGeneration,
+    modelAsset,
     locks: [],
     async $executeRaw(_strings, ...values) {
       prisma.locks.push(values)
