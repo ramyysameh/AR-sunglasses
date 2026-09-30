@@ -289,6 +289,31 @@ confirm dialog and cost guard are our only brakes.
   allowance → exhaust allowance → paid save → the event shows in the Dev
   Dashboard as billable.
 
+## Amendments found while planning (2026-09-30)
+
+- **OpenAI webhook.** Code-interpreter containers expire 20 minutes after last
+  activity, so a finished job must be collected promptly even if the merchant
+  closed the page. `routes/webhooks.openai.jsx` receives `response.completed` /
+  `failed` / `incomplete` / `cancelled`, verifies the signature
+  (`OPENAI_WEBHOOK_SECRET`), and advances the generation. Page polling stays as
+  the fallback.
+- **Feature allowlist.** Admin changes are only visible after a production
+  deploy, so the feature is gated by `AI_GENERATION_SHOPS` (comma-separated
+  myshopify domains, or `*`). It ships dark and is enabled on the dev store first.
+- **Charge confirmation is enforced server-side.** Save takes `acceptCharge`. If
+  the save turns out to be paid (e.g. another save took the last free slot) and
+  the merchant didn't confirm, the save is refused with `CHARGE_NOT_CONFIRMED`
+  and the UI shows the $5 dialog.
+- **Row fields added:** `shopGid` (the App Events API needs the shop GID, and
+  unreported charges are re-sent without an admin session), `startedAt` (the
+  15-minute timeout restarts on the automatic retry), `savedAt`. Transient
+  status `collecting` guards against the webhook and a poll collecting the
+  same job twice.
+- **Photo presign** lives in `api.generations.jsx` (intent `presign-photos`)
+  rather than a separate route.
+- `ModelGeneration.modelAssetId` is a plain string (no foreign key), so deleting
+  the asset leaves the row, and the lifetime count, intact.
+
 ## Out of scope (v1)
 
 - Editing a generated model (colour tweaks, re-texturing) in the app.
