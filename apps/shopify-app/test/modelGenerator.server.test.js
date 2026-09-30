@@ -137,10 +137,19 @@ describe('checkGeneration', () => {
     await expect(checkGeneration('resp_1')).resolves.toEqual({ state: 'failed', error: 'no_glb_output' })
   })
 
-  it('fails with openai_<status> for failed, incomplete and cancelled jobs', async () => {
-    for (const status of ['failed', 'incomplete', 'cancelled']) {
-      setGeneratorClient(fakeClient({ response: { id: 'resp_1', status } }))
-      await expect(checkGeneration('resp_1')).resolves.toEqual({ state: 'failed', error: `openai_${status}` })
+  it('fails with openai_<status> for failed, incomplete and cancelled jobs, logging why', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      for (const status of ['failed', 'incomplete', 'cancelled']) {
+        const error = status === 'failed' ? { code: 'server_error', message: 'boom' } : null
+        const incomplete = status === 'incomplete' ? { reason: 'max_output_tokens' } : null
+        setGeneratorClient(fakeClient({ response: { id: 'resp_1', status, error, incomplete_details: incomplete } }))
+        await expect(checkGeneration('resp_1')).resolves.toEqual({ state: 'failed', error: `openai_${status}` })
+        expect(warn).toHaveBeenLastCalledWith(expect.any(String), 'resp_1', status, error, incomplete)
+      }
+      expect(warn).toHaveBeenCalledTimes(3)
+    } finally {
+      warn.mockRestore()
     }
   })
 

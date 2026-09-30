@@ -128,6 +128,14 @@ export async function checkGeneration(providerJobId) {
     return { state: 'running' }
   }
   if (response.status !== 'completed') {
+    // The row only keeps `openai_<status>`; the detail goes to the logs.
+    console.warn(
+      'AI generation ended without a model',
+      response.id ?? providerJobId,
+      response.status,
+      response.error ?? null,
+      response.incomplete_details ?? null,
+    )
     return { state: 'failed', error: `openai_${response.status}` }
   }
   let glbBytes
