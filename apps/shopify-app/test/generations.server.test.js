@@ -99,7 +99,13 @@ describe('getAllowance', () => {
 
 describe('aiGenerationEnabled', () => {
   it('is off when unset, on for listed shops (case-insensitive), and on for everyone with *', () => {
-    expect(generations.aiGenerationEnabled(SHOP, undefined)).toBe(false)
+    // undefined triggers the default parameter, which reads the real env: pin it.
+    vi.stubEnv('AI_GENERATION_SHOPS', '')
+    try {
+      expect(generations.aiGenerationEnabled(SHOP, undefined)).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+    }
     expect(generations.aiGenerationEnabled(SHOP, '')).toBe(false)
     expect(generations.aiGenerationEnabled(SHOP, 'a.myshopify.com, GEN-TEST.myshopify.com')).toBe(true)
     expect(generations.aiGenerationEnabled(SHOP, 'a.myshopify.com')).toBe(false)
