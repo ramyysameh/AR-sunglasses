@@ -1,7 +1,9 @@
 import { aiModelAllowance } from './billing.server.js'
 import { startGeneration, checkGeneration, cancelGeneration } from './modelGenerator.server.js'
 import { calibrateUpload } from './calibration.server.js'
-import { saveModelGlb, deleteModelGlb, presignObjectRead } from './storage.server.js'
+import { saveModelGlb, readModelGlb, deleteModelGlb, presignObjectRead } from './storage.server.js'
+import { saveCalibratedModel } from './models.server.js'
+import { reportModelCharge } from './usageBilling.server.js'
 import { tagged } from './errors.server.js'
 
 /**
@@ -285,4 +287,130 @@ export async function advanceByProviderJob(prisma, providerJobId, now = new Date
   const generation = await prisma.modelGeneration.findFirst({ where: { providerJobId, status: 'running' } })
   if (!generation) return null
   return advanceGeneration(prisma, generation, now)
+}
+
+async function reportChargeFor(prisma, generation) {
+  await reportModelCharge({
+    shopGid: generation.shopGid,
+    idempotencyKey: `aimodel_${generation.id}`,
+    timestamp: generation.savedAt,
+  })
+  await prisma.modelGeneration.update({ where: { id: generation.id }, data: { chargeReported: true } })
+}
+
+/**
+ * Keep a result: it becomes an ordinary ModelAsset. This is the only step that
+ * uses the allowance or costs $5.
+ *
+ * 1. Claim, under a per-shop advisory lock, so two simultaneous saves can't
+ *    both take the last free slot; paid/free is decided here, once.
+ * 2. Create the asset outside the transaction (S3 read + calibration are too
+ *    slow to hold a pooled connection). If that fails, nothing was charged
+ *    and the row goes back to ready.
+ * 3. Charge. A failed report leaves the model saved; listGenerations re-sends
+ *    it, and Shopify's permanent idempotency makes that safe.
+ */
+export async function saveGeneration(prisma, { shop, generationId, planName, acceptCharge = false, now = new Date() }) {
+  const { generation, paid } = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${shop}))`
+    const found = await tx.modelGeneration.findFirst({ where: { id: generationId, shop } })
+    if (!found) throw tagged('NOT_FOUND', `generation ${generationId} not found`)
+    if (found.status !== 'ready') throw tagged('NOT_READY', `cannot save a ${found.status} generation`)
+    const { unlimited, freeRemaining } = await getAllowance(tx, shop, planName)
+    const isPaid = !unlimited && freeRemaining <= 0
+    if (isPaid && !acceptCharge) {
+      throw tagged('CHARGE_NOT_CONFIRMED', 'this save costs $5 and was not confirmed')
+    }
+    const claim = await tx.modelGeneration.updateMany({
+      where: { id: found.id, status: 'ready' },
+      data: { status: 'saving', paid: isPaid },
+    })
+    if (claim.count === 0) throw tagged('NOT_READY', 'generation is already being saved')
+    return { generation: found, paid: isPaid }
+  })
+
+  let asset
+  try {
+    const bytes = await readModelGlb(generation.glbRef)
+    if (!bytes) throw tagged('GLB_MISSING', `pending model ${generation.glbRef} is gone`)
+    asset = await saveCalibratedModel(prisma, shop, bytes, 'AI model')
+  } catch (error) {
+    await prisma.modelGeneration.update({ where: { id: generation.id }, data: { status: 'ready', paid: null } })
+    throw error
+  }
+
+  const saved = await prisma.modelGeneration.update({
+    where: { id: generation.id },
+    data: { status: 'saved', modelAssetId: asset.assetId, savedAt: now, glbRef: null },
+  })
+  await deleteModelGlb(generation.glbRef)
+
+  if (paid) {
+    try {
+      await reportChargeFor(prisma, saved)
+    } catch (error) {
+      console.error('AI model charge report failed; will re-send', generation.id, error)
+    }
+  }
+  return { assetId: asset.assetId, paid }
+}
+
+// Photos and unsaved models are kept 30 days. Saved rows stay (the lifetime
+// allowance counts them) but lose their photos.
+async function sweepExpired(prisma, shop, now) {
+  const cutoff = new Date(now.getTime() - LIMITS.retentionDays * DAY_MS)
+  const expired = await prisma.modelGeneration.findMany({
+    where: { shop, createdAt: { lt: cutoff }, status: { in: ['ready', 'saved', 'discarded', 'failed'] } },
+  })
+  for (const generation of expired) {
+    const photos = Array.isArray(generation.photoRefs) ? generation.photoRefs : []
+    if (generation.status === 'saved' && photos.length === 0 && !generation.glbRef) continue
+    for (const key of photos) await deleteModelGlb(key)
+    if (generation.glbRef) await deleteModelGlb(generation.glbRef)
+    if (generation.status === 'saved') {
+      await prisma.modelGeneration.update({ where: { id: generation.id }, data: { photoRefs: [], glbRef: null } })
+    } else {
+      await prisma.modelGeneration.delete({ where: { id: generation.id } })
+    }
+  }
+}
+
+/**
+ * What the admin page shows, brought up to date first. Also the fallback that
+ * collects finished jobs when a webhook was missed, and retries charge reports.
+ */
+export async function listGenerations(prisma, shop, now = new Date()) {
+  await sweepExpired(prisma, shop, now)
+
+  // A crash between claim and ready leaves a row "collecting"; hand it back.
+  await prisma.modelGeneration.updateMany({
+    where: { shop, status: 'collecting', updatedAt: { lt: new Date(now.getTime() - LIMITS.stuckMs) } },
+    data: { status: 'running' },
+  })
+
+  const running = await prisma.modelGeneration.findMany({ where: { shop, status: 'running' } })
+  for (const generation of running) {
+    try {
+      await advanceGeneration(prisma, generation, now)
+    } catch (error) {
+      console.error('AI generation advance failed', generation.id, error)
+    }
+  }
+
+  const unreported = await prisma.modelGeneration.findMany({
+    where: { shop, status: 'saved', paid: true, chargeReported: false },
+  })
+  for (const generation of unreported) {
+    try {
+      await reportChargeFor(prisma, generation)
+    } catch (error) {
+      console.error('AI model charge re-send failed', generation.id, error)
+    }
+  }
+
+  return prisma.modelGeneration.findMany({
+    where: { shop, status: { in: ['queued', 'running', 'collecting', 'ready', 'saving', 'failed'] } },
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+  })
 }

@@ -456,3 +456,143 @@ describe('advanceByProviderJob', () => {
     await expect(generations.advanceByProviderJob(prisma, 'resp_unknown', NOW)).resolves.toBeNull()
   })
 })
+
+describe('saveGeneration', () => {
+  async function readyRow(prisma, overrides = {}) {
+    const g = await prisma.modelGeneration.create({ data: row({ status: 'ready', ...overrides }) })
+    const glbRef = `generations/${g.id}.glb`
+    deps.objects.set(glbRef, Buffer.from('glb'))
+    return prisma.modelGeneration.update({ where: { id: g.id }, data: { glbRef } })
+  }
+
+  beforeEach(() => {
+    deps.saveCalibratedModel.mockResolvedValue({ assetId: 'asset-1' })
+    deps.report.mockResolvedValue(undefined)
+  })
+
+  it('saves within the allowance for free', async () => {
+    const prisma = createFakePrisma()
+    const g = await readyRow(prisma)
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
+      .resolves.toEqual({ assetId: 'asset-1', paid: false })
+    const [, shopArg, bytes, filename] = deps.saveCalibratedModel.mock.calls[0]
+    expect([shopArg, bytes.toString(), filename]).toEqual([SHOP, 'glb', 'AI model'])
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({
+      status: 'saved', paid: false, modelAssetId: 'asset-1', savedAt: NOW, glbRef: null,
+    })
+    expect(deps.objects.has(`generations/${g.id}.glb`)).toBe(false)
+    expect(deps.report).not.toHaveBeenCalled()
+    expect(prisma.locks).toEqual([[SHOP]])
+  })
+
+  it('charges $5 once the allowance is used up, when the merchant accepted', async () => {
+    const prisma = createFakePrisma()
+    await seed(prisma, Array(10).fill('saved'))
+    const g = await readyRow(prisma)
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
+      .resolves.toEqual({ assetId: 'asset-1', paid: true })
+    expect(deps.report).toHaveBeenCalledWith({ shopGid: SHOP_GID, idempotencyKey: `aimodel_${g.id}`, timestamp: NOW })
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ paid: true, chargeReported: true })
+  })
+
+  it('refuses a paid save the merchant did not accept, and leaves it ready', async () => {
+    const prisma = createFakePrisma()
+    await seed(prisma, Array(10).fill('saved'))
+    const g = await readyRow(prisma)
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
+      .rejects.toMatchObject({ code: 'CHARGE_NOT_CONFIRMED' })
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'ready', paid: null })
+    expect(deps.saveCalibratedModel).not.toHaveBeenCalled()
+  })
+
+  it('never charges on Pro', async () => {
+    const prisma = createFakePrisma()
+    await seed(prisma, Array(100).fill('saved'))
+    const g = await readyRow(prisma)
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Pro', now: NOW }))
+      .resolves.toEqual({ assetId: 'asset-1', paid: false })
+    expect(deps.report).not.toHaveBeenCalled()
+  })
+
+  it('puts the row back to ready, uncharged, when creating the asset fails', async () => {
+    const prisma = createFakePrisma()
+    const g = await readyRow(prisma)
+    deps.saveCalibratedModel.mockRejectedValue(new Error('S3 down'))
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
+      .rejects.toThrow('S3 down')
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'ready', paid: null })
+    expect(deps.objects.has(`generations/${g.id}.glb`)).toBe(true)
+  })
+
+  it('keeps the model saved when reporting the charge fails', async () => {
+    const prisma = createFakePrisma()
+    await seed(prisma, Array(10).fill('saved'))
+    const g = await readyRow(prisma)
+    deps.report.mockRejectedValue(Object.assign(new Error('503'), { code: 'APP_EVENTS_REJECTED' }))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
+        .resolves.toEqual({ assetId: 'asset-1', paid: true })
+      expect(errorSpy).toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'saved', chargeReported: false })
+  })
+
+  it('only saves ready rows of this shop', async () => {
+    const prisma = createFakePrisma()
+    const running = await prisma.modelGeneration.create({ data: row({ status: 'running' }) })
+    const foreign = await readyRow(prisma, { shop: 'other.myshopify.com' })
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: running.id, planName: 'Pro', now: NOW })).rejects.toMatchObject({ code: 'NOT_READY' })
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: foreign.id, planName: 'Pro', now: NOW })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})
+
+describe('listGenerations', () => {
+  it('re-sends unreported charges', async () => {
+    const prisma = createFakePrisma()
+    const g = await prisma.modelGeneration.create({ data: row({ status: 'saved', paid: true, chargeReported: false, savedAt: NOW }) })
+    deps.report.mockResolvedValue(undefined)
+    await generations.listGenerations(prisma, SHOP, NOW)
+    expect(deps.report).toHaveBeenCalledWith({ shopGid: SHOP_GID, idempotencyKey: `aimodel_${g.id}`, timestamp: NOW })
+    expect((await prisma.modelGeneration.findUnique({ where: { id: g.id } })).chargeReported).toBe(true)
+  })
+
+  it('advances running rows and unsticks rows left collecting for over 5 minutes', async () => {
+    const prisma = createFakePrisma()
+    await prisma.modelGeneration.create({ data: row({ status: 'running', providerJobId: 'resp_a', startedAt: NOW }) })
+    await prisma.modelGeneration.create({ data: row({ status: 'collecting', providerJobId: 'resp_b', startedAt: NOW, updatedAt: new Date(NOW.getTime() - 6 * 60_000) }) })
+    deps.check.mockResolvedValue({ state: 'running' })
+    await generations.listGenerations(prisma, SHOP, NOW)
+    expect(deps.check.mock.calls.map(([id]) => id).sort()).toEqual(['resp_a', 'resp_b'])
+  })
+
+  it('deletes 30-day-old photos and pending models; keeps saved rows for the allowance', async () => {
+    const prisma = createFakePrisma()
+    const old = new Date(NOW.getTime() - 31 * 24 * 60 * 60 * 1000)
+    for (const key of PHOTOS) deps.objects.set(key, Buffer.from('p'))
+    deps.objects.set('generations/old.glb', Buffer.from('g'))
+    const saved = await prisma.modelGeneration.create({ data: row({ status: 'saved', createdAt: old }) })
+    const readyOld = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/old.glb', createdAt: old }) })
+
+    await generations.listGenerations(prisma, SHOP, NOW)
+
+    for (const key of PHOTOS) expect(deps.objects.has(key)).toBe(false)
+    expect(deps.objects.has('generations/old.glb')).toBe(false)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: saved.id } })).toMatchObject({ status: 'saved', photoRefs: [] })
+    expect(await prisma.modelGeneration.findUnique({ where: { id: readyOld.id } })).toBeNull()
+    expect((await generations.getAllowance(prisma, SHOP, 'Starter')).used).toBe(1)
+  })
+
+  it('returns active rows newest first, without saved or discarded ones', async () => {
+    const prisma = createFakePrisma()
+    const t = (min) => new Date(NOW.getTime() - min * 60_000)
+    await prisma.modelGeneration.create({ data: row({ status: 'failed', createdAt: t(3) }) })
+    await prisma.modelGeneration.create({ data: row({ status: 'ready', createdAt: t(1) }) })
+    await prisma.modelGeneration.create({ data: row({ status: 'saved', createdAt: t(2) }) })
+    await prisma.modelGeneration.create({ data: row({ status: 'discarded', createdAt: t(0) }) })
+    const rows = await generations.listGenerations(prisma, SHOP, NOW)
+    expect(rows.map((r) => r.status)).toEqual(['ready', 'failed'])
+  })
+})
