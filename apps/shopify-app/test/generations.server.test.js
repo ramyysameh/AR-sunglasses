@@ -420,6 +420,53 @@ describe('advanceGeneration', () => {
     }
   })
 
+  it('gives up on a job it has failed to check for over 30 minutes: one free retry, then failed', async () => {
+    const prisma = createFakePrisma()
+    const old = new Date(NOW.getTime() - 31 * 60_000)
+    const first = await running(prisma, { startedAt: old })
+    deps.check.mockRejectedValue(new Error('openai 503'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(generations.advanceGeneration(prisma, first, NOW))
+        .resolves.toMatchObject({ status: 'running', autoRetried: true, providerJobId: 'resp_retry', error: 'check_failed' })
+      const second = await running(prisma, { startedAt: old, autoRetried: true, providerJobId: 'resp_2' })
+      await expect(generations.advanceGeneration(prisma, second, NOW))
+        .resolves.toMatchObject({ status: 'failed', error: 'check_failed' })
+      expect(warn).toHaveBeenCalledTimes(2)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('rethrows a failed check on a young job and leaves it running', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma, { startedAt: new Date(NOW.getTime() - 5 * 60_000) })
+    deps.check.mockRejectedValue(new Error('openai 503'))
+    await expect(generations.advanceGeneration(prisma, g, NOW)).rejects.toThrow('openai 503')
+    expect((await prisma.modelGeneration.findUnique({ where: { id: g.id } })).status).toBe('running')
+    expect(deps.start).not.toHaveBeenCalled()
+  })
+
+  it('marks an old job failed (collect_failed) instead of handing it back forever', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma, { startedAt: new Date(NOW.getTime() - 31 * 60_000) })
+    deps.check.mockResolvedValue({ state: 'done', glbBytes: Buffer.from('glb') })
+    deps.calibrate.mockResolvedValue(GOOD_CALIBRATION)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const setSpy = vi.spyOn(deps.objects, 'set').mockImplementation(() => {
+      throw new Error('s3 unavailable')
+    })
+    try {
+      await expect(generations.advanceGeneration(prisma, g, NOW)).rejects.toThrow('s3 unavailable')
+      expect(errorSpy).toHaveBeenCalled()
+      expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } }))
+        .toMatchObject({ status: 'failed', error: 'collect_failed' })
+    } finally {
+      setSpy.mockRestore()
+      errorSpy.mockRestore()
+    }
+  })
+
   it('keeps a long calibration message out of the stored error', async () => {
     const prisma = createFakePrisma()
     const g = await running(prisma)

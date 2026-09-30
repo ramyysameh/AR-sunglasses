@@ -233,9 +233,20 @@ async function retryOrFail(prisma, generation, reason, now) {
 export async function advanceGeneration(prisma, generation, now = new Date()) {
   if (generation.status !== 'running') return generation
 
-  const result = await checkGeneration(generation.providerJobId)
-  const timedOut = result.state === 'running'
-    && now.getTime() - new Date(generation.startedAt).getTime() > LIMITS.timeoutMs
+  const ageMs = now.getTime() - new Date(generation.startedAt).getTime()
+  // Past this age a job that still can't be checked or collected is given up
+  // on, so it can't hold one of the shop's two running slots forever.
+  const abandoned = ageMs > 2 * LIMITS.timeoutMs
+
+  let result
+  try {
+    result = await checkGeneration(generation.providerJobId)
+  } catch (error) {
+    if (!abandoned) throw error
+    console.warn('AI generation check keeps failing; giving up on the job', generation.id, error?.message)
+    result = { state: 'failed', error: 'check_failed' }
+  }
+  const timedOut = result.state === 'running' && ageMs > LIMITS.timeoutMs
   if (result.state === 'running' && !timedOut) return generation
   if (timedOut) await cancelGeneration(generation.providerJobId)
 
@@ -273,11 +284,12 @@ export async function advanceGeneration(prisma, generation, now = new Date()) {
     })
   } catch (error) {
     // Hand the row back so the next webhook or poll retries promptly, instead
-    // of leaving it stuck in `collecting`.
+    // of leaving it stuck in `collecting` -- unless it has been failing for too
+    // long, in which case it fails (free) rather than looping forever.
     console.error('AI generation collect failed', generation.id, error)
     await prisma.modelGeneration.updateMany({
       where: { id: generation.id, status: 'collecting' },
-      data: { status: 'running' },
+      data: abandoned ? { status: 'failed', error: 'collect_failed' } : { status: 'running' },
     })
     throw error
   }

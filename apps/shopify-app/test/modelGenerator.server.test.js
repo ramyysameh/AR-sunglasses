@@ -9,7 +9,15 @@ import {
 } from '../app/modelGenerator.server.js'
 import { MAX_GLB_BYTES } from '../app/remoteGlb.server.js'
 
-function fakeClient({ response = null, containerFiles = [], fileBytes = Buffer.from('glTF-bytes') } = {}) {
+const apiError = (status) => Object.assign(new Error(`${status} status code`), { status })
+
+function fakeClient({
+  response = null,
+  containerFiles = [],
+  fileBytes = Buffer.from('glTF-bytes'),
+  listError = null,
+  downloadError = null,
+} = {}) {
   const calls = { created: [], downloaded: [], listed: [], cancelled: [] }
   return {
     calls,
@@ -29,12 +37,14 @@ function fakeClient({ response = null, containerFiles = [], fileBytes = Buffer.f
         list: (containerId) => {
           calls.listed.push(containerId)
           return (async function* () {
+            if (listError) throw listError
             yield* containerFiles
           })()
         },
         content: {
           retrieve: async (fileId, { container_id }) => {
             calls.downloaded.push({ fileId, containerId: container_id })
+            if (downloadError) throw downloadError
             return new Response(fileBytes)
           },
         },
@@ -140,6 +150,31 @@ describe('checkGeneration', () => {
       fileBytes: Buffer.alloc(MAX_GLB_BYTES + 1),
     }))
     await expect(checkGeneration('resp_1')).resolves.toEqual({ state: 'failed', error: 'glb_too_large' })
+  })
+
+  it('fails with output_expired when the container (or its file) is gone', async () => {
+    for (const status of [404, 410]) {
+      setGeneratorClient(fakeClient({
+        response: { id: 'resp_1', status: 'completed', output: [citedMessage] },
+        downloadError: apiError(status),
+      }))
+      await expect(checkGeneration('resp_1')).resolves.toEqual({ state: 'failed', error: 'output_expired' })
+    }
+    setGeneratorClient(fakeClient({
+      response: { id: 'resp_1', status: 'completed', output: [{ type: 'code_interpreter_call', container_id: 'cntr_2' }] },
+      listError: apiError(404),
+    }))
+    await expect(checkGeneration('resp_1')).resolves.toEqual({ state: 'failed', error: 'output_expired' })
+  })
+
+  it('still throws on other download errors, so the next poll tries again', async () => {
+    for (const error of [apiError(500), new Error('socket hang up')]) {
+      setGeneratorClient(fakeClient({
+        response: { id: 'resp_1', status: 'completed', output: [citedMessage] },
+        downloadError: error,
+      }))
+      await expect(checkGeneration('resp_1')).rejects.toBe(error)
+    }
   })
 })
 

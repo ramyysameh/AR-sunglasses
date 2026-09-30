@@ -107,6 +107,21 @@ async function listedGlb(response) {
   return null
 }
 
+// The container (or the file in it) no longer exists: it expired 20 minutes
+// after its last activity. The OpenAI SDK raises NotFoundError (status 404) for
+// this; 410 Gone is treated the same. Anything else (network, 5xx) may pass, so
+// it is rethrown for the next webhook or poll to try again.
+const isGone = (error) => error?.status === 404 || error?.status === 410
+
+async function downloadGlb(response) {
+  const file = citedGlb(response) ?? (await listedGlb(response))
+  if (!file) return null
+  const download = await getClient().containers.files.content.retrieve(file.fileId, {
+    container_id: file.containerId,
+  })
+  return Buffer.from(await download.arrayBuffer())
+}
+
 export async function checkGeneration(providerJobId) {
   const response = await getClient().responses.retrieve(providerJobId)
   if (response.status === 'queued' || response.status === 'in_progress') {
@@ -115,12 +130,14 @@ export async function checkGeneration(providerJobId) {
   if (response.status !== 'completed') {
     return { state: 'failed', error: `openai_${response.status}` }
   }
-  const file = citedGlb(response) ?? (await listedGlb(response))
-  if (!file) return { state: 'failed', error: 'no_glb_output' }
-  const download = await getClient().containers.files.content.retrieve(file.fileId, {
-    container_id: file.containerId,
-  })
-  const glbBytes = Buffer.from(await download.arrayBuffer())
+  let glbBytes
+  try {
+    glbBytes = await downloadGlb(response)
+  } catch (error) {
+    if (isGone(error)) return { state: 'failed', error: 'output_expired' }
+    throw error
+  }
+  if (!glbBytes) return { state: 'failed', error: 'no_glb_output' }
   if (glbBytes.length > MAX_GLB_BYTES) return { state: 'failed', error: 'glb_too_large' }
   return { state: 'done', glbBytes, usage: response.usage ?? null }
 }
