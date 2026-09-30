@@ -6,6 +6,8 @@ import { useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-ro
 import { authenticate } from '../shopify.server'
 import { handleProductAction } from '../productActions.server'
 import { loadWorkspace } from '../workspace.server'
+import prisma from '../db.server'
+import { aiGenerationEnabled, getAllowance } from '../generations.server'
 import { AddTryOnFlow, isReady as isReadyModel } from '../components/AddTryOnFlow'
 import ModelFitReview from '../components/ModelFitReview'
 import { useMarkFitReviewed } from '../components/useMarkFitReviewed'
@@ -65,7 +67,11 @@ export const links = () => [{ rel: 'stylesheet', href: workspaceStyles }]
 
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
-  return loadWorkspace({ admin, shop: session.shop, engineUrl: resolveEngineUrl(request) })
+  const workspace = await loadWorkspace({ admin, shop: session.shop, engineUrl: resolveEngineUrl(request) })
+  const aiModels = aiGenerationEnabled(session.shop) && workspace.usage.planName
+    ? await getAllowance(prisma, session.shop, workspace.usage.planName)
+    : null
+  return { ...workspace, aiModels }
 }
 
 export const action = async ({ request }) => {
@@ -337,7 +343,7 @@ export default function Workspace() {
             amber at the limit and carries its own Upgrade action, and the guide
             surfaces the limit too. Three routes to the same pricing page on one
             screen was noise, not urgency. */}
-        <PlanUsage usage={data.usage} />
+        <PlanUsage usage={data.usage} aiModels={data.aiModels} />
         <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />
         {hasOperations && (
           <>

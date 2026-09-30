@@ -1,0 +1,290 @@
+/* eslint-disable react/prop-types -- lightweight props, same as the other flows */
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRevalidator } from 'react-router'
+import { useAppBridge } from '@shopify/app-bridge-react'
+import ModelViewer from './ModelViewer'
+
+// Keep in step with the server: storage.server.js MAX_PHOTO_BYTES and the
+// $5 App Pricing meter. (A client component can't import .server modules.)
+const MAX_PHOTO_BYTES = 10 * 1048576
+const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const PRICE = '$5'
+const POLL_MS = 5000
+const CONFIRM_MODAL_ID = 'ai-charge-confirm'
+const GENERIC_ERROR = 'Something went wrong. Try again.'
+const UPLOAD_FAILED = "The photos didn't upload. Check your connection and try again."
+
+export const PHOTO_SLOTS = [
+  { key: 'front', label: 'Front', required: true },
+  { key: 'left', label: 'Left side', required: true },
+  { key: 'right', label: 'Right side', required: true },
+  { key: 'back', label: 'Back (optional)', required: false },
+]
+
+export function photoError(file) {
+  if (!file) return null
+  if (!PHOTO_TYPES.includes(file.type)) return 'Use a JPG, PNG or WebP photo.'
+  if (file.size > MAX_PHOTO_BYTES) return 'Photos must be 10 MB or smaller.'
+  return null
+}
+
+export function canGenerate(photos) {
+  return PHOTO_SLOTS.every((slot) => !slot.required || photos[slot.key])
+    && PHOTO_SLOTS.every((slot) => !photoError(photos[slot.key]))
+}
+
+export function balanceMessage(allowance) {
+  if (!allowance) return ''
+  if (allowance.unlimited) return 'Unlimited AI models on your plan'
+  if (allowance.freeRemaining > 0) return `${allowance.freeRemaining} of ${allowance.allowance} free AI models left`
+  return `Next model: ${PRICE}, added to your Shopify bill`
+}
+
+export function saveNeedsCharge(allowance) {
+  return Boolean(allowance) && !allowance.unlimited && allowance.freeRemaining <= 0
+}
+
+export function failureMessage(error) {
+  if (error === 'low_confidence' || error?.startsWith('invalid_model')) {
+    return "We couldn't build a model that fits from these photos. Try clearer photos: plain background, frame only (not worn), good light, whole frame in shot. You weren't charged."
+  }
+  if (error === 'timeout') return "Generating took too long. Try again. You weren't charged."
+  return "Generating failed. Try again. You weren't charged."
+}
+
+export function generationView(generation) {
+  const retry = generation.retriesLeft > 0 ? ['retry'] : []
+  switch (generation.status) {
+    case 'running':
+      return { label: 'Generating… this takes a few minutes. You can leave this page.', tone: 'info', actions: [] }
+    case 'ready':
+      return { label: 'Ready to review', tone: 'success', actions: ['save', ...retry, 'discard'] }
+    case 'saving':
+      return { label: 'Saving…', tone: 'info', actions: [] }
+    case 'failed':
+      return { label: failureMessage(generation.error), tone: 'critical', actions: [...retry, 'discard'] }
+    default:
+      return { label: generation.status, tone: 'neutral', actions: [] }
+  }
+}
+
+const ACTION_LABELS = { save: 'Save model', retry: 'Try again', discard: 'Discard' }
+
+function PhotoSlot({ slot, file, disabled, onFile, onRejected }) {
+  const ref = useRef(null)
+  // React 18 strips onDropRejected from custom elements; attach it directly.
+  useEffect(() => {
+    const zone = ref.current
+    if (!zone) return undefined
+    zone.addEventListener('droprejected', onRejected)
+    return () => zone.removeEventListener('droprejected', onRejected)
+  }, [onRejected])
+  const error = photoError(file)
+  return (
+    <s-stack direction="block" gap="small-200">
+      <s-drop-zone
+        ref={ref}
+        label={slot.label}
+        accept={PHOTO_TYPES.join(',')}
+        accessibilityLabel={`Choose the ${slot.label.toLowerCase()} photo`}
+        disabled={disabled}
+        error={error ?? undefined}
+        // onInput, not onChange: React 18 never dispatches change for s-drop-zone.
+        onInput={(event) => onFile(event.currentTarget.files?.[0] ?? null)}
+      ></s-drop-zone>
+      {file && !error && <s-text color="subdued">{file.name}</s-text>}
+    </s-stack>
+  )
+}
+
+function GenerationRow({ generation, disabled, onAction }) {
+  const view = generationView(generation)
+  return (
+    <s-box padding="base" borderWidth="base" borderRadius="base">
+      <s-stack direction="block" gap="base">
+        <s-badge tone={view.tone}>{view.label}</s-badge>
+        {generation.previewUrl && <ModelViewer src={generation.previewUrl} alt="AI-generated model preview" />}
+        {view.actions.length > 0 && (
+          <s-stack direction="inline" gap="small-200">
+            {view.actions.map((action) => (
+              <s-button
+                key={action}
+                variant={action === 'save' ? 'primary' : 'secondary'}
+                disabled={disabled}
+                onClick={() => onAction(action)}
+              >
+                {ACTION_LABELS[action]}
+              </s-button>
+            ))}
+          </s-stack>
+        )}
+      </s-stack>
+    </s-box>
+  )
+}
+
+async function postForm(fields) {
+  const form = new FormData()
+  for (const [key, value] of Object.entries(fields)) form.set(key, value)
+  const res = await fetch('/api/generations', { method: 'POST', body: form })
+  const body = await res.json().catch(() => ({}))
+  return { ok: res.ok, status: res.status, body }
+}
+
+export default function AiModelFlow({ initialAllowance }) {
+  const shopify = useAppBridge()
+  const revalidator = useRevalidator()
+  const [photos, setPhotos] = useState({})
+  const [generations, setGenerations] = useState([])
+  const [allowance, setAllowance] = useState(initialAllowance ?? null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const [chargeFor, setChargeFor] = useState(null)
+
+  const refresh = useCallback(async () => {
+    const res = await fetch('/api/generations')
+    if (!res.ok) return
+    const body = await res.json()
+    setGenerations(body.generations)
+    setAllowance(body.allowance)
+  }, [])
+
+  useEffect(() => {
+    refresh()
+  }, [refresh])
+
+  const anyRunning = generations.some((g) => g.status === 'running' || g.status === 'saving')
+  useEffect(() => {
+    if (!anyRunning) return undefined
+    const timer = setInterval(refresh, POLL_MS)
+    return () => clearInterval(timer)
+  }, [anyRunning, refresh])
+
+  const onRejected = useCallback(() => setError('Use a JPG, PNG or WebP photo of 10 MB or less.'), [])
+
+  async function generate() {
+    setBusy(true)
+    setError(null)
+    try {
+      const chosen = PHOTO_SLOTS.map((slot) => photos[slot.key]).filter(Boolean)
+      const presign = await postForm({
+        intent: 'presign-photos',
+        files: JSON.stringify(chosen.map((f) => ({ type: f.type, size: f.size }))),
+      })
+      if (!presign.ok) throw new Error(presign.body.error ?? GENERIC_ERROR)
+      await Promise.all(presign.body.uploads.map(async ({ uploadUrl }, i) => {
+        const res = await fetch(uploadUrl, { method: 'PUT', body: chosen[i], headers: { 'Content-Type': chosen[i].type } })
+        if (!res.ok) {
+          console.error('AI photo upload failed', res.status)
+          throw new Error(UPLOAD_FAILED)
+        }
+      }))
+      const created = await postForm({
+        intent: 'create',
+        photoRefs: JSON.stringify(presign.body.uploads.map((u) => u.storageRef)),
+      })
+      if (!created.ok) throw new Error(created.body.error ?? GENERIC_ERROR)
+      setPhotos({})
+      await refresh()
+    } catch (e) {
+      setError(e.message || GENERIC_ERROR)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function askToConfirmCharge(generationId) {
+    setChargeFor(generationId)
+    shopify.modal.show(CONFIRM_MODAL_ID)
+  }
+
+  async function act(generation, action, { acceptCharge = false } = {}) {
+    if (action === 'save' && saveNeedsCharge(allowance) && !acceptCharge) {
+      askToConfirmCharge(generation.id)
+      return
+    }
+    setBusy(true)
+    setError(null)
+    const res = await postForm({
+      intent: action,
+      generationId: generation.id,
+      ...(action === 'save' ? { acceptCharge: String(acceptCharge) } : {}),
+    })
+    setBusy(false)
+    if (res.body.code === 'CHARGE_NOT_CONFIRMED') {
+      // Another save took the last free slot since this page loaded.
+      askToConfirmCharge(generation.id)
+      await refresh()
+      return
+    }
+    if (!res.ok) {
+      setError(res.body.error ?? GENERIC_ERROR)
+      return
+    }
+    if (action === 'save') {
+      shopify.toast.show(res.body.paid ? `Model saved. ${PRICE} added to your Shopify bill.` : 'Model saved to your library')
+      revalidator.revalidate()
+    }
+    await refresh()
+  }
+
+  function confirmCharge() {
+    shopify.modal.hide(CONFIRM_MODAL_ID)
+    const generation = generations.find((g) => g.id === chargeFor)
+    if (generation) act(generation, 'save', { acceptCharge: true })
+  }
+
+  return (
+    <s-section heading="Create with AI">
+      <s-stack direction="block" gap="base">
+        <s-paragraph>
+          Upload photos of a frame and we&apos;ll build its 3D model. Use a plain
+          background, the frame only (not worn), good light, and the whole frame in shot.
+        </s-paragraph>
+        <s-text type="strong">{balanceMessage(allowance)}</s-text>
+        {error && (
+          <s-banner tone="critical" heading="Couldn't create the model">
+            {error}
+          </s-banner>
+        )}
+        <s-grid gridTemplateColumns="repeat(auto-fit, minmax(160px, 1fr))" gap="base">
+          {PHOTO_SLOTS.map((slot) => (
+            <PhotoSlot
+              key={slot.key}
+              slot={slot}
+              file={photos[slot.key]}
+              disabled={busy}
+              onRejected={onRejected}
+              onFile={(file) => setPhotos((current) => ({ ...current, [slot.key]: file ?? undefined }))}
+            />
+          ))}
+        </s-grid>
+        <s-stack direction="inline">
+          <s-button variant="primary" disabled={busy || !canGenerate(photos)} loading={busy} onClick={generate}>
+            Generate 3D model
+          </s-button>
+        </s-stack>
+        {generations.map((generation) => (
+          <GenerationRow
+            key={generation.id}
+            generation={generation}
+            disabled={busy}
+            onAction={(action) => act(generation, action)}
+          />
+        ))}
+      </s-stack>
+      <s-modal id={CONFIRM_MODAL_ID} heading={`Save this model for ${PRICE}?`}>
+        <s-paragraph>
+          You&apos;ve used all the free AI models on your plan. This model costs {PRICE}.
+          It will be added to your next Shopify bill.
+        </s-paragraph>
+        <s-button slot="primary-action" variant="primary" onClick={confirmCharge}>
+          Save for {PRICE}
+        </s-button>
+        <s-button slot="secondary-actions" onClick={() => shopify.modal.hide(CONFIRM_MODAL_ID)}>
+          Cancel
+        </s-button>
+      </s-modal>
+    </s-section>
+  )
+}

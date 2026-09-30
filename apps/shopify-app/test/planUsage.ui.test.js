@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import PlanUsage, { usagePercent } from '../app/components/PlanUsage.jsx'
+import PlanUsage, { usagePercent, aiModelsLine } from '../app/components/PlanUsage.jsx'
 
 global.React = React
 
@@ -95,5 +95,13 @@ describe('PlanUsage on an unlimited plan', () => {
 describe('PlanUsage without usage data', () => {
   it('renders nothing rather than throwing', () => {
     expect(render(undefined)).toBe('')
+  })
+})
+
+describe('aiModelsLine', () => {
+  it('shows free AI models used, or a plain count on unlimited plans', () => {
+    expect(aiModelsLine({ allowance: 10, used: 3, unlimited: false, freeRemaining: 7 })).toBe('3 / 10 free AI models used')
+    expect(aiModelsLine({ allowance: 10, used: 12, unlimited: false, freeRemaining: 0 })).toBe('12 AI models created (10 free, then $5 each)')
+    expect(aiModelsLine({ allowance: null, used: 1, unlimited: true, freeRemaining: null })).toBe('1 AI model created')
   })
 })

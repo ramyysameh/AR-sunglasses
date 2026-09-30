@@ -62,6 +62,11 @@ vi.mock('../app/shopify.server.js', () => ({
 vi.mock('../app/productActions.server.js', () => ({
   handleProductAction: vi.fn(),
 }))
+vi.mock('../app/db.server.js', () => ({ default: {} }))
+vi.mock('../app/generations.server.js', () => ({
+  aiGenerationEnabled: vi.fn(() => false),
+  getAllowance: vi.fn(),
+}))
 
 global.React = React
 

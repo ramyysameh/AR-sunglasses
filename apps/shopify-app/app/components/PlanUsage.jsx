@@ -13,6 +13,17 @@ export function usagePercent({ used, limit }) {
 }
 
 /**
+ * One line about AI-generated models, shown when the feature is on for the shop.
+ * @param {{allowance: number|null, used: number, unlimited: boolean}} aiModels
+ */
+export function aiModelsLine({ allowance, used, unlimited }) {
+  const models = `${used} AI ${used === 1 ? 'model' : 'models'}`
+  if (unlimited) return `${models} created`
+  if (used <= allowance) return `${used} / ${allowance} free AI models used`
+  return `${models} created (${allowance} free, then $5 each)`
+}
+
+/**
  * Plan name, product meter and upgrade action.
  *
  * Unlimited plans (Pro, and owner-comped shops, which planUsage resolves to Pro)
@@ -21,7 +32,7 @@ export function usagePercent({ used, limit }) {
  * so the panel never reads as missing.
  * @param {{usage: {planName: string|null, used: number, limit: number, unlimited: boolean, atLimit: boolean, pricingUrl: string|null}}} props
  */
-export default function PlanUsage({ usage }) {
+export default function PlanUsage({ usage, aiModels = null }) {
   if (!usage) return null
 
   const planName = usage.planName ?? 'No plan'
@@ -34,6 +45,7 @@ export default function PlanUsage({ usage }) {
           <s-text color="subdued">
             {usage.used} {usage.used === 1 ? 'product' : 'products'} using try-on
           </s-text>
+          {aiModels && <s-text color="subdued">{aiModelsLine(aiModels)}</s-text>}
         </s-stack>
       </s-section>
     )
@@ -79,6 +91,7 @@ export default function PlanUsage({ usage }) {
             ? `${remaining} ${remaining === 1 ? 'product' : 'products'} remaining`
             : 'Upgrade to add more products'}
         </s-text>
+        {aiModels && <s-text color="subdued">{aiModelsLine(aiModels)}</s-text>}
       </s-stack>
     </s-section>
   )
