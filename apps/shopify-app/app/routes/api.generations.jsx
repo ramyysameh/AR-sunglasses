@@ -1,0 +1,140 @@
+import { authenticate } from '../shopify.server'
+import prisma from '../db.server'
+import { getActivePlanName } from '../billing.server'
+import { presignPhotoUpload } from '../storage.server'
+import {
+  aiGenerationEnabled,
+  getAllowance,
+  listGenerations,
+  createGeneration,
+  saveGeneration,
+  discardGeneration,
+  toClientGeneration,
+} from '../generations.server'
+
+// Resource route (no default export), for the same reason as api.model-upload:
+// fetch() + json() needs a real JSON Response, not the rendered document.
+// App Bridge attaches the session token to same-origin relative fetches.
+
+const STATUS_BY_CODE = {
+  BAD_PHOTOS: 400,
+  BAD_PHOTO: 400,
+  NOT_FOUND: 404,
+  NOT_RETRYABLE: 409,
+  NOT_READY: 409,
+  RETRY_LIMIT: 409,
+  GLB_MISSING: 409,
+  CHARGE_NOT_CONFIRMED: 402,
+  TOO_MANY_RUNNING: 429,
+  DAILY_LIMIT: 429,
+}
+
+const MESSAGES = {
+  BAD_PHOTOS: 'Add 3 or 4 photos: front, left side, right side, and optionally back.',
+  BAD_PHOTO: 'Use JPG, PNG or WebP photos of 10 MB or less.',
+  NOT_FOUND: 'That model is no longer available. Refresh the page.',
+  NOT_RETRYABLE: "This model can't be regenerated right now.",
+  NOT_READY: 'This model is still being worked on. Refresh the page.',
+  RETRY_LIMIT: "You've used all 3 retries for these photos. Upload a new set to try again.",
+  GLB_MISSING: "This model's file is no longer available. Try generating it again.",
+  CHARGE_NOT_CONFIRMED: 'This model costs $5. Confirm to save it.',
+  TOO_MANY_RUNNING: 'Two models are already being generated. Wait for one to finish.',
+  DAILY_LIMIT: "You've reached today's limit of 20 AI generations. Try again tomorrow.",
+}
+
+const SHOP_ID_QUERY = `#graphql
+  query ShopId {
+    shop { id }
+  }`
+
+function errorResponse(error) {
+  const status = STATUS_BY_CODE[error?.code]
+  if (!status) {
+    console.error('AI generation request failed', error)
+    return Response.json({ error: 'Something went wrong. Try again.' }, { status: 500 })
+  }
+  return Response.json({ error: MESSAGES[error.code], code: error.code }, { status })
+}
+
+function parseJson(value) {
+  try {
+    return JSON.parse(value ?? '')
+  } catch {
+    throw Object.assign(new Error('malformed JSON field'), { code: 'BAD_PHOTOS' })
+  }
+}
+
+async function requestContext(request) {
+  const { session, admin } = await authenticate.admin(request)
+  if (!aiGenerationEnabled(session.shop)) {
+    return { response: Response.json({ error: 'Not found.' }, { status: 404 }) }
+  }
+  const planName = await getActivePlanName(admin, session.shop)
+  if (!planName) {
+    return { response: Response.json({ error: 'No active subscription. Choose a plan to continue.' }, { status: 402 }) }
+  }
+  return { shop: session.shop, admin, planName }
+}
+
+export const loader = async ({ request }) => {
+  const context = await requestContext(request)
+  if (context.response) return context.response
+  const rows = await listGenerations(prisma, context.shop)
+  return Response.json({
+    generations: rows.map(toClientGeneration),
+    allowance: await getAllowance(prisma, context.shop, context.planName),
+  })
+}
+
+export const action = async ({ request }) => {
+  const context = await requestContext(request)
+  if (context.response) return context.response
+  const { shop, admin, planName } = context
+  const form = await request.formData()
+  const intent = form.get('intent')
+  const generationId = form.get('generationId')?.toString() ?? null
+
+  try {
+    if (intent === 'presign-photos') {
+      const files = parseJson(form.get('files'))
+      if (!Array.isArray(files) || files.length < 3 || files.length > 4) {
+        throw Object.assign(new Error('wrong photo count'), { code: 'BAD_PHOTOS' })
+      }
+      const uploads = await Promise.all(
+        files.map((file) => presignPhotoUpload({ contentType: file?.type, size: file?.size })),
+      )
+      return Response.json({ uploads })
+    }
+
+    if (intent === 'create' || intent === 'retry') {
+      const res = await admin.graphql(SHOP_ID_QUERY)
+      const shopGid = (await res.json())?.data?.shop?.id
+      if (!shopGid) throw new Error('shop id lookup failed')
+      const generation = await createGeneration(prisma, {
+        shop,
+        shopGid,
+        photoRefs: intent === 'create' ? parseJson(form.get('photoRefs')) : null,
+        retryOf: intent === 'retry' ? generationId : null,
+      })
+      return Response.json({ generation: toClientGeneration(generation) })
+    }
+
+    if (intent === 'save') {
+      return Response.json(await saveGeneration(prisma, {
+        shop,
+        generationId,
+        planName,
+        acceptCharge: form.get('acceptCharge') === 'true',
+      }))
+    }
+
+    if (intent === 'discard') {
+      await discardGeneration(prisma, shop, generationId)
+      return Response.json({ discarded: true })
+    }
+
+    return Response.json({ error: 'Unknown action.' }, { status: 400 })
+  } catch (error) {
+    return errorResponse(error)
+  }
+}

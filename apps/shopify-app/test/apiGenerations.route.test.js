@@ -1,0 +1,215 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+const h = vi.hoisted(() => ({
+  shop: 'route-test.myshopify.com',
+  plan: 'Starter',
+  enabled: true,
+  gen: {},
+  presign: vi.fn(),
+  unwrap: vi.fn(),
+  glb: new Map(),
+  rows: new Map(),
+}))
+
+vi.mock('../app/shopify.server.js', () => ({
+  authenticate: {
+    admin: async () => ({
+      session: { shop: h.shop },
+      admin: {
+        graphql: async (query) => {
+          if (query.includes('currentAppInstallation')) {
+            return new Response(JSON.stringify({
+              data: { currentAppInstallation: { activeSubscriptions: h.plan ? [{ name: h.plan, status: 'ACTIVE' }] : [] } },
+            }))
+          }
+          return new Response(JSON.stringify({ data: { shop: { id: 'gid://shopify/Shop/7' } } }))
+        },
+      },
+    }),
+  },
+}))
+vi.mock('../app/db.server.js', () => ({
+  default: { modelGeneration: { findUnique: async ({ where }) => h.rows.get(where.id) ?? null } },
+}))
+vi.mock('../app/storage.server.js', () => ({
+  presignPhotoUpload: (...args) => h.presign(...args),
+  readModelGlb: async (key) => h.glb.get(key) ?? null,
+}))
+vi.mock('../app/modelGenerator.server.js', () => ({
+  unwrapWebhook: (...args) => h.unwrap(...args),
+}))
+vi.mock('../app/generations.server.js', () => ({
+  aiGenerationEnabled: () => h.enabled,
+  getAllowance: async () => ({ allowance: 10, used: 1, unlimited: false, freeRemaining: 9 }),
+  listGenerations: (...args) => h.gen.list(...args),
+  createGeneration: (...args) => h.gen.create(...args),
+  saveGeneration: (...args) => h.gen.save(...args),
+  discardGeneration: (...args) => h.gen.discard(...args),
+  advanceByProviderJob: (...args) => h.gen.advance(...args),
+  toClientGeneration: (g) => ({ id: g.id, status: g.status }),
+}))
+
+const api = await import('../app/routes/api.generations.jsx')
+const glbRoute = await import('../app/routes/generations.$generationId[.]glb.jsx')
+const webhook = await import('../app/routes/webhooks.openai.jsx')
+
+function post(fields) {
+  const fd = new FormData()
+  for (const [k, v] of Object.entries(fields)) fd.set(k, v)
+  return { request: new Request('https://x/api/generations', { method: 'POST', body: fd }) }
+}
+const get = () => ({ request: new Request('https://x/api/generations') })
+const tagged = (code) => Object.assign(new Error(code), { code })
+
+beforeEach(() => {
+  h.plan = 'Starter'
+  h.enabled = true
+  h.gen = { list: vi.fn(), create: vi.fn(), save: vi.fn(), discard: vi.fn(), advance: vi.fn() }
+  h.presign.mockReset()
+  h.unwrap.mockReset()
+  h.glb.clear()
+  h.rows.clear()
+})
+
+describe('api.generations', () => {
+  it('404s for shops the feature is not enabled for', async () => {
+    h.enabled = false
+    expect((await api.loader(get())).status).toBe(404)
+    expect((await api.action(post({ intent: 'create' }))).status).toBe(404)
+  })
+
+  it('402s without an active plan', async () => {
+    h.plan = null
+    const res = await api.loader(get())
+    expect(res.status).toBe(402)
+    expect((await res.json()).error).toMatch(/no active subscription/i)
+  })
+
+  it('lists generations with the allowance', async () => {
+    h.gen.list.mockResolvedValue([{ id: 'g1', status: 'ready' }])
+    const body = await (await api.loader(get())).json()
+    expect(body).toEqual({
+      generations: [{ id: 'g1', status: 'ready' }],
+      allowance: { allowance: 10, used: 1, unlimited: false, freeRemaining: 9 },
+    })
+    expect(h.gen.list.mock.calls[0][1]).toBe(h.shop)
+  })
+
+  it('presigns one upload per photo', async () => {
+    h.presign.mockImplementation(async ({ contentType }) => ({ uploadUrl: `u-${contentType}`, storageRef: `generation-photos/x.${contentType.split('/')[1]}` }))
+    const files = [{ type: 'image/jpeg', size: 1 }, { type: 'image/png', size: 2 }, { type: 'image/webp', size: 3 }]
+    const body = await (await api.action(post({ intent: 'presign-photos', files: JSON.stringify(files) }))).json()
+    expect(body.uploads.map((u) => u.uploadUrl)).toEqual(['u-image/jpeg', 'u-image/png', 'u-image/webp'])
+    expect(h.presign).toHaveBeenCalledWith({ contentType: 'image/png', size: 2 })
+  })
+
+  it('rejects the wrong number of photos, or malformed JSON, with a 400', async () => {
+    for (const files of [JSON.stringify([{ type: 'image/png', size: 1 }]), 'not json']) {
+      const res = await api.action(post({ intent: 'presign-photos', files }))
+      expect(res.status).toBe(400)
+      expect((await res.json()).code).toBe('BAD_PHOTOS')
+    }
+  })
+
+  it('creates with the shop GID and parsed photo refs', async () => {
+    h.gen.create.mockResolvedValue({ id: 'g2', status: 'running' })
+    const refs = ['generation-photos/a.jpg', 'generation-photos/b.jpg', 'generation-photos/c.jpg']
+    const body = await (await api.action(post({ intent: 'create', photoRefs: JSON.stringify(refs) }))).json()
+    expect(body).toEqual({ generation: { id: 'g2', status: 'running' } })
+    expect(h.gen.create.mock.calls[0][1]).toEqual({ shop: h.shop, shopGid: 'gid://shopify/Shop/7', photoRefs: refs, retryOf: null })
+  })
+
+  it('retries by generation id', async () => {
+    h.gen.create.mockResolvedValue({ id: 'g3', status: 'running' })
+    await api.action(post({ intent: 'retry', generationId: 'g1' }))
+    expect(h.gen.create.mock.calls[0][1]).toMatchObject({ photoRefs: null, retryOf: 'g1' })
+  })
+
+  it('saves, passing the plan and whether the charge was accepted', async () => {
+    h.gen.save.mockResolvedValue({ assetId: 'a1', paid: true })
+    const body = await (await api.action(post({ intent: 'save', generationId: 'g1', acceptCharge: 'true' }))).json()
+    expect(body).toEqual({ assetId: 'a1', paid: true })
+    expect(h.gen.save.mock.calls[0][1]).toEqual({ shop: h.shop, generationId: 'g1', planName: 'Starter', acceptCharge: true })
+  })
+
+  it('maps known error codes to statuses and merchant copy', async () => {
+    const cases = [
+      ['CHARGE_NOT_CONFIRMED', 402], ['TOO_MANY_RUNNING', 429], ['DAILY_LIMIT', 429],
+      ['RETRY_LIMIT', 409], ['NOT_READY', 409], ['NOT_FOUND', 404], ['GLB_MISSING', 409],
+    ]
+    for (const [code, status] of cases) {
+      h.gen.save.mockRejectedValue(tagged(code))
+      const res = await api.action(post({ intent: 'save', generationId: 'g1' }))
+      expect(res.status).toBe(status)
+      const body = await res.json()
+      expect(body.code).toBe(code)
+      expect(body.error).not.toBe(code)
+    }
+  })
+
+  it('hides unexpected errors behind a generic 500', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      h.gen.discard.mockRejectedValue(new Error('prisma exploded at 0x1f'))
+      const res = await api.action(post({ intent: 'discard', generationId: 'g1' }))
+      expect(res.status).toBe(500)
+      expect(await res.json()).toEqual({ error: 'Something went wrong. Try again.' })
+      expect(logged).toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
+  it('400s an unknown intent', async () => {
+    expect((await api.action(post({ intent: 'bogus' }))).status).toBe(400)
+  })
+})
+
+describe('generations/:id.glb', () => {
+  it('serves a ready model without caching, and 404s anything else', async () => {
+    h.rows.set('g1', { id: 'g1', status: 'ready', glbRef: 'generations/g1.glb' })
+    h.rows.set('g2', { id: 'g2', status: 'saved', glbRef: null })
+    h.glb.set('generations/g1.glb', Buffer.from('glb'))
+    const ok = await glbRoute.loader({ params: { generationId: 'g1' } })
+    expect(ok.status).toBe(200)
+    expect(ok.headers.get('Content-Type')).toBe('model/gltf-binary')
+    expect(ok.headers.get('Cache-Control')).toBe('private, no-store')
+    expect((await glbRoute.loader({ params: { generationId: 'g2' } })).status).toBe(404)
+    expect((await glbRoute.loader({ params: { generationId: 'nope' } })).status).toBe(404)
+  })
+})
+
+describe('webhooks/openai', () => {
+  const hook = (body = '{}') => ({ request: new Request('https://x/webhooks/openai', { method: 'POST', body, headers: { 'webhook-id': 'w1' } }) })
+
+  it('400s a bad signature', async () => {
+    h.unwrap.mockRejectedValue(new Error('invalid'))
+    expect((await webhook.action(hook())).status).toBe(400)
+  })
+
+  it('advances the generation for a finished job, passing the raw body and headers', async () => {
+    h.unwrap.mockResolvedValue({ type: 'response.completed', data: { id: 'resp_9' } })
+    h.gen.advance.mockResolvedValue({ id: 'g1' })
+    const res = await webhook.action(hook('{"raw":true}'))
+    expect(res.status).toBe(200)
+    expect(h.unwrap).toHaveBeenCalledWith('{"raw":true}', expect.objectContaining({ 'webhook-id': 'w1' }))
+    expect(h.gen.advance.mock.calls[0][1]).toBe('resp_9')
+  })
+
+  it('500s when advancing fails so OpenAI retries, and ignores other event types', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      h.unwrap.mockResolvedValue({ type: 'response.failed', data: { id: 'resp_9' } })
+      h.gen.advance.mockRejectedValue(new Error('db down'))
+      expect((await webhook.action(hook())).status).toBe(500)
+      expect(logged).toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+
+    h.unwrap.mockResolvedValue({ type: 'batch.completed', data: { id: 'b1' } })
+    h.gen.advance.mockReset()
+    expect((await webhook.action(hook())).status).toBe(200)
+    expect(h.gen.advance).not.toHaveBeenCalled()
+  })
+})
