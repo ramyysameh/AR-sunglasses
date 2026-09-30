@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { tagged } from './errors.server.js'
 
 /**
  * Object storage for calibrated GLBs.
@@ -62,6 +63,45 @@ export async function presignModelUpload({ expiresIn = 300 } = {}) {
     { expiresIn },
   )
   return { uploadUrl, storageRef }
+}
+
+// AI model generation photos (spec 2026-09-30). The browser PUTs each photo
+// straight to storage; the signed ContentLength makes S3 refuse a body of any
+// other size, so the 10 MB cap holds even though the check runs server-side
+// before the upload happens.
+export const MAX_PHOTO_BYTES = 10 * 1024 * 1024
+const PHOTO_EXTENSIONS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }
+
+export async function presignPhotoUpload({ contentType, size, expiresIn = 300 }) {
+  const extension = PHOTO_EXTENSIONS[contentType]
+  if (!extension) throw tagged('BAD_PHOTO', `unsupported photo type: ${contentType}`)
+  if (!Number.isInteger(size) || size <= 0 || size > MAX_PHOTO_BYTES) {
+    throw tagged('BAD_PHOTO', `photo size out of range: ${size}`)
+  }
+  const storageRef = `generation-photos/${globalThis.crypto.randomUUID()}.${extension}`
+  const uploadUrl = await getSignedUrl(
+    getClient(),
+    new PutObjectCommand({
+      Bucket: process.env.S3_BUCKET,
+      Key: storageRef,
+      ContentType: contentType,
+      ContentLength: size,
+    }),
+    { expiresIn },
+  )
+  return { uploadUrl, storageRef }
+}
+
+/**
+ * Short-lived GET URL, handed to OpenAI so it can fetch the photos itself.
+ * Server-to-server, so bucket CORS doesn't apply.
+ */
+export async function presignObjectRead(storageRef, { expiresIn = 3600 } = {}) {
+  return getSignedUrl(
+    getClient(),
+    new GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: storageRef }),
+    { expiresIn },
+  )
 }
 
 export async function saveModelGlb(storageRef, bytes) {
