@@ -126,3 +126,117 @@ describe('toClientGeneration', () => {
     expect(generations.toClientGeneration({ ...base, status: 'failed' }).previewUrl).toBeNull()
   })
 })
+
+describe('createGeneration', () => {
+  beforeEach(() => {
+    let n = 0
+    deps.start.mockImplementation(async () => ({ providerJobId: `resp_${++n}` }))
+  })
+
+  it('starts a job with signed photo URLs and marks it running', async () => {
+    const prisma = createFakePrisma()
+    const g = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW })
+    expect(deps.start).toHaveBeenCalledWith({ images: PHOTOS.map((k) => `https://signed.example/${k}`) })
+    expect(g).toMatchObject({ status: 'running', providerJobId: 'resp_1', shopGid: SHOP_GID, retryIndex: 0, startedAt: NOW })
+    expect(g.photoSetId).toEqual(expect.any(String))
+  })
+
+  it('accepts 3 or 4 photo keys and nothing else', async () => {
+    const prisma = createFakePrisma()
+    const bad = [
+      PHOTOS.slice(0, 2),
+      [...PHOTOS, 'generation-photos/aa.jpg', 'generation-photos/bb.jpg'],
+      [...PHOTOS.slice(0, 2), 'uploads/0a1b.glb'],
+      'generation-photos/0a1b.jpg',
+    ]
+    for (const photoRefs of bad) {
+      await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs, now: NOW }))
+        .rejects.toMatchObject({ code: 'BAD_PHOTOS' })
+    }
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: [...PHOTOS, 'generation-photos/9f.jpg'], now: NOW }))
+      .resolves.toMatchObject({ status: 'running' })
+  })
+
+  it('refuses a third concurrent generation', async () => {
+    const prisma = createFakePrisma()
+    await seed(prisma, ['running', 'collecting'])
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW }))
+      .rejects.toMatchObject({ code: 'TOO_MANY_RUNNING' })
+  })
+
+  it('refuses the 21st start in 24 hours, counting automatic retries, ignoring older rows', async () => {
+    const prisma = createFakePrisma()
+    const recent = new Date(NOW.getTime() - 60 * 60 * 1000)
+    const old = new Date(NOW.getTime() - 25 * 60 * 60 * 1000)
+    await seed(prisma, Array(15).fill('failed'), { createdAt: recent })
+    await seed(prisma, Array(4).fill('failed'), { createdAt: recent, autoRetried: true })
+    await seed(prisma, Array(10).fill('failed'), { createdAt: old, autoRetried: true })
+    // 15 + 4 rows + 4 automatic retries = 23 >= 20
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW }))
+      .rejects.toMatchObject({ code: 'DAILY_LIMIT' })
+  })
+
+  it('retries reuse the photo set, discard a ready parent, and stop after 3', async () => {
+    const prisma = createFakePrisma()
+    const parent = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/p.glb' }) })
+    deps.objects.set('generations/p.glb', Buffer.from('p'))
+
+    const first = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: parent.id, now: NOW })
+    expect(first).toMatchObject({ photoSetId: 'set-1', retryIndex: 1, photoRefs: PHOTOS, status: 'running' })
+    expect((await prisma.modelGeneration.findUnique({ where: { id: parent.id } })).status).toBe('discarded')
+    expect(deps.objects.has('generations/p.glb')).toBe(false)
+
+    await prisma.modelGeneration.update({ where: { id: first.id }, data: { status: 'failed' } })
+    const second = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: first.id, now: NOW })
+    await prisma.modelGeneration.update({ where: { id: second.id }, data: { status: 'failed' } })
+    const third = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: second.id, now: NOW })
+    expect(third.retryIndex).toBe(3)
+    await prisma.modelGeneration.update({ where: { id: third.id }, data: { status: 'failed' } })
+
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: third.id, now: NOW }))
+      .rejects.toMatchObject({ code: 'RETRY_LIMIT' })
+  })
+
+  it('will not retry a running or saved generation, or another shop\'s', async () => {
+    const prisma = createFakePrisma()
+    const running = await prisma.modelGeneration.create({ data: row({ status: 'running' }) })
+    const saved = await prisma.modelGeneration.create({ data: row({ status: 'saved' }) })
+    const foreign = await prisma.modelGeneration.create({ data: row({ status: 'failed', shop: 'other.myshopify.com' }) })
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: running.id, now: NOW })).rejects.toMatchObject({ code: 'NOT_RETRYABLE' })
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: saved.id, now: NOW })).rejects.toMatchObject({ code: 'NOT_RETRYABLE' })
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: foreign.id, now: NOW })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('marks the row failed (start_failed) when OpenAI refuses the job, without throwing', async () => {
+    const prisma = createFakePrisma()
+    deps.start.mockRejectedValue(new Error('429'))
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const g = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW })
+      expect(g).toMatchObject({ status: 'failed', error: 'start_failed' })
+      expect(logged).toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+  })
+})
+
+describe('discardGeneration', () => {
+  it('discards a ready or failed generation and deletes its pending GLB', async () => {
+    const prisma = createFakePrisma()
+    const ready = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/r.glb' }) })
+    deps.objects.set('generations/r.glb', Buffer.from('r'))
+    const failed = await prisma.modelGeneration.create({ data: row({ status: 'failed' }) })
+    await expect(generations.discardGeneration(prisma, SHOP, ready.id)).resolves.toMatchObject({ status: 'discarded', glbRef: null })
+    expect(deps.objects.has('generations/r.glb')).toBe(false)
+    await expect(generations.discardGeneration(prisma, SHOP, failed.id)).resolves.toMatchObject({ status: 'discarded' })
+  })
+
+  it('refuses other states and other shops', async () => {
+    const prisma = createFakePrisma()
+    const running = await prisma.modelGeneration.create({ data: row({ status: 'running' }) })
+    const foreign = await prisma.modelGeneration.create({ data: row({ status: 'ready', shop: 'other.myshopify.com' }) })
+    await expect(generations.discardGeneration(prisma, SHOP, running.id)).rejects.toMatchObject({ code: 'NOT_READY' })
+    await expect(generations.discardGeneration(prisma, SHOP, foreign.id)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})
