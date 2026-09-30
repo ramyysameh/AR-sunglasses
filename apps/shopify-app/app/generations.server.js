@@ -343,7 +343,12 @@ export async function saveGeneration(prisma, { shop, generationId, planName, acc
     where: { id: generation.id },
     data: { status: 'saved', modelAssetId: asset.assetId, savedAt: now, glbRef: null },
   })
-  await deleteModelGlb(generation.glbRef)
+  try {
+    await deleteModelGlb(generation.glbRef)
+  } catch (error) {
+    // The save is committed; an orphaned pending GLB must not undo it.
+    console.error('AI generation pending GLB delete failed', generation.id, error)
+  }
 
   if (paid) {
     try {
@@ -356,7 +361,18 @@ export async function saveGeneration(prisma, { shop, generationId, planName, acc
 }
 
 // Photos and unsaved models are kept 30 days. Saved rows stay (the lifetime
-// allowance counts them) but lose their photos.
+// allowance counts them) but lose their photos. Retries reuse their parent's
+// photos, so a photo set is swept only once every row in it is old.
+async function deleteObjects(keys) {
+  for (const key of keys) {
+    try {
+      await deleteModelGlb(key)
+    } catch (error) {
+      console.error('AI generation sweep delete failed', key, error)
+    }
+  }
+}
+
 async function sweepExpired(prisma, shop, now) {
   const cutoff = new Date(now.getTime() - LIMITS.retentionDays * DAY_MS)
   const expired = await prisma.modelGeneration.findMany({
@@ -365,13 +381,20 @@ async function sweepExpired(prisma, shop, now) {
   for (const generation of expired) {
     const photos = Array.isArray(generation.photoRefs) ? generation.photoRefs : []
     if (generation.status === 'saved' && photos.length === 0 && !generation.glbRef) continue
-    for (const key of photos) await deleteModelGlb(key)
-    if (generation.glbRef) await deleteModelGlb(generation.glbRef)
-    if (generation.status === 'saved') {
-      await prisma.modelGeneration.update({ where: { id: generation.id }, data: { photoRefs: [], glbRef: null } })
-    } else {
-      await prisma.modelGeneration.delete({ where: { id: generation.id } })
-    }
+    const freshInSet = await prisma.modelGeneration.count({
+      where: { shop, photoSetId: generation.photoSetId, createdAt: { gte: cutoff } },
+    })
+    if (freshInSet > 0) continue
+    // Change the row first and delete objects only if we won: a save that
+    // claimed the row in between must keep its pending model.
+    const changed = generation.status === 'saved'
+      ? await prisma.modelGeneration.updateMany({
+        where: { id: generation.id, status: 'saved' },
+        data: { photoRefs: [], glbRef: null },
+      })
+      : await prisma.modelGeneration.deleteMany({ where: { id: generation.id, status: generation.status } })
+    if (changed.count === 0) continue
+    await deleteObjects(generation.glbRef ? [...photos, generation.glbRef] : photos)
   }
 }
 
@@ -386,6 +409,16 @@ export async function listGenerations(prisma, shop, now = new Date()) {
   await prisma.modelGeneration.updateMany({
     where: { shop, status: 'collecting', updatedAt: { lt: new Date(now.getTime() - LIMITS.stuckMs) } },
     data: { status: 'running' },
+  })
+
+  // A crash or timeout between the claim and the "saved" update leaves a row
+  // "saving" that would burn a free slot forever. Hand it back after 15 minutes
+  // (longer than any function run, so an in-flight save is never reverted).
+  // The pending GLB is only deleted after "saved", and the charge only happens
+  // after "saved", so nothing is lost or billed.
+  await prisma.modelGeneration.updateMany({
+    where: { shop, status: 'saving', modelAssetId: null, updatedAt: { lt: new Date(now.getTime() - LIMITS.timeoutMs) } },
+    data: { status: 'ready', paid: null },
   })
 
   const running = await prisma.modelGeneration.findMany({ where: { shop, status: 'running' } })

@@ -547,6 +547,57 @@ describe('saveGeneration', () => {
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: running.id, planName: 'Pro', now: NOW })).rejects.toMatchObject({ code: 'NOT_READY' })
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: foreign.id, planName: 'Pro', now: NOW })).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
+
+  it('reports GLB_MISSING and puts the row back to ready when the pending model is gone', async () => {
+    const prisma = createFakePrisma()
+    const g = await readyRow(prisma)
+    deps.objects.delete(`generations/${g.id}.glb`)
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
+      .rejects.toMatchObject({ code: 'GLB_MISSING' })
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'ready', paid: null })
+    expect(deps.saveCalibratedModel).not.toHaveBeenCalled()
+  })
+
+  it('refuses to save the same row twice', async () => {
+    const prisma = createFakePrisma()
+    const g = await readyRow(prisma)
+    await generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW })
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
+      .rejects.toMatchObject({ code: 'NOT_READY' })
+    expect(deps.saveCalibratedModel).toHaveBeenCalledTimes(1)
+
+    const claimed = await prisma.modelGeneration.create({ data: row({ status: 'saving' }) })
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: claimed.id, planName: 'Starter', now: NOW }))
+      .rejects.toMatchObject({ code: 'NOT_READY' })
+  })
+
+  it('stays free within the allowance even when the charge was accepted', async () => {
+    const prisma = createFakePrisma()
+    const g = await readyRow(prisma)
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
+      .resolves.toEqual({ assetId: 'asset-1', paid: false })
+    expect(deps.report).not.toHaveBeenCalled()
+  })
+
+  it('still succeeds when deleting the pending model afterwards fails', async () => {
+    const prisma = createFakePrisma()
+    const g = await readyRow(prisma)
+    const glbRef = `generations/${g.id}.glb`
+    // deleteModelGlb is the mocked storage function backed by deps.objects.
+    const realDelete = deps.objects.delete.bind(deps.objects)
+    deps.objects.delete = () => { throw new Error('S3 delete down') }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
+        .resolves.toEqual({ assetId: 'asset-1', paid: false })
+      expect(errorSpy).toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+      deps.objects.delete = realDelete
+    }
+    expect(deps.objects.has(glbRef)).toBe(true)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'saved' })
+  })
 })
 
 describe('listGenerations', () => {
@@ -594,5 +645,62 @@ describe('listGenerations', () => {
     await prisma.modelGeneration.create({ data: row({ status: 'discarded', createdAt: t(0) }) })
     const rows = await generations.listGenerations(prisma, SHOP, NOW)
     expect(rows.map((r) => r.status)).toEqual(['ready', 'failed'])
+  })
+
+  it('hands back a row stuck saving for over 15 minutes, but not a recent one', async () => {
+    const prisma = createFakePrisma()
+    const stale = await prisma.modelGeneration.create({
+      data: row({ status: 'saving', paid: true, updatedAt: new Date(NOW.getTime() - 16 * 60_000) }),
+    })
+    const recent = await prisma.modelGeneration.create({
+      data: row({ status: 'saving', paid: true, updatedAt: new Date(NOW.getTime() - 10 * 60_000) }),
+    })
+    await generations.listGenerations(prisma, SHOP, NOW)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: stale.id } })).toMatchObject({ status: 'ready', paid: null })
+    expect(await prisma.modelGeneration.findUnique({ where: { id: recent.id } })).toMatchObject({ status: 'saving', paid: true })
+  })
+
+  it('leaves a saving row that already has its asset alone', async () => {
+    const prisma = createFakePrisma()
+    const g = await prisma.modelGeneration.create({
+      data: row({ status: 'saving', modelAssetId: 'asset-9', updatedAt: new Date(NOW.getTime() - 16 * 60_000) }),
+    })
+    await generations.listGenerations(prisma, SHOP, NOW)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'saving' })
+  })
+
+  it('does not sweep photos shared with a newer row in the same photo set', async () => {
+    const prisma = createFakePrisma()
+    const day = 24 * 60 * 60 * 1000
+    for (const key of PHOTOS) deps.objects.set(key, Buffer.from('p'))
+    const a = await prisma.modelGeneration.create({ data: row({ status: 'failed', createdAt: new Date(NOW.getTime() - 31 * day) }) })
+    const b = await prisma.modelGeneration.create({ data: row({ status: 'ready', createdAt: new Date(NOW.getTime() - 1 * day) }) })
+    await generations.listGenerations(prisma, SHOP, NOW)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: a.id } })).not.toBeNull()
+    for (const key of PHOTOS) expect(deps.objects.has(key)).toBe(true)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: b.id } })).toMatchObject({ status: 'ready', photoRefs: PHOTOS })
+  })
+
+  it('keeps going when deleting an expired object fails', async () => {
+    const prisma = createFakePrisma()
+    const old = new Date(NOW.getTime() - 31 * 24 * 60 * 60 * 1000)
+    for (const key of PHOTOS) deps.objects.set(key, Buffer.from('p'))
+    const g = await prisma.modelGeneration.create({ data: row({ status: 'failed', createdAt: old }) })
+    const realDelete = deps.objects.delete.bind(deps.objects)
+    deps.objects.delete = (key) => {
+      if (key === PHOTOS[0]) throw new Error('S3 delete down')
+      return realDelete(key)
+    }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await expect(generations.listGenerations(prisma, SHOP, NOW)).resolves.toEqual([])
+      expect(errorSpy).toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+      deps.objects.delete = realDelete
+    }
+    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toBeNull()
+    expect(deps.objects.has(PHOTOS[1])).toBe(false)
+    expect(deps.objects.has(PHOTOS[2])).toBe(false)
   })
 })
