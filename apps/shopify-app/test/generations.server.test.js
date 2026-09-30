@@ -381,9 +381,52 @@ describe('advanceGeneration', () => {
     deps.check.mockResolvedValue({ state: 'running' })
     await expect(generations.advanceGeneration(prisma, first, NOW)).resolves.toMatchObject({ status: 'running', autoRetried: true, error: 'timeout' })
     expect(deps.cancel).toHaveBeenCalledWith('resp_1')
+    expect(deps.start.mock.calls[0][0].feedback).toMatch(/took too long/)
 
     const second = await running(prisma, { startedAt: late, autoRetried: true, providerJobId: 'resp_2' })
     await expect(generations.advanceGeneration(prisma, second, NOW)).resolves.toMatchObject({ status: 'failed', error: 'timeout' })
+  })
+
+  it('fails right away when the automatic retry cannot be started', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma)
+    deps.check.mockResolvedValue({ state: 'failed', error: 'no_glb_output' })
+    deps.start.mockRejectedValue(new Error('openai down'))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await expect(generations.advanceGeneration(prisma, g, NOW)).resolves.toMatchObject({ status: 'failed', error: 'no_glb_output' })
+      expect(errorSpy).toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('hands the row back to running when collecting blows up after the claim', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma)
+    deps.check.mockResolvedValue({ state: 'done', glbBytes: Buffer.from('glb') })
+    deps.calibrate.mockResolvedValue(GOOD_CALIBRATION)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const setSpy = vi.spyOn(deps.objects, 'set').mockImplementation(() => {
+      throw new Error('s3 unavailable')
+    })
+    try {
+      await expect(generations.advanceGeneration(prisma, g, NOW)).rejects.toThrow('s3 unavailable')
+      expect(errorSpy).toHaveBeenCalled()
+      expect((await prisma.modelGeneration.findUnique({ where: { id: g.id } })).status).toBe('running')
+    } finally {
+      setSpy.mockRestore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('keeps a long calibration message out of the stored error', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma)
+    deps.check.mockResolvedValue({ state: 'done', glbBytes: Buffer.from('bad') })
+    deps.calibrate.mockRejectedValue(new Error('x'.repeat(1000)))
+    const next = await generations.advanceGeneration(prisma, g, NOW)
+    expect(next.error).toBe(`invalid_model: ${'x'.repeat(300)}`)
   })
 
   it('does nothing when someone else already collected the job', async () => {

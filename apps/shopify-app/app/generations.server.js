@@ -190,7 +190,8 @@ const FEEDBACK = {
   low_confidence: 'The previous model could not be fitted to a face reliably. Make sure the front faces +Z, the frame is symmetric about X = 0, and AR_bridge, AR_hinge_L and AR_hinge_R sit exactly at the bridge and the two hinges.',
 }
 
-function feedbackFor(reason) {
+function feedbackFor(rawReason) {
+  const reason = rawReason ?? 'unknown_error'
   if (FEEDBACK[reason]) return FEEDBACK[reason]
   if (reason.startsWith('invalid_model')) return `The previous GLB failed validation (${reason.slice('invalid_model: '.length)}). Fix it.`
   return `The previous attempt failed (${reason}). Try again, following every requirement.`
@@ -222,7 +223,9 @@ async function retryOrFail(prisma, generation, reason, now) {
  * Move a running generation forward. Called by the OpenAI webhook and by the
  * admin page's polling, possibly at the same moment -- so a finished job is
  * claimed (running -> collecting, conditional on the same providerJobId)
- * before anything is downloaded, and only the claimer proceeds.
+ * before calibration and storage, so only the claimer calibrates, stores and
+ * moves the row on. A concurrent caller may also have downloaded the file
+ * (checkGeneration fetches it before the claim); that is harmless.
  */
 export async function advanceGeneration(prisma, generation, now = new Date()) {
   if (generation.status !== 'running') return generation
@@ -239,31 +242,42 @@ export async function advanceGeneration(prisma, generation, now = new Date()) {
   })
   if (claim.count === 0) return prisma.modelGeneration.findUnique({ where: { id: generation.id } })
 
-  if (timedOut) return retryOrFail(prisma, generation, 'timeout', now)
-  if (result.state === 'failed') return retryOrFail(prisma, generation, result.error, now)
-
-  let calibration
   try {
-    calibration = await calibrateUpload(result.glbBytes)
-  } catch (error) {
-    return retryOrFail(prisma, generation, `invalid_model: ${error.message}`, now)
-  }
-  if (calibration.needsManual) return retryOrFail(prisma, generation, 'low_confidence', now)
+    if (timedOut) return await retryOrFail(prisma, generation, 'timeout', now)
+    if (result.state === 'failed') return await retryOrFail(prisma, generation, result.error ?? 'unknown_error', now)
 
-  const glbRef = `generations/${generation.id}.glb`
-  await saveModelGlb(glbRef, result.glbBytes)
-  return prisma.modelGeneration.update({
-    where: { id: generation.id },
-    data: {
-      status: 'ready',
-      glbRef,
-      error: null,
-      calibration: {
-        confidence: calibration.confidence?.overall ?? null,
-        source: calibration.fitMetadata.provenance.source,
+    let calibration
+    try {
+      calibration = await calibrateUpload(result.glbBytes)
+    } catch (error) {
+      return await retryOrFail(prisma, generation, `invalid_model: ${String(error.message).slice(0, 300)}`, now)
+    }
+    if (calibration.needsManual) return await retryOrFail(prisma, generation, 'low_confidence', now)
+
+    const glbRef = `generations/${generation.id}.glb`
+    await saveModelGlb(glbRef, result.glbBytes)
+    return await prisma.modelGeneration.update({
+      where: { id: generation.id },
+      data: {
+        status: 'ready',
+        glbRef,
+        error: null,
+        calibration: {
+          confidence: calibration.confidence?.overall ?? null,
+          source: calibration.fitMetadata.provenance.source,
+        },
       },
-    },
-  })
+    })
+  } catch (error) {
+    // Hand the row back so the next webhook or poll retries promptly, instead
+    // of leaving it stuck in `collecting`.
+    console.error('AI generation collect failed', generation.id, error)
+    await prisma.modelGeneration.updateMany({
+      where: { id: generation.id, status: 'collecting' },
+      data: { status: 'running' },
+    })
+    throw error
+  }
 }
 
 /** Webhook entry point. A stale id (replaced by an automatic retry) matches nothing. */
