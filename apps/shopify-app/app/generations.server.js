@@ -1,6 +1,7 @@
 import { aiModelAllowance } from './billing.server.js'
-import { startGeneration } from './modelGenerator.server.js'
-import { deleteModelGlb, presignObjectRead } from './storage.server.js'
+import { startGeneration, checkGeneration, cancelGeneration } from './modelGenerator.server.js'
+import { calibrateUpload } from './calibration.server.js'
+import { saveModelGlb, deleteModelGlb, presignObjectRead } from './storage.server.js'
 import { tagged } from './errors.server.js'
 
 /**
@@ -179,4 +180,95 @@ export async function discardGeneration(prisma, shop, generationId) {
   if (count === 0) throw tagged('NOT_READY', `generation ${generationId} changed state`)
   if (generation.glbRef) await deleteModelGlb(generation.glbRef)
   return prisma.modelGeneration.findUnique({ where: { id: generation.id } })
+}
+
+// What the automatic retry tells the model about the previous attempt.
+const FEEDBACK = {
+  timeout: 'The previous attempt took too long. Use simpler geometry (fewer segments) and finish within a few minutes.',
+  no_glb_output: 'The previous attempt did not save and cite /mnt/data/model.glb. You must save the GLB there and cite it.',
+  glb_too_large: 'The previous GLB was over 25 MB. Reduce the triangle count and texture sizes.',
+  low_confidence: 'The previous model could not be fitted to a face reliably. Make sure the front faces +Z, the frame is symmetric about X = 0, and AR_bridge, AR_hinge_L and AR_hinge_R sit exactly at the bridge and the two hinges.',
+}
+
+function feedbackFor(reason) {
+  if (FEEDBACK[reason]) return FEEDBACK[reason]
+  if (reason.startsWith('invalid_model')) return `The previous GLB failed validation (${reason.slice('invalid_model: '.length)}). Fix it.`
+  return `The previous attempt failed (${reason}). Try again, following every requirement.`
+}
+
+// One free automatic retry per generation, then a merchant-visible failure.
+async function retryOrFail(prisma, generation, reason, now) {
+  if (!generation.autoRetried) {
+    try {
+      const { providerJobId } = await startGeneration({
+        images: await photoUrls(generation.photoRefs),
+        feedback: feedbackFor(reason),
+      })
+      return prisma.modelGeneration.update({
+        where: { id: generation.id },
+        data: { status: 'running', autoRetried: true, providerJobId, startedAt: now, error: reason },
+      })
+    } catch (error) {
+      console.error('AI generation automatic retry failed to start', generation.id, error)
+    }
+  }
+  return prisma.modelGeneration.update({
+    where: { id: generation.id },
+    data: { status: 'failed', error: reason },
+  })
+}
+
+/**
+ * Move a running generation forward. Called by the OpenAI webhook and by the
+ * admin page's polling, possibly at the same moment -- so a finished job is
+ * claimed (running -> collecting, conditional on the same providerJobId)
+ * before anything is downloaded, and only the claimer proceeds.
+ */
+export async function advanceGeneration(prisma, generation, now = new Date()) {
+  if (generation.status !== 'running') return generation
+
+  const result = await checkGeneration(generation.providerJobId)
+  const timedOut = result.state === 'running'
+    && now.getTime() - new Date(generation.startedAt).getTime() > LIMITS.timeoutMs
+  if (result.state === 'running' && !timedOut) return generation
+  if (timedOut) await cancelGeneration(generation.providerJobId)
+
+  const claim = await prisma.modelGeneration.updateMany({
+    where: { id: generation.id, status: 'running', providerJobId: generation.providerJobId },
+    data: { status: 'collecting' },
+  })
+  if (claim.count === 0) return prisma.modelGeneration.findUnique({ where: { id: generation.id } })
+
+  if (timedOut) return retryOrFail(prisma, generation, 'timeout', now)
+  if (result.state === 'failed') return retryOrFail(prisma, generation, result.error, now)
+
+  let calibration
+  try {
+    calibration = await calibrateUpload(result.glbBytes)
+  } catch (error) {
+    return retryOrFail(prisma, generation, `invalid_model: ${error.message}`, now)
+  }
+  if (calibration.needsManual) return retryOrFail(prisma, generation, 'low_confidence', now)
+
+  const glbRef = `generations/${generation.id}.glb`
+  await saveModelGlb(glbRef, result.glbBytes)
+  return prisma.modelGeneration.update({
+    where: { id: generation.id },
+    data: {
+      status: 'ready',
+      glbRef,
+      error: null,
+      calibration: {
+        confidence: calibration.confidence?.overall ?? null,
+        source: calibration.fitMetadata.provenance.source,
+      },
+    },
+  })
+}
+
+/** Webhook entry point. A stale id (replaced by an automatic retry) matches nothing. */
+export async function advanceByProviderJob(prisma, providerJobId, now = new Date()) {
+  const generation = await prisma.modelGeneration.findFirst({ where: { providerJobId, status: 'running' } })
+  if (!generation) return null
+  return advanceGeneration(prisma, generation, now)
 }

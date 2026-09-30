@@ -306,3 +306,110 @@ describe('discardGeneration', () => {
     expect((await prisma.modelGeneration.findUnique({ where: { id: ready.id } })).status).toBe('saving')
   })
 })
+
+describe('advanceGeneration', () => {
+  const GOOD_CALIBRATION = { needsManual: false, confidence: { overall: 0.93 }, fitMetadata: { provenance: { source: 'tagged' } } }
+
+  async function running(prisma, overrides = {}) {
+    return prisma.modelGeneration.create({
+      data: row({ status: 'running', providerJobId: 'resp_1', startedAt: new Date(NOW.getTime() - 60_000), ...overrides }),
+    })
+  }
+
+  beforeEach(() => {
+    deps.start.mockResolvedValue({ providerJobId: 'resp_retry' })
+  })
+
+  it('leaves a job that is still working alone', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma)
+    deps.check.mockResolvedValue({ state: 'running' })
+    await expect(generations.advanceGeneration(prisma, g, NOW)).resolves.toMatchObject({ status: 'running' })
+    expect(deps.cancel).not.toHaveBeenCalled()
+  })
+
+  it('stores a good model and marks it ready', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma)
+    deps.check.mockResolvedValue({ state: 'done', glbBytes: Buffer.from('glb') })
+    deps.calibrate.mockResolvedValue(GOOD_CALIBRATION)
+    const next = await generations.advanceGeneration(prisma, g, NOW)
+    expect(next).toMatchObject({
+      status: 'ready',
+      glbRef: `generations/${g.id}.glb`,
+      error: null,
+      calibration: { confidence: 0.93, source: 'tagged' },
+    })
+    expect(deps.objects.get(`generations/${g.id}.glb`).toString()).toBe('glb')
+  })
+
+  it('auto-retries an invalid model once, for free, with the reason as feedback', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma)
+    deps.check.mockResolvedValue({ state: 'done', glbBytes: Buffer.from('bad') })
+    deps.calibrate.mockRejectedValue(new Error('model rejected: no mesh'))
+    const next = await generations.advanceGeneration(prisma, g, NOW)
+    expect(next).toMatchObject({ status: 'running', autoRetried: true, providerJobId: 'resp_retry', startedAt: NOW })
+    expect(next.error).toMatch(/^invalid_model: model rejected: no mesh/)
+    const [{ images, feedback }] = deps.start.mock.calls[0]
+    expect(images).toEqual(PHOTOS.map((k) => `https://signed.example/${k}`))
+    expect(feedback).toMatch(/model rejected: no mesh/)
+  })
+
+  it('fails for good after the automatic retry also fails', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma, { autoRetried: true })
+    deps.check.mockResolvedValue({ state: 'failed', error: 'no_glb_output' })
+    await expect(generations.advanceGeneration(prisma, g, NOW)).resolves.toMatchObject({ status: 'failed', error: 'no_glb_output' })
+    expect(deps.start).not.toHaveBeenCalled()
+  })
+
+  it('treats a low-confidence fit as a failure and says how to fix it', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma)
+    deps.check.mockResolvedValue({ state: 'done', glbBytes: Buffer.from('meh') })
+    deps.calibrate.mockResolvedValue({ ...GOOD_CALIBRATION, needsManual: true })
+    const next = await generations.advanceGeneration(prisma, g, NOW)
+    expect(next).toMatchObject({ status: 'running', autoRetried: true, error: 'low_confidence' })
+    expect(deps.start.mock.calls[0][0].feedback).toMatch(/AR_bridge/)
+  })
+
+  it('cancels a job that runs past 15 minutes, then retries or fails it', async () => {
+    const prisma = createFakePrisma()
+    const late = new Date(NOW.getTime() - 16 * 60_000)
+    const first = await running(prisma, { startedAt: late })
+    deps.check.mockResolvedValue({ state: 'running' })
+    await expect(generations.advanceGeneration(prisma, first, NOW)).resolves.toMatchObject({ status: 'running', autoRetried: true, error: 'timeout' })
+    expect(deps.cancel).toHaveBeenCalledWith('resp_1')
+
+    const second = await running(prisma, { startedAt: late, autoRetried: true, providerJobId: 'resp_2' })
+    await expect(generations.advanceGeneration(prisma, second, NOW)).resolves.toMatchObject({ status: 'failed', error: 'timeout' })
+  })
+
+  it('does nothing when someone else already collected the job', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma)
+    await prisma.modelGeneration.update({ where: { id: g.id }, data: { status: 'ready' } })
+    deps.check.mockResolvedValue({ state: 'done', glbBytes: Buffer.from('glb') })
+    await expect(generations.advanceGeneration(prisma, g, NOW)).resolves.toMatchObject({ status: 'ready' })
+    expect(deps.calibrate).not.toHaveBeenCalled()
+  })
+
+  it('ignores rows that are not running', async () => {
+    const prisma = createFakePrisma()
+    const g = await prisma.modelGeneration.create({ data: row({ status: 'ready' }) })
+    await expect(generations.advanceGeneration(prisma, g, NOW)).resolves.toMatchObject({ status: 'ready' })
+    expect(deps.check).not.toHaveBeenCalled()
+  })
+})
+
+describe('advanceByProviderJob', () => {
+  it('advances the running row that owns the OpenAI job, and ignores unknown or stale ids', async () => {
+    const prisma = createFakePrisma()
+    await prisma.modelGeneration.create({ data: row({ status: 'running', providerJobId: 'resp_live', startedAt: NOW }) })
+    deps.check.mockResolvedValue({ state: 'done', glbBytes: Buffer.from('glb') })
+    deps.calibrate.mockResolvedValue({ needsManual: false, confidence: null, fitMetadata: { provenance: { source: 'tagged' } } })
+    await expect(generations.advanceByProviderJob(prisma, 'resp_live', NOW)).resolves.toMatchObject({ status: 'ready' })
+    await expect(generations.advanceByProviderJob(prisma, 'resp_unknown', NOW)).resolves.toBeNull()
+  })
+})
