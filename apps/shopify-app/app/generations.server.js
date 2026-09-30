@@ -258,6 +258,8 @@ export async function advanceGeneration(prisma, generation, now = new Date()) {
   } catch (error) {
     if (!abandoned) throw error
     console.warn('AI generation check keeps failing; giving up on the job', generation.id, error?.message)
+    // The job may still be running (and billing); stop it before it's replaced.
+    await cancelGeneration(generation.providerJobId)
     result = { state: 'failed', error: 'check_failed' }
   }
   const timedOut = result.state === 'running' && ageMs > LIMITS.timeoutMs

@@ -478,6 +478,20 @@ describe('advanceGeneration', () => {
     }
   })
 
+  it('cancels the old OpenAI job when it gives up on one it cannot check', async () => {
+    const prisma = createFakePrisma()
+    const g = await running(prisma, { startedAt: new Date(NOW.getTime() - 31 * 60_000) })
+    deps.check.mockRejectedValue(new Error('openai 503'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await generations.advanceGeneration(prisma, g, NOW)
+    } finally {
+      warn.mockRestore()
+    }
+    expect(deps.cancel).toHaveBeenCalledTimes(1)
+    expect(deps.cancel).toHaveBeenCalledWith('resp_1')
+  })
+
   it('rethrows a failed check on a young job and leaves it running', async () => {
     const prisma = createFakePrisma()
     const g = await running(prisma, { startedAt: new Date(NOW.getTime() - 5 * 60_000) })
