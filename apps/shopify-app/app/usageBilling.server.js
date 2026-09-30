@@ -40,8 +40,12 @@ async function accessToken(fetchImpl, now, timeoutMs) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      client_id: process.env.SHOPIFY_APP_EVENTS_CLIENT_ID,
-      client_secret: process.env.SHOPIFY_APP_EVENTS_CLIENT_SECRET,
+      // App Events authenticates with the app's own Dev Dashboard credentials
+      // (App settings > Credentials), which the app already has as
+      // SHOPIFY_API_KEY / SHOPIFY_API_SECRET. The dedicated vars only exist to
+      // override them with a separate key.
+      client_id: process.env.SHOPIFY_APP_EVENTS_CLIENT_ID || process.env.SHOPIFY_API_KEY,
+      client_secret: process.env.SHOPIFY_APP_EVENTS_CLIENT_SECRET || process.env.SHOPIFY_API_SECRET,
       grant_type: 'client_credentials',
     }),
   }, timeoutMs, 'APP_EVENTS_AUTH')

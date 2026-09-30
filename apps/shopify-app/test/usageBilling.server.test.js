@@ -45,6 +45,20 @@ describe('reportModelCharge', () => {
     expect(AI_MODEL_METER).toBe('ai_model_generated')
   })
 
+  it("falls back to the app's own credentials (SHOPIFY_API_KEY / SHOPIFY_API_SECRET)", async () => {
+    vi.stubEnv('SHOPIFY_APP_EVENTS_CLIENT_ID', '')
+    vi.stubEnv('SHOPIFY_APP_EVENTS_CLIENT_SECRET', '')
+    vi.stubEnv('SHOPIFY_API_KEY', 'app_cid')
+    vi.stubEnv('SHOPIFY_API_SECRET', 'app_secret')
+    const fetchImpl = fakeFetch()
+    await reportModelCharge(charge, { fetchImpl, now: 0 })
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({
+      client_id: 'app_cid',
+      client_secret: 'app_secret',
+      grant_type: 'client_credentials',
+    })
+  })
+
   it('reuses the token until a minute before it expires', async () => {
     const fetchImpl = fakeFetch()
     await reportModelCharge(charge, { fetchImpl, now: 0 })
