@@ -54,9 +54,12 @@ export default function Privacy() {
       <h2>Service providers</h2>
       <p>
         We use Vercel (application hosting), Neon (database), and Amazon Web
-        Services S3 (storage of merchant-uploaded models). Merchant data as
-        described above is processed by these providers on our behalf. No shopper
-        or camera data is sent to any of them, because none is ever collected.
+        Services S3 (storage of merchant-uploaded models and photos). Merchant
+        data as described above is processed by these providers on our behalf.
+        If a merchant uses &ldquo;Create with AI&rdquo;, the frame photos they
+        upload are sent to OpenAI, which builds the 3D model; those photos are
+        deleted from our storage after 30 days. No shopper or camera data is
+        sent to any of these providers, because none is ever collected.
       </p>
 
       <h2>Your rights</h2>

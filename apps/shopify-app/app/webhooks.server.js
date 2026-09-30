@@ -39,12 +39,25 @@ export async function purgeShopData(prisma, shop) {
     await deleteModelGlb(storageRef)
   }
 
+  // AI generations (spec 2026-09-30): photos and unsaved models are S3 objects
+  // indexed only by these rows, so they go before the rows, same as assets.
+  const generations = await prisma.modelGeneration.findMany({
+    where: { shop },
+    select: { photoRefs: true, glbRef: true },
+  })
+  for (const { photoRefs, glbRef } of generations) {
+    for (const key of Array.isArray(photoRefs) ? photoRefs : []) await deleteModelGlb(key)
+    if (glbRef) await deleteModelGlb(glbRef)
+  }
+
   const mappings = await prisma.productMapping.deleteMany({ where: { shop } })
   const deletedAssets = await prisma.modelAsset.deleteMany({ where: { shop } })
   const sessions = await prisma.session.deleteMany({ where: { shop } })
   // ShopSubscription is shop-keyed merchant data and has no foreign keys, so its
   // delete order is unconstrained; after sessions keeps the FK-forced order intact.
   const subscriptions = await prisma.shopSubscription.deleteMany({ where: { shop } })
+  // No foreign keys; deleted last so a failure above leaves the index intact.
+  const generationRows = await prisma.modelGeneration.deleteMany({ where: { shop } })
 
   return {
     storageRefs: assets.length,
@@ -52,5 +65,6 @@ export async function purgeShopData(prisma, shop) {
     assets: deletedAssets.count,
     sessions: sessions.count,
     subscriptions: subscriptions.count,
+    generations: generationRows.count,
   }
 }
