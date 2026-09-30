@@ -384,8 +384,21 @@ export async function saveGeneration(prisma, { shop, generationId, planName, acc
   try {
     asset = await assetForGeneration(prisma, shop, generation)
   } catch (error) {
-    await prisma.modelGeneration.update({ where: { id: generation.id }, data: { status: 'ready', paid: null } })
-    throw error
+    // The create may have committed before the call errored (e.g. a connection
+    // reset after commit). Reverting then would leave a live model that is
+    // never charged or counted, so check for it first and carry on if it's there.
+    let committed = null
+    try {
+      committed = await ownAsset(prisma, shop, generation.id)
+    } catch (lookupError) {
+      console.error('AI generation save: asset lookup after failure also failed', generation.id, lookupError)
+    }
+    if (!committed) {
+      await prisma.modelGeneration.update({ where: { id: generation.id }, data: { status: 'ready', paid: null } })
+      throw error
+    }
+    console.warn('AI generation save errored after the asset was created; completing the save', generation.id, error?.message)
+    asset = { assetId: committed.id }
   }
 
   const saved = await prisma.modelGeneration.update({
