@@ -30,7 +30,18 @@ describe('presignPhotoUpload', () => {
     await expect(presignPhotoUpload({ contentType: 'image/gif', size: 1 })).rejects.toMatchObject({ code: 'BAD_PHOTO' })
     await expect(presignPhotoUpload({ contentType: 'image/png', size: 0 })).rejects.toMatchObject({ code: 'BAD_PHOTO' })
     await expect(presignPhotoUpload({ contentType: 'image/png', size: MAX_PHOTO_BYTES + 1 })).rejects.toMatchObject({ code: 'BAD_PHOTO' })
+    await expect(presignPhotoUpload({ contentType: 'image/png', size: 1.5 })).rejects.toMatchObject({ code: 'BAD_PHOTO' })
     expect(MAX_PHOTO_BYTES).toBe(10 * 1024 * 1024)
+  })
+
+  it('rejects prototype keys to prevent bypass', async () => {
+    await expect(presignPhotoUpload({ contentType: 'constructor', size: 1 })).rejects.toMatchObject({ code: 'BAD_PHOTO' })
+    await expect(presignPhotoUpload({ contentType: '__proto__', size: 1 })).rejects.toMatchObject({ code: 'BAD_PHOTO' })
+  })
+
+  it('accepts the maximum allowed size', async () => {
+    const { storageRef } = await presignPhotoUpload({ contentType: 'image/png', size: MAX_PHOTO_BYTES })
+    expect(storageRef).toMatch(/^generation-photos\/[0-9a-f-]+\.png$/)
   })
 })
 

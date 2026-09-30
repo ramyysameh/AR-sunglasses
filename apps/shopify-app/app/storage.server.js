@@ -73,7 +73,7 @@ export const MAX_PHOTO_BYTES = 10 * 1024 * 1024
 const PHOTO_EXTENSIONS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }
 
 export async function presignPhotoUpload({ contentType, size, expiresIn = 300 }) {
-  const extension = PHOTO_EXTENSIONS[contentType]
+  const extension = Object.hasOwn(PHOTO_EXTENSIONS, contentType) ? PHOTO_EXTENSIONS[contentType] : null
   if (!extension) throw tagged('BAD_PHOTO', `unsupported photo type: ${contentType}`)
   if (!Number.isInteger(size) || size <= 0 || size > MAX_PHOTO_BYTES) {
     throw tagged('BAD_PHOTO', `photo size out of range: ${size}`)
