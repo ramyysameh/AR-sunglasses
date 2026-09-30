@@ -94,3 +94,34 @@ model ShopSubscription {
   graceEndsAt DateTime?
   updatedAt   DateTime  @updatedAt
 }
+
+// One AI "Create with AI" job (spec 2026-09-30). Saved rows are kept forever:
+// the lifetime free allowance counts them, so deleting the resulting
+// ModelAsset must not lower the count. modelAssetId is therefore a plain
+// string, not a relation.
+model ModelGeneration {
+  id             String    @id @default(uuid())
+  shop           String
+  shopGid        String
+  photoRefs      Json
+  photoSetId     String
+  retryIndex     Int       @default(0)
+  autoRetried    Boolean   @default(false)
+  providerJobId  String?
+  // queued|running|collecting|ready|saving|saved|discarded|failed
+  status         String
+  error          String?
+  glbRef         String?
+  calibration    Json?
+  paid           Boolean?
+  chargeReported Boolean   @default(false)
+  modelAssetId   String?   @unique
+  startedAt      DateTime?
+  savedAt        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([shop, status])
+  @@index([shop, createdAt])
+  @@index([providerJobId])
+}

@@ -3,6 +3,17 @@
 // here MUST match the dashboard plan names exactly, or planLimit() fails closed.
 export const PLAN_LIMITS = { Starter: 10, Growth: 40, Pro: Infinity }
 
+// Lifetime free AI-generated models per plan (spec 2026-09-30). Separate from
+// PLAN_LIMITS, which caps products with try-on. Past it, each saved model is a
+// $5 usage charge. Same fail-closed rule as planLimit: unknown name -> 0.
+export const AI_MODEL_ALLOWANCE = { Starter: 10, Growth: 40, Pro: Infinity }
+
+export function aiModelAllowance(name) {
+  return Object.prototype.hasOwnProperty.call(AI_MODEL_ALLOWANCE, name)
+    ? AI_MODEL_ALLOWANCE[name]
+    : 0
+}
+
 // Days the storefront try-on keeps serving after a subscription lapses.
 export const GRACE_PERIOD_DAYS = 7
 
