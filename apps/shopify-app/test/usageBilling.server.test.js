@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { reportModelCharge, resetAppEventsToken, AI_MODEL_METER } from '../app/usageBilling.server.js'
 
-function fakeFetch({ tokenStatus = 200, eventStatus = 202, eventBody = { success: true } } = {}) {
-  return vi.fn(async (url, init) => {
+function fakeFetch({
+  tokenStatus = 200,
+  tokenBody = { access_token: 'tok_1', expires_in: 3599 },
+  eventStatus = 202,
+  eventBody = { success: true },
+} = {}) {
+  return vi.fn(async (url) => {
     if (url === 'https://api.shopify.com/auth/access_token') {
-      return new Response(JSON.stringify({ access_token: 'tok_1', expires_in: 3599 }), { status: tokenStatus })
+      return new Response(JSON.stringify(tokenBody), { status: tokenStatus })
     }
     return new Response(JSON.stringify(eventBody), { status: eventStatus })
   })
@@ -60,6 +65,49 @@ describe('reportModelCharge', () => {
     resetAppEventsToken()
     await expect(reportModelCharge(charge, { fetchImpl: fakeFetch({ eventBody: { success: false, error: 'bad' } }), now: 0 }))
       .rejects.toMatchObject({ code: 'APP_EVENTS_REJECTED' })
+  })
+
+  it('throws APP_EVENTS_AUTH for a token body without a usable token or lifetime, and caches nothing', async () => {
+    const bad = [
+      {},
+      { access_token: '', expires_in: 3599 },
+      { access_token: 'tok_1' },
+      { access_token: 'tok_1', expires_in: 0 },
+      { access_token: 'tok_1', expires_in: 'soon' },
+    ]
+    for (const tokenBody of bad) {
+      const fetchImpl = fakeFetch({ tokenBody })
+      await expect(reportModelCharge(charge, { fetchImpl, now: 0 })).rejects.toMatchObject({ code: 'APP_EVENTS_AUTH' })
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('turns network failures and timeouts into coded errors', async () => {
+    const down = vi.fn(async () => {
+      throw new TypeError('fetch failed')
+    })
+    await expect(reportModelCharge(charge, { fetchImpl: down, now: 0 })).rejects.toMatchObject({ code: 'APP_EVENTS_AUTH' })
+
+    const good = fakeFetch()
+    const eventsDown = vi.fn(async (url, init) => {
+      if (url.endsWith('/access_token')) return good(url, init)
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+    })
+    await expect(reportModelCharge(charge, { fetchImpl: eventsDown, now: 0 })).rejects.toMatchObject({ code: 'APP_EVENTS_REJECTED' })
+  })
+
+  it('gives both requests a timeout signal', async () => {
+    const fetchImpl = fakeFetch()
+    await reportModelCharge(charge, { fetchImpl, now: 0 })
+    for (const [, init] of fetchImpl.mock.calls) expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('aborts a request that takes longer than the timeout', async () => {
+    const hang = vi.fn((url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason))
+    }))
+    await expect(reportModelCharge(charge, { fetchImpl: hang, now: 0, timeoutMs: 5 }))
+      .rejects.toMatchObject({ code: 'APP_EVENTS_AUTH' })
   })
 
   it('drops a cached token that the events API rejects as unauthorized', async () => {

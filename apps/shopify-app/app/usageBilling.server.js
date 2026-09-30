@@ -23,9 +23,20 @@ export function resetAppEventsToken() {
   cachedToken = null
 }
 
-async function accessToken(fetchImpl, now) {
+export const APP_EVENTS_TIMEOUT_MS = 10_000
+
+// A network failure or timeout becomes a coded error, so callers always see one.
+async function send(fetchImpl, url, init, timeoutMs, code) {
+  try {
+    return await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+  } catch (error) {
+    throw tagged(code, `app events request failed: ${error?.message}`)
+  }
+}
+
+async function accessToken(fetchImpl, now, timeoutMs) {
   if (cachedToken && cachedToken.expiresAt > now + 60_000) return cachedToken.token
-  const res = await fetchImpl(TOKEN_URL, {
+  const res = await send(fetchImpl, TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -33,10 +44,15 @@ async function accessToken(fetchImpl, now) {
       client_secret: process.env.SHOPIFY_APP_EVENTS_CLIENT_SECRET,
       grant_type: 'client_credentials',
     }),
-  })
+  }, timeoutMs, 'APP_EVENTS_AUTH')
   if (!res.ok) throw tagged('APP_EVENTS_AUTH', `app events token request failed: ${res.status}`)
-  const body = await res.json()
-  cachedToken = { token: body.access_token, expiresAt: now + body.expires_in * 1000 }
+  const body = await res.json().catch(() => null)
+  const token = body?.access_token
+  const expiresIn = body?.expires_in
+  if (typeof token !== 'string' || !token || typeof expiresIn !== 'number' || !(expiresIn > 0)) {
+    throw tagged('APP_EVENTS_AUTH', 'app events token response is missing access_token or expires_in')
+  }
+  cachedToken = { token, expiresAt: now + expiresIn * 1000 }
   return cachedToken.token
 }
 
@@ -46,10 +62,10 @@ async function accessToken(fetchImpl, now) {
  */
 export async function reportModelCharge(
   { shopGid, idempotencyKey, timestamp },
-  { fetchImpl = fetch, now = Date.now() } = {},
+  { fetchImpl = fetch, now = Date.now(), timeoutMs = APP_EVENTS_TIMEOUT_MS } = {},
 ) {
-  const token = await accessToken(fetchImpl, now)
-  const res = await fetchImpl(EVENTS_URL, {
+  const token = await accessToken(fetchImpl, now, timeoutMs)
+  const res = await send(fetchImpl, EVENTS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
@@ -59,7 +75,7 @@ export async function reportModelCharge(
       idempotency_key: idempotencyKey,
       attributes: { value: 1 },
     }),
-  })
+  }, timeoutMs, 'APP_EVENTS_REJECTED')
   if (res.status === 401) cachedToken = null
   if (!res.ok) throw tagged('APP_EVENTS_REJECTED', `app event rejected: ${res.status}`)
   const body = await res.json().catch(() => ({}))
