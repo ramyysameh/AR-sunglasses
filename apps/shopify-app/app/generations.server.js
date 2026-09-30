@@ -148,7 +148,8 @@ export async function createGeneration(prisma, { shop, shopGid, photoRefs = null
   // Slow network call: outside the transaction.
   let providerJobId
   try {
-    ;({ providerJobId } = await startGeneration({ images: await photoUrls(generation.photoRefs) }))
+    const started = await startGeneration({ images: await photoUrls(generation.photoRefs) })
+    providerJobId = started.providerJobId
   } catch (error) {
     console.error('AI generation start failed', generation.id, error)
     return prisma.modelGeneration.update({
