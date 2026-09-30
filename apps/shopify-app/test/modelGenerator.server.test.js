@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   GENERATION_MODEL,
   buildGenerationRequest,
@@ -145,9 +145,15 @@ describe('checkGeneration', () => {
 
 describe('cancelGeneration', () => {
   it('swallows errors (a job that already finished cannot be cancelled)', async () => {
-    const client = fakeClient()
-    setGeneratorClient(client)
-    await expect(cancelGeneration('resp_1')).resolves.toBeUndefined()
-    expect(client.calls.cancelled).toEqual(['resp_1'])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const client = fakeClient()
+      setGeneratorClient(client)
+      await expect(cancelGeneration('resp_1')).resolves.toBeUndefined()
+      expect(client.calls.cancelled).toEqual(['resp_1'])
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
