@@ -40,6 +40,7 @@ vi.mock('../app/modelGenerator.server.js', () => ({
 }))
 vi.mock('../app/generations.server.js', () => ({
   aiGenerationEnabled: () => h.enabled,
+  assertCanStartGeneration: (...args) => h.gen.guard(...args),
   getAllowance: async () => ({ allowance: 10, used: 1, unlimited: false, freeRemaining: 9 }),
   listGenerations: (...args) => h.gen.list(...args),
   createGeneration: (...args) => h.gen.create(...args),
@@ -64,7 +65,7 @@ const tagged = (code) => Object.assign(new Error(code), { code })
 beforeEach(() => {
   h.plan = 'Starter'
   h.enabled = true
-  h.gen = { list: vi.fn(), create: vi.fn(), save: vi.fn(), discard: vi.fn(), advance: vi.fn() }
+  h.gen = { list: vi.fn(), create: vi.fn(), save: vi.fn(), discard: vi.fn(), advance: vi.fn(), guard: vi.fn() }
   h.presign.mockReset()
   h.unwrap.mockReset()
   h.glb.clear()
@@ -95,12 +96,25 @@ describe('api.generations', () => {
     expect(h.gen.list.mock.calls[0][1]).toBe(h.shop)
   })
 
-  it('presigns one upload per photo', async () => {
-    h.presign.mockImplementation(async ({ contentType }) => ({ uploadUrl: `u-${contentType}`, storageRef: `generation-photos/x.${contentType.split('/')[1]}` }))
+  it('presigns one shop-scoped upload per photo, after the cost guard passes', async () => {
+    h.presign.mockImplementation(async ({ shop, contentType }) => ({ uploadUrl: `u-${contentType}`, storageRef: `generation-photos/${shop}/0a.${contentType.split('/')[1]}` }))
     const files = [{ type: 'image/jpeg', size: 1 }, { type: 'image/png', size: 2 }, { type: 'image/webp', size: 3 }]
     const body = await (await api.action(post({ intent: 'presign-photos', files: JSON.stringify(files) }))).json()
     expect(body.uploads.map((u) => u.uploadUrl)).toEqual(['u-image/jpeg', 'u-image/png', 'u-image/webp'])
-    expect(h.presign).toHaveBeenCalledWith({ contentType: 'image/png', size: 2 })
+    expect(h.presign).toHaveBeenCalledWith({ shop: h.shop, contentType: 'image/png', size: 2 })
+    expect(h.gen.guard).toHaveBeenCalledTimes(1)
+    expect(h.gen.guard.mock.calls[0][1]).toBe(h.shop)
+  })
+
+  it('refuses to presign (429) when the shop could not start a generation anyway', async () => {
+    for (const code of ['TOO_MANY_RUNNING', 'DAILY_LIMIT']) {
+      h.gen.guard.mockRejectedValue(tagged(code))
+      const files = [{ type: 'image/jpeg', size: 1 }, { type: 'image/png', size: 2 }, { type: 'image/webp', size: 3 }]
+      const res = await api.action(post({ intent: 'presign-photos', files: JSON.stringify(files) }))
+      expect(res.status).toBe(429)
+      expect((await res.json()).code).toBe(code)
+    }
+    expect(h.presign).not.toHaveBeenCalled()
   })
 
   it('rejects the wrong number of photos, or malformed JSON, with a 400', async () => {
@@ -113,7 +127,7 @@ describe('api.generations', () => {
 
   it('creates with the shop GID and parsed photo refs', async () => {
     h.gen.create.mockResolvedValue({ id: 'g2', status: 'running' })
-    const refs = ['generation-photos/a.jpg', 'generation-photos/b.jpg', 'generation-photos/c.jpg']
+    const refs = ['0a', '1b', '2c'].map((id) => `generation-photos/${h.shop}/${id}.jpg`)
     const body = await (await api.action(post({ intent: 'create', photoRefs: JSON.stringify(refs) }))).json()
     expect(body).toEqual({ generation: { id: 'g2', status: 'running' } })
     expect(h.gen.create.mock.calls[0][1]).toEqual({ shop: h.shop, shopGid: 'gid://shopify/Shop/7', photoRefs: refs, retryOf: null })

@@ -25,7 +25,15 @@ export const LIMITS = {
   stuckMs: 5 * 60 * 1000,
 }
 
-export const PHOTO_REF = /^generation-photos\/[0-9a-f-]+\.(jpg|png|webp)$/
+// The part of a photo key after generation-photos/<shop>/ (storage.server.js).
+const PHOTO_FILE = /^[0-9a-f-]+\.(jpg|png|webp)$/
+
+/** True when `ref` is a photo key that presignPhotoUpload issued for this shop. */
+export function isShopPhotoRef(shop, ref) {
+  if (typeof shop !== 'string' || typeof ref !== 'string') return false
+  const prefix = `generation-photos/${shop.toLowerCase()}/`
+  return ref.startsWith(prefix) && PHOTO_FILE.test(ref.slice(prefix.length))
+}
 
 const USED_STATUSES = ['saving', 'saved']
 const ACTIVE_STATUSES = ['queued', 'running', 'collecting']
@@ -37,14 +45,20 @@ async function photoUrls(photoRefs) {
   return Promise.all(photoRefs.map((ref) => presignObjectRead(ref)))
 }
 
-function validPhotoRefs(photoRefs) {
+function validPhotoRefs(shop, photoRefs) {
   return Array.isArray(photoRefs)
     && photoRefs.length >= 3
     && photoRefs.length <= 4
-    && photoRefs.every((ref) => typeof ref === 'string' && PHOTO_REF.test(ref))
+    && photoRefs.every((ref) => isShopPhotoRef(shop, ref))
 }
 
-async function assertWithinCostGuard(prisma, shop, now) {
+/**
+ * The cost guard: at most LIMITS.running generations in flight and
+ * LIMITS.perDay starts (plus automatic retries) in 24 hours. createGeneration
+ * runs it under the per-shop lock; the photo presign runs it first, unlocked,
+ * so a start that would be refused doesn't leave uploaded photos behind.
+ */
+export async function assertCanStartGeneration(prisma, shop, now = new Date()) {
   const running = await prisma.modelGeneration.count({ where: { shop, status: { in: ACTIVE_STATUSES } } })
   if (running >= LIMITS.running) {
     throw tagged('TOO_MANY_RUNNING', `shop already has ${running} generations running`)
@@ -133,11 +147,11 @@ export async function createGeneration(prisma, { shop, shopGid, photoRefs = null
       refs = parentRow.photoRefs
       photoSetId = parentRow.photoSetId
       retryIndex = setSize
-    } else if (!validPhotoRefs(refs)) {
-      throw tagged('BAD_PHOTOS', 'expected 3 or 4 uploaded photos')
+    } else if (!validPhotoRefs(shop, refs)) {
+      throw tagged('BAD_PHOTOS', "expected 3 or 4 of this shop's uploaded photos")
     }
 
-    await assertWithinCostGuard(tx, shop, now)
+    await assertCanStartGeneration(tx, shop, now)
 
     const created = await tx.modelGeneration.create({
       data: { shop, shopGid, photoRefs: refs, photoSetId, retryIndex, status: 'queued', createdAt: now },

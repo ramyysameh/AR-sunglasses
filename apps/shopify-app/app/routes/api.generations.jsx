@@ -4,6 +4,7 @@ import { getActivePlanName } from '../billing.server'
 import { presignPhotoUpload } from '../storage.server'
 import {
   aiGenerationEnabled,
+  assertCanStartGeneration,
   getAllowance,
   listGenerations,
   createGeneration,
@@ -100,8 +101,11 @@ export const action = async ({ request }) => {
       if (!Array.isArray(files) || files.length < 3 || files.length > 4) {
         throw Object.assign(new Error('wrong photo count'), { code: 'BAD_PHOTOS' })
       }
+      // Refuse before any upload URL exists, so a start the guard would refuse
+      // doesn't leave orphaned photos in storage.
+      await assertCanStartGeneration(prisma, shop)
       const uploads = await Promise.all(
-        files.map((file) => presignPhotoUpload({ contentType: file?.type, size: file?.size })),
+        files.map((file) => presignPhotoUpload({ shop, contentType: file?.type, size: file?.size })),
       )
       return Response.json({ uploads })
     }

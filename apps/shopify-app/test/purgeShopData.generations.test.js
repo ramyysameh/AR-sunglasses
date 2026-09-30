@@ -26,9 +26,9 @@ function table(rows) {
 describe('purgeShopData and AI generations', () => {
   it('deletes generation photos and pending GLBs before any rows, then the rows', async () => {
     const generationRows = [
-      { shop: SHOP, photoRefs: ['generation-photos/1.jpg', 'generation-photos/2.jpg'], glbRef: 'generations/g.glb' },
+      { shop: SHOP, photoRefs: [`generation-photos/${SHOP}/1a.jpg`, `generation-photos/${SHOP}/2b.jpg`], glbRef: 'generations/g.glb' },
       { shop: SHOP, photoRefs: [], glbRef: null },
-      { shop: 'other.myshopify.com', photoRefs: ['generation-photos/x.jpg'], glbRef: null },
+      { shop: 'other.myshopify.com', photoRefs: ['generation-photos/other.myshopify.com/3c.jpg'], glbRef: null },
     ]
     const prisma = {
       modelAsset: table([{ shop: SHOP, storageRef: 'a.glb' }]),
@@ -40,7 +40,7 @@ describe('purgeShopData and AI generations', () => {
 
     const result = await purgeShopData(prisma, SHOP)
 
-    expect(deleted).toEqual(['a.glb', 'generation-photos/1.jpg', 'generation-photos/2.jpg', 'generations/g.glb'])
+    expect(deleted).toEqual(['a.glb', `generation-photos/${SHOP}/1a.jpg`, `generation-photos/${SHOP}/2b.jpg`, 'generations/g.glb'])
     expect(result.generations).toBe(2)
     expect(generationRows).toHaveLength(1)
     expect(generationRows[0].shop).toBe('other.myshopify.com')

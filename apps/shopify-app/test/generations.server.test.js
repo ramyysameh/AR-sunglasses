@@ -41,7 +41,8 @@ const { aiModelAllowance } = await import('../app/billing.server.js')
 
 const SHOP = 'gen-test.myshopify.com'
 const SHOP_GID = 'gid://shopify/Shop/1'
-const PHOTOS = ['generation-photos/0a1b.jpg', 'generation-photos/2c3d.png', 'generation-photos/4e5f.webp']
+const PHOTO_DIR = `generation-photos/${SHOP}`
+const PHOTOS = [`${PHOTO_DIR}/0a1b.jpg`, `${PHOTO_DIR}/2c3d.png`, `${PHOTO_DIR}/4e5f.webp`]
 const NOW = new Date('2026-10-01T12:00:00Z')
 
 function row(overrides = {}) {
@@ -145,16 +146,26 @@ describe('createGeneration', () => {
     const prisma = createFakePrisma()
     const bad = [
       PHOTOS.slice(0, 2),
-      [...PHOTOS, 'generation-photos/aa.jpg', 'generation-photos/bb.jpg'],
+      [...PHOTOS, `${PHOTO_DIR}/aa.jpg`, `${PHOTO_DIR}/bb.jpg`],
       [...PHOTOS.slice(0, 2), 'uploads/0a1b.glb'],
-      'generation-photos/0a1b.jpg',
+      [...PHOTOS.slice(0, 2), 'generation-photos/0a1b.jpg'],
+      [...PHOTOS.slice(0, 2), `${PHOTO_DIR}/../x.myshopify.com/0a1b.jpg`],
+      `${PHOTO_DIR}/0a1b.jpg`,
     ]
     for (const photoRefs of bad) {
       await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs, now: NOW }))
         .rejects.toMatchObject({ code: 'BAD_PHOTOS' })
     }
-    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: [...PHOTOS, 'generation-photos/9f.jpg'], now: NOW }))
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: [...PHOTOS, `${PHOTO_DIR}/9f.jpg`], now: NOW }))
       .resolves.toMatchObject({ status: 'running' })
+  })
+
+  it('refuses photo keys that belong to another shop', async () => {
+    const prisma = createFakePrisma()
+    const foreign = [...PHOTOS.slice(0, 2), 'generation-photos/other.myshopify.com/0a1b.jpg']
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: foreign, now: NOW }))
+      .rejects.toMatchObject({ code: 'BAD_PHOTOS' })
+    expect(deps.start).not.toHaveBeenCalled()
   })
 
   it('refuses a third concurrent generation', async () => {
@@ -269,6 +280,35 @@ describe('createGeneration', () => {
     } finally {
       logged.mockRestore()
     }
+  })
+})
+
+describe('isShopPhotoRef', () => {
+  it("accepts only this shop's photo keys", () => {
+    for (const ref of PHOTOS) expect(generations.isShopPhotoRef(SHOP, ref)).toBe(true)
+    const bad = [
+      'generation-photos/other.myshopify.com/0a1b.jpg',
+      'generation-photos/0a1b.jpg',
+      `${PHOTO_DIR}/0a1b.gif`,
+      `${PHOTO_DIR}/sub/0a1b.jpg`,
+      `${PHOTO_DIR}/../other.myshopify.com/0a1b.jpg`,
+      `generation-photos/${SHOP}x/0a1b.jpg`,
+      null,
+    ]
+    for (const ref of bad) expect(generations.isShopPhotoRef(SHOP, ref)).toBe(false)
+  })
+})
+
+describe('assertCanStartGeneration', () => {
+  it('passes under the limits and refuses with the same codes as create', async () => {
+    const prisma = createFakePrisma()
+    await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW)).resolves.toBeUndefined()
+    await seed(prisma, ['running', 'queued'])
+    await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW)).rejects.toMatchObject({ code: 'TOO_MANY_RUNNING' })
+
+    const busy = createFakePrisma()
+    await seed(busy, Array(20).fill('failed'), { createdAt: new Date(NOW.getTime() - 60_000) })
+    await expect(generations.assertCanStartGeneration(busy, SHOP, NOW)).rejects.toMatchObject({ code: 'DAILY_LIMIT' })
   })
 })
 

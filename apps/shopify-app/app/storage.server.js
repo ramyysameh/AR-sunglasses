@@ -72,13 +72,19 @@ export async function presignModelUpload({ expiresIn = 300 } = {}) {
 export const MAX_PHOTO_BYTES = 10 * 1024 * 1024
 const PHOTO_EXTENSIONS = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }
 
-export async function presignPhotoUpload({ contentType, size, expiresIn = 300 }) {
+const MYSHOPIFY_DOMAIN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/
+
+// Keys are generation-photos/<shop>/<uuid>.<ext>, so generations.server.js can
+// refuse a photo key that belongs to another shop.
+export async function presignPhotoUpload({ shop, contentType, size, expiresIn = 300 }) {
+  const shopSegment = typeof shop === 'string' ? shop.toLowerCase() : ''
+  if (!MYSHOPIFY_DOMAIN.test(shopSegment)) throw tagged('BAD_PHOTO', `invalid shop for photo upload: ${shop}`)
   const extension = Object.hasOwn(PHOTO_EXTENSIONS, contentType) ? PHOTO_EXTENSIONS[contentType] : null
   if (!extension) throw tagged('BAD_PHOTO', `unsupported photo type: ${contentType}`)
   if (!Number.isInteger(size) || size <= 0 || size > MAX_PHOTO_BYTES) {
     throw tagged('BAD_PHOTO', `photo size out of range: ${size}`)
   }
-  const storageRef = `generation-photos/${globalThis.crypto.randomUUID()}.${extension}`
+  const storageRef = `generation-photos/${shopSegment}/${globalThis.crypto.randomUUID()}.${extension}`
   const uploadUrl = await getSignedUrl(
     getClient(),
     new PutObjectCommand({
