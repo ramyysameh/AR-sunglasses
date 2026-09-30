@@ -59,20 +59,20 @@ export const loader = async ({ request }) => {
   if (!activePlan) {
     return { assets: [], themeUrl, atLimit: false, pricingUrl: null }
   }
-  const [assets, used] = await Promise.all([
+  const aiEnabled = aiGenerationEnabled(session.shop)
+  const [assets, used, allowance] = await Promise.all([
     prisma.modelAsset.findMany({
       where: { shop: session.shop },
       orderBy: { createdAt: 'desc' },
       include: { _count: { select: { mappings: true } } },
     }),
     prisma.productMapping.count({ where: { shop: session.shop } }),
+    aiEnabled ? getAllowance(prisma, session.shop, activePlan) : null,
   ])
   // Same limit the Workspace enforces: at the limit, "Add try-on" here would
   // open a flow whose publish can only fail, so the page offers the upgrade.
   const usage = planUsage({ planName: activePlan, used, shop: session.shop })
-  const ai = aiGenerationEnabled(session.shop)
-    ? { allowance: await getAllowance(prisma, session.shop, activePlan) }
-    : null
+  const ai = aiEnabled ? { allowance } : null
   return {
     ai,
     atLimit: usage.atLimit,

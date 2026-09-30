@@ -13,6 +13,12 @@ const POLL_MS = 5000
 const CONFIRM_MODAL_ID = 'ai-charge-confirm'
 const GENERIC_ERROR = 'Something went wrong. Try again.'
 const UPLOAD_FAILED = "The photos didn't upload. Check your connection and try again."
+const LOAD_FAILED = "Couldn't load your AI models. Refresh the page to try again."
+
+// Marks a message that is written for the merchant (a server `error` string or
+// UPLOAD_FAILED). Anything else that gets thrown is shown as GENERIC_ERROR so
+// raw exception text ("Failed to fetch", stack details) never reaches the UI.
+class ShownError extends Error {}
 
 export const PHOTO_SLOTS = [
   { key: 'front', label: 'Front', required: true },
@@ -55,6 +61,7 @@ export function failureMessage(error) {
 export function generationView(generation) {
   const retry = generation.retriesLeft > 0 ? ['retry'] : []
   switch (generation.status) {
+    case 'queued':
     case 'running':
       return { label: 'Generating… this takes a few minutes. You can leave this page.', tone: 'info', actions: [] }
     case 'ready':
@@ -64,7 +71,7 @@ export function generationView(generation) {
     case 'failed':
       return { label: failureMessage(generation.error), tone: 'critical', actions: [...retry, 'discard'] }
     default:
-      return { label: generation.status, tone: 'neutral', actions: [] }
+      return { label: 'Working on it…', tone: 'neutral', actions: [] }
   }
 }
 
@@ -140,20 +147,34 @@ export default function AiModelFlow({ initialAllowance }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [chargeFor, setChargeFor] = useState(null)
+  // Polls can overlap a slow response; only the latest request may update state.
+  const latestRequest = useRef(0)
 
-  const refresh = useCallback(async () => {
-    const res = await fetch('/api/generations')
-    if (!res.ok) return
-    const body = await res.json()
-    setGenerations(body.generations)
-    setAllowance(body.allowance)
+  // Never throws: a failed poll keeps the current state on screen.
+  const refresh = useCallback(async ({ initial = false } = {}) => {
+    const requestId = ++latestRequest.current
+    try {
+      const res = await fetch('/api/generations')
+      if (requestId !== latestRequest.current) return
+      if (!res.ok) {
+        // 404 = the feature is off for this shop, so say nothing.
+        if (initial && res.status !== 404) setError(LOAD_FAILED)
+        return
+      }
+      const body = await res.json()
+      if (requestId !== latestRequest.current) return
+      setGenerations(body.generations)
+      setAllowance(body.allowance)
+    } catch (e) {
+      console.error('AI generations refresh failed', e)
+    }
   }, [])
 
   useEffect(() => {
-    refresh()
+    refresh({ initial: true })
   }, [refresh])
 
-  const anyRunning = generations.some((g) => g.status === 'running' || g.status === 'saving')
+  const anyRunning = generations.some((g) => g.status === 'queued' || g.status === 'running' || g.status === 'saving')
   useEffect(() => {
     if (!anyRunning) return undefined
     const timer = setInterval(refresh, POLL_MS)
@@ -171,23 +192,39 @@ export default function AiModelFlow({ initialAllowance }) {
         intent: 'presign-photos',
         files: JSON.stringify(chosen.map((f) => ({ type: f.type, size: f.size }))),
       })
-      if (!presign.ok) throw new Error(presign.body.error ?? GENERIC_ERROR)
-      await Promise.all(presign.body.uploads.map(async ({ uploadUrl }, i) => {
-        const res = await fetch(uploadUrl, { method: 'PUT', body: chosen[i], headers: { 'Content-Type': chosen[i].type } })
+      if (!presign.ok) throw new ShownError(presign.body.error ?? GENERIC_ERROR)
+      const { uploads } = presign.body
+      if (!Array.isArray(uploads) || uploads.length !== chosen.length) {
+        throw new Error('presign-photos returned an unexpected number of uploads')
+      }
+      await Promise.all(uploads.map(async ({ uploadUrl }, i) => {
+        let res
+        try {
+          res = await fetch(uploadUrl, { method: 'PUT', body: chosen[i], headers: { 'Content-Type': chosen[i].type } })
+        } catch (uploadError) {
+          // A rejected fetch (CORS, dropped connection) is an upload failure too.
+          console.error('AI photo upload failed', uploadError)
+          throw new ShownError(UPLOAD_FAILED)
+        }
         if (!res.ok) {
           console.error('AI photo upload failed', res.status)
-          throw new Error(UPLOAD_FAILED)
+          throw new ShownError(UPLOAD_FAILED)
         }
       }))
       const created = await postForm({
         intent: 'create',
-        photoRefs: JSON.stringify(presign.body.uploads.map((u) => u.storageRef)),
+        photoRefs: JSON.stringify(uploads.map((u) => u.storageRef)),
       })
-      if (!created.ok) throw new Error(created.body.error ?? GENERIC_ERROR)
+      if (!created.ok) throw new ShownError(created.body.error ?? GENERIC_ERROR)
       setPhotos({})
       await refresh()
     } catch (e) {
-      setError(e.message || GENERIC_ERROR)
+      if (e instanceof ShownError) {
+        setError(e.message)
+      } else {
+        console.error('AI generation failed', e)
+        setError(GENERIC_ERROR)
+      }
     } finally {
       setBusy(false)
     }
@@ -205,27 +242,34 @@ export default function AiModelFlow({ initialAllowance }) {
     }
     setBusy(true)
     setError(null)
-    const res = await postForm({
-      intent: action,
-      generationId: generation.id,
-      ...(action === 'save' ? { acceptCharge: String(acceptCharge) } : {}),
-    })
-    setBusy(false)
-    if (res.body.code === 'CHARGE_NOT_CONFIRMED') {
-      // Another save took the last free slot since this page loaded.
-      askToConfirmCharge(generation.id)
+    // Never rejects (confirmCharge calls this without awaiting it).
+    try {
+      const res = await postForm({
+        intent: action,
+        generationId: generation.id,
+        ...(action === 'save' ? { acceptCharge: String(acceptCharge) } : {}),
+      })
+      if (res.body.code === 'CHARGE_NOT_CONFIRMED') {
+        // Another save took the last free slot since this page loaded.
+        askToConfirmCharge(generation.id)
+        await refresh()
+        return
+      }
+      if (!res.ok) {
+        setError(res.body.error ?? GENERIC_ERROR)
+        return
+      }
+      if (action === 'save') {
+        shopify.toast.show(res.body.paid ? `Model saved. ${PRICE} added to your Shopify bill.` : 'Model saved to your library')
+        revalidator.revalidate()
+      }
       await refresh()
-      return
+    } catch (e) {
+      console.error('AI generation action failed', e)
+      setError(GENERIC_ERROR)
+    } finally {
+      setBusy(false)
     }
-    if (!res.ok) {
-      setError(res.body.error ?? GENERIC_ERROR)
-      return
-    }
-    if (action === 'save') {
-      shopify.toast.show(res.body.paid ? `Model saved. ${PRICE} added to your Shopify bill.` : 'Model saved to your library')
-      revalidator.revalidate()
-    }
-    await refresh()
   }
 
   function confirmCharge() {
@@ -260,7 +304,7 @@ export default function AiModelFlow({ initialAllowance }) {
           ))}
         </s-grid>
         <s-stack direction="inline">
-          <s-button variant="primary" disabled={busy || !canGenerate(photos)} loading={busy} onClick={generate}>
+          <s-button variant="primary" disabled={busy || !canGenerate(photos)} {...(busy ? { loading: true } : {})} onClick={generate}>
             Generate 3D model
           </s-button>
         </s-stack>

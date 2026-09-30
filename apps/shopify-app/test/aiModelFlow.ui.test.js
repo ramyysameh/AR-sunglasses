@@ -58,6 +58,22 @@ describe('generationView', () => {
     expect(generationView({ status: 'saving', retriesLeft: 3 })).toMatchObject({ actions: [] })
   })
 
+  it('treats a running row with a retry reason as progress, not failure', () => {
+    const view = generationView({ status: 'running', error: 'low_confidence', retriesLeft: 3 })
+    expect(view.tone).toBe('info')
+    expect(view.actions).toEqual([])
+  })
+
+  it('shows queued the same as running', () => {
+    expect(generationView({ status: 'queued', retriesLeft: 3 })).toEqual(
+      generationView({ status: 'running', retriesLeft: 3 }),
+    )
+  })
+
+  it('never shows a raw status for an unknown one', () => {
+    expect(generationView({ status: 'mystery', retriesLeft: 0 }).label).toBe('Working on it…')
+  })
+
   it('explains a failure, says nothing was charged, and offers retry and dismiss', () => {
     const view = generationView({ status: 'failed', error: 'low_confidence', retriesLeft: 1 })
     expect(view.tone).toBe('critical')
