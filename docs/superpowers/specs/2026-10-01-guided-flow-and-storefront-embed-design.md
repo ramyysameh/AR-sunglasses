@@ -39,7 +39,10 @@ the Help page is text only.
   such asset exists today).
 - Rename keeps working as now.
 
-### A2. Zoomable 3D preview
+### A2. Large 3D preview (amended 2026-10-01: owner chose a large/full-screen preview over zoom buttons)
+- Small viewers rotate by drag only (zoom off, so the wheel scrolls the page). An **Expand** button opens a large preview filling the app window: drag to rotate, scroll/pinch to zoom, **Full screen** when the browser allows it, Close/Esc to exit. Review cards (320 px) and library cards are expandable. The +/−/reset design below is superseded.
+
+#### Original A2 (superseded)
 - `ModelViewer.jsx` drops `disable-zoom`; wheel / pinch zoom and drag-rotate work.
 - New props: `height` (default 160) and `controls` (default false). With
   `controls`, three small buttons overlay the viewer: **+**, **−**, **Reset**

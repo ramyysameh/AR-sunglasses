@@ -183,6 +183,8 @@ Do NOT run it locally.
 
 ### Task 2: Zoomable 3D preview
 
+> **Amended 2026-10-01 (owner):** large preview window / full screen instead of zoom buttons. See `.superpowers/sdd/2026-10-01-guided-flow-and-storefront-embed/task-2-amendment.md`; it supersedes the +/−/reset parts below.
+
 **Files:**
 - Modify: `app/components/ModelViewer.jsx`
 - Modify: `app/components/AiModelFlow.jsx:140` (the `ModelViewer` in `GenerationRow`)
