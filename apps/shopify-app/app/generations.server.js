@@ -346,13 +346,30 @@ async function ownAsset(prisma, shop, generationId) {
   return asset?.shop === shop ? asset : null
 }
 
+/**
+ * The library name for a model generated from a product: the product's title,
+ * or "Title (2)", "(3)", ... when the shop already has a model called that.
+ */
+export async function uniqueAssetLabel(prisma, shop, base) {
+  const assets = await prisma.modelAsset.findMany({ where: { shop }, select: { label: true } })
+  const taken = new Set(assets.map((asset) => asset.label).filter(Boolean))
+  if (!taken.has(base)) return base
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base} (${n})`
+    if (!taken.has(candidate)) return candidate
+  }
+}
+
 async function assetForGeneration(prisma, shop, generation) {
   const existing = await ownAsset(prisma, shop, generation.id)
   if (existing) return { assetId: existing.id }
   const bytes = await readModelGlb(generation.glbRef)
   if (!bytes) throw tagged('GLB_MISSING', `pending model ${generation.glbRef} is gone`)
+  const label = generation.photoSource === 'product' && generation.productTitle
+    ? await uniqueAssetLabel(prisma, shop, generation.productTitle)
+    : null
   try {
-    return await saveCalibratedModel(prisma, shop, bytes, 'AI model', { id: generation.id })
+    return await saveCalibratedModel(prisma, shop, bytes, 'AI model', { id: generation.id, label })
   } catch (error) {
     // P2002: another save created it between our lookup and our create.
     if (error?.code !== 'P2002') throw error

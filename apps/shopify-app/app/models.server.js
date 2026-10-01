@@ -10,7 +10,7 @@ import { tagged } from './errors.server.js'
 // `id` fixes the asset's id (AI generations use the generation's id, so a save
 // that is re-run after a crash finds the asset instead of making a second one);
 // without it the database picks one.
-export async function saveCalibratedModel(prisma, shop, glbBytes, filename = null, { id } = {}) {
+export async function saveCalibratedModel(prisma, shop, glbBytes, filename = null, { id, label = null } = {}) {
   const result = await calibrateUpload(glbBytes)
   const storageRef = `${globalThis.crypto.randomUUID()}.glb`
   await saveModelGlb(storageRef, result.storedGlb)
@@ -20,6 +20,7 @@ export async function saveCalibratedModel(prisma, shop, glbBytes, filename = nul
       ...(id ? { id } : {}),
       shop,
       filename: filename || null,
+      label: label || null,
       storageRef,
       fitMetadata: result.fitMetadata,
       confidence,

@@ -577,7 +577,7 @@ describe('saveGeneration', () => {
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
       .resolves.toEqual({ assetId: 'asset-1', paid: false, productId: null, productHandle: null })
     const [, shopArg, bytes, filename, options] = deps.saveCalibratedModel.mock.calls[0]
-    expect([shopArg, bytes.toString(), filename, options]).toEqual([SHOP, 'glb', 'AI model', { id: g.id }])
+    expect([shopArg, bytes.toString(), filename, options]).toEqual([SHOP, 'glb', 'AI model', { id: g.id, label: null }])
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({
       status: 'saved', paid: false, modelAssetId: 'asset-1', savedAt: NOW, glbRef: null,
     })
@@ -801,6 +801,29 @@ describe('saveGeneration', () => {
     }
     expect(deps.objects.has(glbRef)).toBe(true)
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'saved' })
+  })
+
+  it('names a product-sourced model after its product', async () => {
+    const prisma = createFakePrisma()
+    const g = await readyRow(prisma, { photoSource: 'product', productTitle: 'Aviator Gold' })
+    await generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW })
+    expect(deps.saveCalibratedModel).toHaveBeenCalledWith(prisma, SHOP, expect.anything(), 'AI model', { id: g.id, label: 'Aviator Gold' })
+  })
+
+  it('adds (2) when the shop already has a model with that name', async () => {
+    const prisma = createFakePrisma()
+    prisma.modelAsset.assets.set('a1', { id: 'a1', shop: SHOP, label: 'Aviator Gold' })
+    prisma.modelAsset.assets.set('a2', { id: 'a2', shop: 'other.myshopify.com', label: 'Aviator Gold (2)' })
+    expect(await generations.uniqueAssetLabel(prisma, SHOP, 'Aviator Gold')).toBe('Aviator Gold (2)')
+    prisma.modelAsset.assets.set('a3', { id: 'a3', shop: SHOP, label: 'Aviator Gold (2)' })
+    expect(await generations.uniqueAssetLabel(prisma, SHOP, 'Aviator Gold')).toBe('Aviator Gold (3)')
+  })
+
+  it('keeps an uploaded-photo model unlabelled', async () => {
+    const prisma = createFakePrisma()
+    const g = await readyRow(prisma)
+    await generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW })
+    expect(deps.saveCalibratedModel).toHaveBeenCalledWith(prisma, SHOP, expect.anything(), 'AI model', { id: g.id, label: null })
   })
 })
 
