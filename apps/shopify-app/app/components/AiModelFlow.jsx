@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRevalidator } from 'react-router'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import ModelViewer from './ModelViewer'
+import AiProductSource from './AiProductSource'
 
 // Keep in step with the server: storage.server.js MAX_PHOTO_BYTES and the
 // $5 App Pricing meter. (A client component can't import .server modules.)
@@ -75,6 +76,31 @@ export function generationView(generation) {
   }
 }
 
+export function defaultImageSelection(images) {
+  return images.slice(0, 4).map((image) => image.id)
+}
+
+export function toggleImage(selected, id) {
+  if (selected.includes(id)) return selected.filter((x) => x !== id)
+  return selected.length >= 4 ? selected : [...selected, id]
+}
+
+export function canGenerateFromProduct(selected) {
+  return selected.length >= 3 && selected.length <= 4
+}
+
+export function productTooFewPhotos(count) {
+  return `This product has only ${count} ${count === 1 ? 'photo' : 'photos'}. Add more to the product, or use Upload photos instead.`
+}
+
+export function mappingMessage(mapping, productTitle) {
+  if (!mapping) return null
+  const name = productTitle || 'the product'
+  if (mapping.mapped) return `Model saved and added to ${name}.`
+  if (mapping.reason === 'product_limit') return `Model saved. Your plan's product limit is reached, so it wasn't added to ${name}.`
+  return `Model saved, but it couldn't be added to ${name}. Use Add try-on to add it.`
+}
+
 const ACTION_LABELS = { save: 'Save model', retry: 'Try again', discard: 'Discard' }
 
 function PhotoSlot({ slot, file, disabled, onFile, onRejected }) {
@@ -110,6 +136,7 @@ function GenerationRow({ generation, disabled, onAction }) {
     <s-box padding="base" borderWidth="base" borderRadius="base">
       <s-stack direction="block" gap="base">
         <s-badge tone={view.tone}>{view.label}</s-badge>
+        {generation.productTitle && <s-text color="subdued">From {generation.productTitle}</s-text>}
         {generation.previewUrl && <ModelViewer src={generation.previewUrl} alt="AI-generated model preview" />}
         {view.actions.length > 0 && (
           <s-stack direction="inline" gap="small-200">
@@ -142,6 +169,10 @@ export default function AiModelFlow({ initialAllowance }) {
   const shopify = useAppBridge()
   const revalidator = useRevalidator()
   const [photos, setPhotos] = useState({})
+  const [source, setSource] = useState('product')
+  const [product, setProduct] = useState(null)
+  const [productImages, setProductImages] = useState([])
+  const [selectedImages, setSelectedImages] = useState([])
   const [generations, setGenerations] = useState([])
   const [allowance, setAllowance] = useState(initialAllowance ?? null)
   const [busy, setBusy] = useState(false)
@@ -230,6 +261,62 @@ export default function AiModelFlow({ initialAllowance }) {
     }
   }
 
+  function switchSource(next) {
+    setSource(next)
+    setError(null)
+  }
+
+  // Same shape as generate(): server copy is shown, anything else is generic.
+  function reportFailure(e, logLabel) {
+    if (e instanceof ShownError) {
+      setError(e.message)
+    } else {
+      console.error(logLabel, e)
+      setError(GENERIC_ERROR)
+    }
+  }
+
+  async function chooseProduct() {
+    setBusy(true)
+    setError(null)
+    try {
+      const selection = await shopify.resourcePicker({ type: 'product', action: 'select' })
+      if (!selection?.[0]) return
+      const res = await postForm({ intent: 'product-images', productId: selection[0].id })
+      if (!res.ok) throw new ShownError(res.body.error ?? GENERIC_ERROR)
+      const images = Array.isArray(res.body.images) ? res.body.images : []
+      setProduct(res.body.product)
+      setProductImages(images)
+      setSelectedImages(defaultImageSelection(images))
+      if (images.length < 3) setError(productTooFewPhotos(images.length))
+    } catch (e) {
+      reportFailure(e, 'AI product photos failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function generateFromProduct() {
+    setBusy(true)
+    setError(null)
+    try {
+      const created = await postForm({
+        intent: 'create-from-product',
+        productId: product.id,
+        imageIds: JSON.stringify(selectedImages),
+      })
+      if (!created.ok) throw new ShownError(created.body.error ?? GENERIC_ERROR)
+      setProduct(null)
+      setProductImages([])
+      setSelectedImages([])
+      await refresh()
+    } catch (e) {
+      reportFailure(e, 'AI generation from product failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   function askToConfirmCharge(generationId) {
     setChargeFor(generationId)
     shopify.modal.show(CONFIRM_MODAL_ID)
@@ -260,7 +347,11 @@ export default function AiModelFlow({ initialAllowance }) {
         return
       }
       if (action === 'save') {
-        shopify.toast.show(res.body.paid ? `Model saved. ${PRICE} added to your Shopify bill.` : 'Model saved to your library')
+        const charged = res.body.paid ? ` ${PRICE} added to your Shopify bill.` : ''
+        const mapped = mappingMessage(res.body.mapping, generation.productTitle)
+        shopify.toast.show(mapped
+          ? `${mapped}${charged}`
+          : res.body.paid ? `Model saved.${charged}` : 'Model saved to your library')
         revalidator.revalidate()
       }
       await refresh()
@@ -281,33 +372,69 @@ export default function AiModelFlow({ initialAllowance }) {
   return (
     <s-section heading="Create with AI">
       <s-stack direction="block" gap="base">
-        <s-paragraph>
-          Upload photos of a frame and we&apos;ll build its 3D model. Use a plain
-          background, the frame only (not worn), good light, and the whole frame in shot.
-        </s-paragraph>
+        <s-stack direction="inline" gap="small-200">
+          <s-button variant={source === 'product' ? 'primary' : 'secondary'} onClick={() => switchSource('product')}>
+            From a product
+          </s-button>
+          <s-button variant={source === 'upload' ? 'primary' : 'secondary'} onClick={() => switchSource('upload')}>
+            Upload photos
+          </s-button>
+        </s-stack>
         <s-text type="strong">{balanceMessage(allowance)}</s-text>
         {error && (
           <s-banner tone="critical" heading="Couldn't create the model">
             {error}
           </s-banner>
         )}
-        <s-grid gridTemplateColumns="repeat(auto-fit, minmax(160px, 1fr))" gap="base">
-          {PHOTO_SLOTS.map((slot) => (
-            <PhotoSlot
-              key={slot.key}
-              slot={slot}
-              file={photos[slot.key]}
+        {source === 'product' ? (
+          <>
+            <s-paragraph>
+              Pick a product from your store and we&apos;ll build its 3D model from the product photos.
+            </s-paragraph>
+            <AiProductSource
+              product={product}
+              images={productImages}
+              selected={selectedImages}
               disabled={busy}
-              onRejected={onRejected}
-              onFile={(file) => setPhotos((current) => ({ ...current, [slot.key]: file ?? undefined }))}
+              onChoose={chooseProduct}
+              onToggle={(id) => setSelectedImages((current) => toggleImage(current, id))}
             />
-          ))}
-        </s-grid>
-        <s-stack direction="inline">
-          <s-button variant="primary" disabled={busy || !canGenerate(photos)} {...(busy ? { loading: true } : {})} onClick={generate}>
-            Generate 3D model
-          </s-button>
-        </s-stack>
+            <s-stack direction="inline">
+              <s-button
+                variant="primary"
+                disabled={busy || !product || !canGenerateFromProduct(selectedImages)}
+                {...(busy ? { loading: true } : {})}
+                onClick={generateFromProduct}
+              >
+                Generate 3D model
+              </s-button>
+            </s-stack>
+          </>
+        ) : (
+          <>
+            <s-paragraph>
+              Upload photos of a frame and we&apos;ll build its 3D model. Use a plain
+              background, the frame only (not worn), good light, and the whole frame in shot.
+            </s-paragraph>
+            <s-grid gridTemplateColumns="repeat(auto-fit, minmax(160px, 1fr))" gap="base">
+              {PHOTO_SLOTS.map((slot) => (
+                <PhotoSlot
+                  key={slot.key}
+                  slot={slot}
+                  file={photos[slot.key]}
+                  disabled={busy}
+                  onRejected={onRejected}
+                  onFile={(file) => setPhotos((current) => ({ ...current, [slot.key]: file ?? undefined }))}
+                />
+              ))}
+            </s-grid>
+            <s-stack direction="inline">
+              <s-button variant="primary" disabled={busy || !canGenerate(photos)} {...(busy ? { loading: true } : {})} onClick={generate}>
+                Generate 3D model
+              </s-button>
+            </s-stack>
+          </>
+        )}
         {generations.map((generation) => (
           <GenerationRow
             key={generation.id}

@@ -7,6 +7,11 @@ import {
   saveNeedsCharge,
   failureMessage,
   generationView,
+  defaultImageSelection,
+  toggleImage,
+  canGenerateFromProduct,
+  mappingMessage,
+  productTooFewPhotos,
 } from '../app/components/AiModelFlow.jsx'
 
 const file = (type = 'image/jpeg', size = 1000) => ({ type, size, name: 'x' })
@@ -85,5 +90,40 @@ describe('generationView', () => {
     for (const code of ['low_confidence', 'invalid_model: x', 'timeout', 'start_failed', 'openai_failed', null]) {
       expect(failureMessage(code)).toMatch(/You weren't charged\./)
     }
+  })
+})
+
+describe('product photo selection', () => {
+  const imgs = ['a', 'b', 'c', 'd', 'e'].map((id) => ({ id }))
+
+  it('pre-ticks the first 4 images', () => {
+    expect(defaultImageSelection(imgs)).toEqual(['a', 'b', 'c', 'd'])
+    expect(defaultImageSelection(imgs.slice(0, 3))).toEqual(['a', 'b', 'c'])
+  })
+
+  it('toggles images and never selects more than 4', () => {
+    expect(toggleImage(['a', 'b', 'c', 'd'], 'b')).toEqual(['a', 'c', 'd'])
+    expect(toggleImage(['a', 'c', 'd'], 'e')).toEqual(['a', 'c', 'd', 'e'])
+    expect(toggleImage(['a', 'b', 'c', 'd'], 'e')).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('needs 3 or 4 ticked', () => {
+    expect(canGenerateFromProduct(['a', 'b'])).toBe(false)
+    expect(canGenerateFromProduct(['a', 'b', 'c'])).toBe(true)
+    expect(canGenerateFromProduct(['a', 'b', 'c', 'd'])).toBe(true)
+  })
+
+  it('explains a product with too few photos', () => {
+    expect(productTooFewPhotos(2)).toMatch(/only 2 photos/)
+    expect(productTooFewPhotos(2)).toMatch(/Upload photos/)
+  })
+})
+
+describe('mappingMessage', () => {
+  it('says what happened to the product after a save', () => {
+    expect(mappingMessage({ mapped: true }, 'GRIPZ')).toBe('Model saved and added to GRIPZ.')
+    expect(mappingMessage({ mapped: false, reason: 'product_limit' }, 'GRIPZ')).toMatch(/product limit/)
+    expect(mappingMessage({ mapped: false, reason: 'publish_failed' }, 'GRIPZ')).toMatch(/Add try-on/)
+    expect(mappingMessage(undefined, 'GRIPZ')).toBeNull()
   })
 })
