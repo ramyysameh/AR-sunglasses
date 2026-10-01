@@ -107,12 +107,43 @@ export function generateLabel(count) {
   return count > 1 ? `Generate 3D models (${count})` : 'Generate 3D models'
 }
 
+function sentence(text) {
+  const trimmed = String(text).trim()
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`
+}
+
 export function bulkResultMessage(results, picked) {
-  const failed = (results ?? []).filter((result) => result.error)
+  const all = results ?? []
+  const failed = all.filter((result) => result.error)
   if (!failed.length) return null
-  return failed
-    .map((result) => `${picked.find((p) => p.id === result.productId)?.title ?? 'A product'}: ${result.error}`)
-    .join(' ')
+  const started = all.filter((result) => result.generation).length
+  const lines = failed.map((result) => (
+    sentence(`${picked.find((p) => p.id === result.productId)?.title ?? 'A product'}: ${result.error}`)
+  ))
+  return [...(started > 0 ? [`Started ${started} of ${all.length}.`] : []), ...lines].join(' ')
+}
+
+// Drops the products that started so only the ones that didn't stay for a fix and resend.
+export function withoutStarted(picked, results) {
+  const startedIds = (results ?? []).filter((r) => r.generation).map((r) => r.productId)
+  return picked.filter((p) => !startedIds.includes(p.id))
+}
+
+// Picker order wins; products the merchant already ticked keep their ticks;
+// ids with no data (removed in the picker or failed lookup) are dropped.
+export function mergePicked(previous, ids, fresh) {
+  return ids
+    .map((id) => previous.find((p) => p.id === id) ?? fresh.find((p) => p.id === id))
+    .filter(Boolean)
+}
+
+// failed: [{ id, title? }] for lookups that didn't come back.
+export function lookupFailureMessage(failed) {
+  if (!failed.length) return null
+  if (failed.every((f) => f.title)) return failed.map((f) => `Couldn't load photos for ${f.title}.`).join(' ')
+  return failed.length === 1
+    ? "Couldn't load photos for 1 product. Try choosing it again."
+    : `Couldn't load photos for ${failed.length} products. Try choosing them again.`
 }
 
 // Lives with the component that renders it; re-exported so callers/tests keep one import.
@@ -202,7 +233,12 @@ export default function AiModelFlow({ initialAllowance }) {
   const [busy, setBusy] = useState(false)
   // Which request the Generate button is spinning for (busy alone also covers the picker and row actions).
   const [generating, setGenerating] = useState(false)
-  const [error, setError] = useState(null)
+  // partial = some models started and some didn't (a warning, not a failure).
+  const [notice, setNotice] = useState(null)
+  const error = notice?.message ?? null
+  const setError = useCallback((message, { partial = false } = {}) => {
+    setNotice(message ? { message, partial } : null)
+  }, [])
   const [chargeFor, setChargeFor] = useState(null)
   // Polls can overlap a slow response; only the latest request may update state.
   const latestRequest = useRef(0)
@@ -315,13 +351,20 @@ export default function AiModelFlow({ initialAllowance }) {
       if (!selection) return
       const ids = selection.slice(0, MAX_PRODUCTS).map((item) => item.id)
       // Keep ticks the merchant already changed; look up only new products.
-      const kept = picked.filter((p) => ids.includes(p.id))
-      const fresh = await Promise.all(ids.filter((id) => !kept.some((p) => p.id === id)).map(async (id) => {
+      const wanted = ids.filter((id) => !picked.some((p) => p.id === id))
+      const settled = await Promise.allSettled(wanted.map(async (id) => {
         const res = await postForm({ intent: 'product-images', productId: id })
-        if (!res.ok) throw new ShownError(res.body.error ?? GENERIC_ERROR)
+        if (!res.ok) throw new Error(`product-images ${res.status}`)
         return pickedFromLookup(res.body.product, Array.isArray(res.body.images) ? res.body.images : [])
       }))
-      setPicked(ids.map((id) => kept.find((p) => p.id === id) ?? fresh.find((p) => p.id === id)).filter(Boolean))
+      const fresh = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value)
+      setPicked(mergePicked(picked, ids, fresh))
+      const failed = wanted
+        .filter((id, i) => settled[i].status === 'rejected')
+        .map((id) => ({ id, title: selection.find((item) => item.id === id)?.title }))
+      settled.forEach((r) => { if (r.status === 'rejected') console.error('AI product photos failed', r.reason) })
+      const failureMessage = lookupFailureMessage(failed)
+      if (failureMessage) setError(failureMessage)
     } catch (e) {
       reportFailure(e, 'AI product photos failed')
     } finally {
@@ -339,9 +382,9 @@ export default function AiModelFlow({ initialAllowance }) {
       if (!created.ok) throw new ShownError(created.body.error ?? GENERIC_ERROR)
       const message = bulkResultMessage(created.body.results, picked)
       // Keep only the products that didn't start, so the merchant can fix and resend them.
-      const startedIds = (created.body.results ?? []).filter((r) => r.generation).map((r) => r.productId)
-      setPicked((current) => current.filter((p) => !startedIds.includes(p.id)))
-      if (message) setError(message)
+      const results = created.body.results ?? []
+      setPicked((current) => withoutStarted(current, results))
+      if (message) setError(message, { partial: results.some((r) => r.generation) })
       await refresh()
     } catch (e) {
       reportFailure(e, 'AI generation from products failed')
@@ -416,7 +459,10 @@ export default function AiModelFlow({ initialAllowance }) {
         </s-stack>
         <s-text type="strong">{balanceMessage(allowance)}</s-text>
         {error && (
-          <s-banner tone="critical" heading="Couldn't create the model">
+          <s-banner
+            tone={notice.partial ? 'warning' : 'critical'}
+            heading={notice.partial ? "Some models didn't start" : "Couldn't create the model"}
+          >
             {error}
           </s-banner>
         )}

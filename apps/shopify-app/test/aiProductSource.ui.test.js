@@ -34,4 +34,10 @@ describe('AiProductSource', () => {
     const html = render([product('C', 2, ['C-0', 'C-1'])])
     expect(html).toContain('Needs at least 3 photos')
   })
+
+  it('gives each photo toggle its product name', () => {
+    const html = render([product('A', 3, ['A-0'])])
+    expect(html).toContain('aria-label="Product A photo 1"')
+    expect(html).toContain('aria-label="Product A photo 3"')
+  })
 })

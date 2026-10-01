@@ -17,6 +17,9 @@ import {
   bulkItems,
   generateLabel,
   bulkResultMessage,
+  withoutStarted,
+  mergePicked,
+  lookupFailureMessage,
 } from '../app/components/AiModelFlow.jsx'
 
 const file = (type = 'image/jpeg', size = 1000) => ({ type, size, name: 'x' })
@@ -160,10 +163,40 @@ describe('bulk product generation', () => {
   })
 
   it('names the products that could not start', () => {
-    const picked = [{ id: 'A', title: 'Aviator' }, { id: 'B', title: 'Round' }]
+    const picked = [{ id: 'A', title: 'Aviator' }, { id: 'B', title: 'Round' }, { id: 'C', title: 'Square' }]
     expect(bulkResultMessage([{ productId: 'A', generation: {} }, { productId: 'B', error: 'That product is no longer available. Pick another one.' }], picked))
-      .toBe("Round: That product is no longer available. Pick another one.")
+      .toBe('Started 1 of 2. Round: That product is no longer available. Pick another one.')
     expect(bulkResultMessage([{ productId: 'A', generation: {} }], picked)).toBeNull()
+    expect(bulkResultMessage([{ productId: 'B', error: 'Too busy' }, { productId: 'C', error: 'Nope.' }], picked))
+      .toBe('Round: Too busy. Square: Nope.')
+  })
+
+  it('keeps only the products that did not start', () => {
+    const picked = [{ id: 'A' }, { id: 'B' }, { id: 'C' }]
+    expect(withoutStarted(picked, [
+      { productId: 'A', generation: {} }, { productId: 'B', error: 'x' }, { productId: 'C', generation: {} },
+    ])).toEqual([{ id: 'B' }])
+    expect(withoutStarted(picked, undefined)).toEqual(picked)
+  })
+
+  it('merges re-opened picks: kept ticks survive, removed ones vanish, order follows the picker', () => {
+    const a = { id: 'A', selected: ['a1', 'a2', 'a3'] }
+    const b = { id: 'B', selected: ['b1'] }
+    const c = { id: 'C', selected: ['c1', 'c2', 'c3'] }
+    // B removed in the picker, C is new, A kept with its changed ticks.
+    expect(mergePicked([a, b], ['C', 'A'], [c])).toEqual([c, a])
+    // A new product whose lookup failed (no data) is dropped without losing the rest.
+    expect(mergePicked([a], ['A', 'Z'], [])).toEqual([a])
+  })
+
+  it('says which photo lookups failed', () => {
+    expect(lookupFailureMessage([])).toBeNull()
+    expect(lookupFailureMessage([{ id: 'A' }])).toBe("Couldn't load photos for 1 product. Try choosing it again.")
+    expect(lookupFailureMessage([{ id: 'A' }, { id: 'B' }])).toBe("Couldn't load photos for 2 products. Try choosing them again.")
+    expect(lookupFailureMessage([{ id: 'A', title: 'Aviator' }, { id: 'B', title: 'Round' }]))
+      .toBe("Couldn't load photos for Aviator. Couldn't load photos for Round.")
+    expect(lookupFailureMessage([{ id: 'A', title: 'Aviator' }, { id: 'B' }]))
+      .toBe("Couldn't load photos for 2 products. Try choosing them again.")
   })
 
   it('allows at most 5 products', () => {

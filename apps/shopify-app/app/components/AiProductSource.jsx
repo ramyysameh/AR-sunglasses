@@ -4,12 +4,12 @@ export function productTooFewPhotos(count) {
   return `This product has only ${count} ${count === 1 ? 'photo' : 'photos'}. Add more to the product, or use Upload photos instead.`
 }
 
-function PhotoToggle({ image, index, isSelected, atLimit, disabled, onToggle }) {
+function PhotoToggle({ image, label, index, isSelected, atLimit, disabled, onToggle }) {
   return (
     <button
       type="button"
       aria-pressed={isSelected}
-      aria-label={image.altText || `Product photo ${index + 1}`}
+      aria-label={image.altText || `${label} photo ${index + 1}`}
       {...(atLimit ? { 'aria-disabled': 'true' } : {})}
       disabled={disabled}
       onClick={onToggle}
@@ -57,7 +57,16 @@ function ProductRow({ product, disabled, onToggle, onRemove }) {
             aria-label={`Remove ${product.title}`}
             disabled={disabled}
             onClick={onRemove}
-            style={{ border: 0, background: 'transparent', cursor: 'pointer', fontSize: '18px', lineHeight: 1 }}
+            style={{
+              border: 0,
+              background: 'transparent',
+              cursor: disabled ? 'default' : 'pointer',
+              fontSize: '18px',
+              lineHeight: 1,
+              minWidth: '32px',
+              minHeight: '32px',
+              padding: 0,
+            }}
           >
             ×
           </button>
@@ -73,6 +82,7 @@ function ProductRow({ product, disabled, onToggle, onRemove }) {
                   <PhotoToggle
                     key={image.id}
                     image={image}
+                    label={product.title}
                     index={index}
                     isSelected={isSelected}
                     atLimit={!isSelected && product.selected.length >= 4}
