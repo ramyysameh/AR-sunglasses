@@ -1,5 +1,9 @@
 /* eslint-disable react/prop-types -- lightweight props, same as the other flows */
 
+export function productTooFewPhotos(count) {
+  return `This product has only ${count} ${count === 1 ? 'photo' : 'photos'}. Add more to the product, or use Upload photos instead.`
+}
+
 // Presentational half of the "From a product" source: the chosen product, its
 // photos as keyboard-accessible toggles, and the guidance. State and requests
 // live in AiModelFlow. Native <button>s, because React 18 drops onChange/custom
@@ -13,29 +17,36 @@ export default function AiProductSource({ product, images, selected, disabled, o
           {product ? 'Change product' : 'Choose product'}
         </s-button>
       </s-stack>
+      {product && images.length < 3 && (
+        <s-banner tone="warning">{productTooFewPhotos(images.length)}</s-banner>
+      )}
       {product && images.length > 0 && (
         <>
           <s-text color="subdued">
             Tick 3 or 4 clear photos of the frame from different angles. Skip lifestyle or worn photos if you can.
           </s-text>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: '8px' }}>
-            {images.map((image) => {
+            {images.map((image, index) => {
               const isSelected = selected.includes(image.id)
+              const atLimit = !isSelected && selected.length >= 4
               return (
                 <button
                   key={image.id}
                   type="button"
                   aria-pressed={isSelected}
+                  aria-label={image.altText || `Product photo ${index + 1}`}
+                  {...(atLimit ? { 'aria-disabled': 'true' } : {})}
                   disabled={disabled}
                   onClick={() => onToggle(image.id)}
                   style={{
                     position: 'relative',
                     padding: 0,
                     background: 'transparent',
-                    cursor: disabled ? 'default' : 'pointer',
+                    cursor: disabled || atLimit ? 'default' : 'pointer',
+                    opacity: atLimit ? 0.6 : 1,
                     borderRadius: '8px',
                     overflow: 'hidden',
-                    border: isSelected ? '3px solid #005bd3' : '1px solid #c9cccf',
+                    border: `3px solid ${isSelected ? '#005bd3' : 'transparent'}`,
                   }}
                 >
                   <img

@@ -89,9 +89,8 @@ export function canGenerateFromProduct(selected) {
   return selected.length >= 3 && selected.length <= 4
 }
 
-export function productTooFewPhotos(count) {
-  return `This product has only ${count} ${count === 1 ? 'photo' : 'photos'}. Add more to the product, or use Upload photos instead.`
-}
+// Lives with the component that renders it; re-exported so callers/tests keep one import.
+export { productTooFewPhotos } from './AiProductSource'
 
 export function mappingMessage(mapping, productTitle) {
   if (!mapping) return null
@@ -176,6 +175,8 @@ export default function AiModelFlow({ initialAllowance }) {
   const [generations, setGenerations] = useState([])
   const [allowance, setAllowance] = useState(initialAllowance ?? null)
   const [busy, setBusy] = useState(false)
+  // Which request the Generate button is spinning for (busy alone also covers the picker and row actions).
+  const [generating, setGenerating] = useState(false)
   const [error, setError] = useState(null)
   const [chargeFor, setChargeFor] = useState(null)
   // Polls can overlap a slow response; only the latest request may update state.
@@ -280,15 +281,22 @@ export default function AiModelFlow({ initialAllowance }) {
     setBusy(true)
     setError(null)
     try {
-      const selection = await shopify.resourcePicker({ type: 'product', action: 'select' })
+      const selection = await shopify.resourcePicker({
+        type: 'product',
+        action: 'select',
+        ...(product ? { selectionIds: [{ id: product.id }] } : {}),
+      })
       if (!selection?.[0]) return
+      // Drop the old product first so a failed lookup can't leave Generate armed with it.
+      setProduct(null)
+      setProductImages([])
+      setSelectedImages([])
       const res = await postForm({ intent: 'product-images', productId: selection[0].id })
       if (!res.ok) throw new ShownError(res.body.error ?? GENERIC_ERROR)
       const images = Array.isArray(res.body.images) ? res.body.images : []
       setProduct(res.body.product)
       setProductImages(images)
       setSelectedImages(defaultImageSelection(images))
-      if (images.length < 3) setError(productTooFewPhotos(images.length))
     } catch (e) {
       reportFailure(e, 'AI product photos failed')
     } finally {
@@ -298,6 +306,7 @@ export default function AiModelFlow({ initialAllowance }) {
 
   async function generateFromProduct() {
     setBusy(true)
+    setGenerating(true)
     setError(null)
     try {
       const created = await postForm({
@@ -314,6 +323,7 @@ export default function AiModelFlow({ initialAllowance }) {
       reportFailure(e, 'AI generation from product failed')
     } finally {
       setBusy(false)
+      setGenerating(false)
     }
   }
 
@@ -403,7 +413,7 @@ export default function AiModelFlow({ initialAllowance }) {
               <s-button
                 variant="primary"
                 disabled={busy || !product || !canGenerateFromProduct(selectedImages)}
-                {...(busy ? { loading: true } : {})}
+                {...(generating ? { loading: true } : {})}
                 onClick={generateFromProduct}
               >
                 Generate 3D model
