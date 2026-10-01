@@ -341,6 +341,63 @@ describe('create-from-products', () => {
     expect(h.deleteGlb.mock.calls.map(([ref]) => ref)).toEqual(['p/A/1.jpg', 'p/A/2.jpg', 'p/A/3.jpg'])
   })
 
+  it('refuses malformed or non-array items with BAD_PRODUCTS', async () => {
+    for (const raw of ['not json', JSON.stringify({ productId: 'A' }), '']) {
+      const res = await api.action(post({ intent: 'create-from-products', items: raw }))
+      expect(res.status).toBe(400)
+      expect((await res.json()).code).toBe('BAD_PRODUCTS')
+    }
+    expect(h.products.import).not.toHaveBeenCalled()
+  })
+
+  it('refuses duplicate productIds before importing anything', async () => {
+    const res = await api.action(post({ intent: 'create-from-products', items: items(['A', 'B', 'A']) }))
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe('BAD_PRODUCTS')
+    expect(h.products.import).not.toHaveBeenCalled()
+    expect(h.gen.create).not.toHaveBeenCalled()
+  })
+
+  it('imports all products before creating any generation', async () => {
+    const order = []
+    h.products.import.mockImplementation(async ({ productId }) => {
+      order.push(`import-${productId}`)
+      return { photoRefs: [`p/${productId}/1.jpg`], productId, title: productId, handle: productId }
+    })
+    h.gen.create = vi.fn(async (_prisma, input) => { order.push(`create-${input.productId}`); return { id: `gen-${input.productId}`, status: 'running' } })
+    await api.action(post({ intent: 'create-from-products', items: items(['A', 'B']) }))
+    expect(order).toEqual(['import-A', 'import-B', 'create-A', 'create-B'])
+  })
+
+  it('stops creating after the daily limit and deletes the remaining imported photos', async () => {
+    let calls = 0
+    h.gen.create = vi.fn(async (_prisma, input) => {
+      calls += 1
+      if (calls === 2) throw tagged('DAILY_LIMIT')
+      return { id: `gen-${input.productId}`, status: 'running' }
+    })
+    const body = await (await api.action(post({ intent: 'create-from-products', items: items(['A', 'B', 'C']) }))).json()
+    expect(h.gen.create).toHaveBeenCalledTimes(2)
+    expect(body.results).toEqual([
+      { productId: 'A', generation: { id: 'gen-A', status: 'running' } },
+      { productId: 'B', code: 'DAILY_LIMIT', error: expect.any(String) },
+      { productId: 'C', code: 'DAILY_LIMIT', error: expect.any(String) },
+    ])
+    expect(h.deleteGlb.mock.calls.map(([ref]) => ref)).toEqual(['p/B/1.jpg', 'p/B/2.jpg', 'p/B/3.jpg', 'p/C/1.jpg', 'p/C/2.jpg', 'p/C/3.jpg'])
+  })
+
+  it('keeps the photos when create fails after the row may exist, and reports UNKNOWN', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      h.gen.create = vi.fn(async () => { throw new Error('connection reset after insert') })
+      const body = await (await api.action(post({ intent: 'create-from-products', items: items(['A']) }))).json()
+      expect(body.results).toEqual([{ productId: 'A', code: 'UNKNOWN', error: 'Something went wrong. Try again.' }])
+      expect(h.deleteGlb).not.toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
   it('refuses an empty list or more than 5 products', async () => {
     for (const ids of [[], ['1', '2', '3', '4', '5', '6']]) {
       const res = await api.action(post({ intent: 'create-from-products', items: items(ids) }))

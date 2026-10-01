@@ -74,9 +74,8 @@ async function deletePhotos(refs) {
   }
 }
 
-// Import a product's chosen photos and start (or queue) its generation.
-async function generateFromProduct({ admin, shop, shopGid, productId, imageIds }) {
-  const imported = await importProductPhotos({ admin, shop, productId, imageIds })
+// Start (or queue) a generation from photos already imported for a product.
+async function createFromImported({ shop, shopGid, imported }) {
   try {
     return await createGeneration(prisma, {
       shop,
@@ -93,6 +92,22 @@ async function generateFromProduct({ admin, shop, shopGid, productId, imageIds }
     // may have left a row pointing at these photos, so they stay.
     if (PRE_INSERT_CODES.has(error?.code)) await deletePhotos(imported.photoRefs)
     throw error
+  }
+}
+
+// Import a product's chosen photos and start (or queue) its generation.
+async function generateFromProduct({ admin, shop, shopGid, productId, imageIds }) {
+  const imported = await importProductPhotos({ admin, shop, productId, imageIds })
+  return createFromImported({ shop, shopGid, imported })
+}
+
+function failureResult(productId, error) {
+  const known = STATUS_BY_CODE[error?.code]
+  if (!known) console.error('AI bulk generation item failed', productId, error)
+  return {
+    productId,
+    code: known ? error.code : 'UNKNOWN',
+    error: known ? MESSAGES[error.code] : 'Something went wrong. Try again.',
   }
 }
 
@@ -196,26 +211,47 @@ export const action = async ({ request }) => {
       } catch {
         items = null
       }
-      if (!Array.isArray(items) || items.length < 1 || items.length > 5) {
+      const ids = Array.isArray(items)
+        ? items.map((item) => (typeof item?.productId === 'string' ? item.productId : null))
+        : []
+      const stringIds = ids.filter((id) => id !== null)
+      if (
+        !Array.isArray(items) ||
+        items.length < 1 ||
+        items.length > 5 ||
+        new Set(stringIds).size !== stringIds.length
+      ) {
         throw Object.assign(new Error('bad product list'), { code: 'BAD_PRODUCTS' })
       }
       await assertCanStartGeneration(prisma, shop)
       const shopGid = await shopGidFor(admin)
-      // One product after another, so each row's queue decision sees the previous one.
+      // Import every product's photos in parallel (the slow CDN + storage part),
+      // then create the generations one after another in request order, so each
+      // row's queue/daily decision sees the previous one.
+      const imports = await Promise.allSettled(
+        items.map((item, i) => importProductPhotos({ admin, shop, productId: ids[i], imageIds: item?.imageIds })),
+      )
       const results = []
-      for (const item of items) {
-        const productId = item?.productId?.toString() ?? null
+      let dailyLimitHit = false
+      for (let i = 0; i < items.length; i++) {
+        const productId = ids[i]
+        const settled = imports[i]
+        if (settled.status === 'rejected') {
+          results.push(failureResult(productId, settled.reason))
+          continue
+        }
+        const imported = settled.value
+        if (dailyLimitHit) {
+          await deletePhotos(imported.photoRefs)
+          results.push({ productId, code: 'DAILY_LIMIT', error: MESSAGES.DAILY_LIMIT })
+          continue
+        }
         try {
-          const generation = await generateFromProduct({ admin, shop, shopGid, productId, imageIds: item?.imageIds })
+          const generation = await createFromImported({ shop, shopGid, imported })
           results.push({ productId, generation: toClientGeneration(generation) })
         } catch (error) {
-          const known = STATUS_BY_CODE[error?.code]
-          if (!known) console.error('AI bulk generation item failed', productId, error)
-          results.push({
-            productId,
-            code: known ? error.code : 'UNKNOWN',
-            error: known ? MESSAGES[error.code] : 'Something went wrong. Try again.',
-          })
+          if (error?.code === 'DAILY_LIMIT') dailyLimitHit = true
+          results.push(failureResult(productId, error))
         }
       }
       return Response.json({ results })
