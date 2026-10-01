@@ -84,7 +84,7 @@ describe('Help recovery actions', () => {
     expect(html.match(/icon="external"/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
     expect(html).toContain('accessibilityLabel="Open theme editor to adjust glasses size"')
     expect(html).toContain('accessibilityLabel="Turn on try-on in the theme editor"')
-    expect(html).toContain('accessibilityLabel="Place the AR Try-On block yourself"')
+    expect(html).toContain('accessibilityLabel="Place the button yourself in the theme editor"')
     expect(html).toContain('open App embeds')
     expect(html).not.toMatch(/Check fit/)
     expect(html).toContain('Review fit')

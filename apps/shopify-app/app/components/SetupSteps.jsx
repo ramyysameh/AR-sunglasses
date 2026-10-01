@@ -1,6 +1,14 @@
 /* eslint-disable react/prop-types -- loader-shaped data */
 import TopLevelAdminAction from './TopLevelAdminAction'
 
+// A plain anchor so the storefront opens in a new tab (not the admin's top
+// frame), styled like Polaris' secondary button.
+const SECONDARY_LINK = {
+  display: 'inline-flex', alignItems: 'center', padding: '6px 12px', borderRadius: '8px',
+  border: '1px solid #8a8a8a', color: '#303030', background: '#fff', fontWeight: 550,
+  fontSize: '13px', textDecoration: 'none',
+}
+
 const MARK = { done: '✓', current: '', upcoming: '' }
 
 function StepHeader({ index, step }) {
@@ -26,10 +34,11 @@ function StepHeader({ index, step }) {
 
 /**
  * The home page's guided setup: create models -> review and save -> turn try-on
- * on in the store. `children` is the Create with AI panel, shown while step 1
- * or 2 is current. Hidden once all three are done.
+ * on in the store. The Create with AI panel is NOT rendered here: it lives on
+ * the page itself so it stays mounted (and keeps any in-flight bulk run) after
+ * the first save moves setup past step 1. Hidden once all three are done.
  */
-export default function SetupSteps({ setup, embedUrl, storefrontUrl, aiEnabled, onUploadModel, onCheckAgain, children }) {
+export default function SetupSteps({ setup, embedUrl, storefrontUrl, aiEnabled, onUploadModel, onCheckAgain }) {
   if (!setup || setup.done) return null
   const [create, save, turnOn] = setup.steps
   const creating = create.state === 'current' || save.state === 'current'
@@ -42,14 +51,19 @@ export default function SetupSteps({ setup, embedUrl, storefrontUrl, aiEnabled, 
           <s-stack direction="block" gap="small-200">
             {aiEnabled ? (
               <s-paragraph>
-                Pick your products and we&apos;ll build their 3D models from the product photos. Saving a model adds try-on to its product.
+                Use Create with AI below to build models from your product photos. Saving a model adds try-on to its product.
               </s-paragraph>
             ) : (
-              <s-paragraph>Upload a 3D model of your frame to get started.</s-paragraph>
+              <s-paragraph>
+                {create.state === 'current'
+                  ? 'Upload a 3D model of your frame to get started.'
+                  : 'Add try-on to a product with your model.'}
+              </s-paragraph>
             )}
-            {aiEnabled && children}
             <s-stack direction="inline">
-              <s-button variant={aiEnabled ? 'tertiary' : 'primary'} onClick={onUploadModel}>Upload a .glb model</s-button>
+              <s-button variant={aiEnabled ? 'tertiary' : 'primary'} onClick={onUploadModel}>
+                {!aiEnabled && create.state !== 'current' ? 'Add try-on' : 'Upload a .glb model'}
+              </s-button>
             </s-stack>
           </s-stack>
         )}
@@ -63,9 +77,11 @@ export default function SetupSteps({ setup, embedUrl, storefrontUrl, aiEnabled, 
               <TopLevelAdminAction href={embedUrl} variant="primary" accessibilityLabel="Turn on try-on">
                 Turn on try-on
               </TopLevelAdminAction>
-              <TopLevelAdminAction href={storefrontUrl} variant="secondary" accessibilityLabel="View on your store">
-                View on your store
-              </TopLevelAdminAction>
+              {storefrontUrl && (
+                <a href={storefrontUrl} target="_blank" rel="noreferrer" style={SECONDARY_LINK}>
+                  View on your store
+                </a>
+              )}
               <s-button variant="tertiary" onClick={onCheckAgain}>Check again</s-button>
             </s-stack>
             <s-text color="subdued">

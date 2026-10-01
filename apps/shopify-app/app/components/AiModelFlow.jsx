@@ -222,7 +222,7 @@ async function postForm(fields) {
   return { ok: res.ok, status: res.status, body }
 }
 
-export default function AiModelFlow({ initialAllowance }) {
+export default function AiModelFlow({ initialAllowance, showBalance = true }) {
   const shopify = useAppBridge()
   const revalidator = useRevalidator()
   const [photos, setPhotos] = useState({})
@@ -457,7 +457,7 @@ export default function AiModelFlow({ initialAllowance }) {
             Upload photos
           </s-button>
         </s-stack>
-        <s-text type="strong">{balanceMessage(allowance)}</s-text>
+        {showBalance && <s-text type="strong">{balanceMessage(allowance)}</s-text>}
         {error && (
           <s-banner
             tone={notice.partial ? 'warning' : 'critical'}

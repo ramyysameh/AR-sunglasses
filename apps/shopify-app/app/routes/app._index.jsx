@@ -253,6 +253,14 @@ export function ReviewFitDialog({ mapping, themeUrl, onChooseModel }) {
   )
 }
 
+// Setup done: the usual guide. Mid-setup: the guide only for recovery states
+// the steps don't cover (the theme action duplicates step 3; 'setup' kinds
+// duplicate steps 1 and 2).
+export function showGuide(setup, guide) {
+  if (setup?.done) return true
+  return guide?.kind === 'recovery' && guide.action?.id !== 'theme'
+}
+
 export default function Workspace() {
   const data = useLoaderData()
   const location = useLocation()
@@ -353,10 +361,12 @@ export default function Workspace() {
           aiEnabled={Boolean(data.aiModels)}
           onUploadModel={openAddTryOn}
           onCheckAgain={refreshWorkspace}
-        >
-          <AiModelFlow initialAllowance={data.aiModels} />
-        </SetupSteps>
-        {data.setup?.done && <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />}
+        />
+        {showGuide(data.setup, data.guide) && <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />}
+        {/* Always mounted when AI is on, so a bulk run in flight survives the
+            setup steps changing underneath it. PlanUsage already shows the AI
+            allowance, hence showBalance={false}. */}
+        {data.aiModels && <AiModelFlow initialAllowance={data.aiModels} showBalance={false} />}
         {hasOperations && (
           <>
             {/* A native Polaris card; padding="none" lets the table run to its edges.

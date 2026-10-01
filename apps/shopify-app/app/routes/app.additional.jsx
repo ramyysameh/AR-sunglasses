@@ -20,7 +20,7 @@ export default function HelpPage() {
           then preview the product.
         </s-paragraph>
         <TopLevelAdminAction
-          href={themeEditorUrl}
+          href={embedUrl}
           accessibilityLabel="Open theme editor to adjust glasses size"
         >
           Open theme editor
@@ -44,7 +44,7 @@ export default function HelpPage() {
         </s-paragraph>
         <TopLevelAdminAction
           href={themeEditorUrl}
-          accessibilityLabel="Place the AR Try-On block yourself"
+          accessibilityLabel="Place the button yourself in the theme editor"
           variant="tertiary"
         >
           Place the button yourself

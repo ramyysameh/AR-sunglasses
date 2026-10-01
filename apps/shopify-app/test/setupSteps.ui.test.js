@@ -30,7 +30,10 @@ describe('SetupSteps', () => {
     expect(html).toContain('Review and save')
     expect(html).toContain('Turn on try-on in your store')
     expect(html).toContain('aria-current="step"')
-    expect(html).toContain('id="create-panel"')
+    // The Create with AI panel lives on the page, not in the steps.
+    expect(html).not.toContain('id="create-panel"')
+    expect(html).toContain('Use Create with AI below')
+    expect(html).toContain('Upload a .glb model')
   })
 
   it('offers the one-click switch and a storefront link on the last step', () => {
@@ -38,6 +41,7 @@ describe('SetupSteps', () => {
     expect(html).toContain('Turn on try-on')
     expect(html).toContain('In the theme editor, click Save')
     expect(html).toContain('View on your store')
+    expect(html).toContain('href="https://s.myshopify.com/products/aviator" target="_blank" rel="noreferrer"')
     expect(html).toContain('Check again')
   })
 
@@ -45,7 +49,17 @@ describe('SetupSteps', () => {
     expect(render(['done', 'done', 'done'])).toBe('')
   })
 
-  it('offers uploading a .glb when AI is off', () => {
-    expect(render(['current', 'upcoming', 'upcoming'], { aiEnabled: false })).toContain('Upload a .glb model')
+  it('offers uploading a .glb as the primary action when AI is off', () => {
+    const html = render(['current', 'upcoming', 'upcoming'], { aiEnabled: false })
+    expect(html).toContain('Upload a 3D model of your frame to get started.')
+    expect(html).not.toContain('Use Create with AI')
+    expect(html).toMatch(/<s-button variant="primary"[^>]*>Upload a \.glb model<\/s-button>/)
+  })
+
+  it('offers Add try-on once a model exists and AI is off', () => {
+    const html = render(['done', 'current', 'upcoming'], { aiEnabled: false })
+    expect(html).toContain('Add try-on to a product with your model.')
+    expect(html).toMatch(/<s-button variant="primary"[^>]*>Add try-on<\/s-button>/)
+    expect(html).not.toContain('Upload a .glb model')
   })
 })

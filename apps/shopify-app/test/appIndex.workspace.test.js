@@ -7,6 +7,7 @@ import ProductOperationsList, { primaryActionFor } from '../app/components/Produ
 import { AddTryOnFlow } from '../app/components/AddTryOnFlow.jsx'
 import TopLevelAdminAction from '../app/components/TopLevelAdminAction.jsx'
 import PlanUsage from '../app/components/PlanUsage.jsx'
+import AiModelFlow from '../app/components/AiModelFlow.jsx'
 import SetupSteps from '../app/components/SetupSteps.jsx'
 import ModelFitReview from '../app/components/ModelFitReview.jsx'
 
@@ -124,7 +125,7 @@ beforeEach(() => {
 })
 
 describe('Workspace route composition', () => {
-  it('shows the guided setup instead of the recovery guide until setup is done', () => {
+  it('shows the guided setup instead of the plain guide until setup is done', () => {
     const setup = {
       done: false,
       steps: [
@@ -139,11 +140,33 @@ describe('Workspace route composition', () => {
     expect(steps.props.embedUrl).toBe('https://shop.test/admin/themes/current/editor?context=apps')
     expect(steps.props.storefrontUrl).toBe('https://shop.test')
     expect(steps.props.aiEnabled).toBe(true)
+    expect(steps.props.children).toBeUndefined()
+    // baseData's guide is a 'setup' kind: it duplicates steps 1 and 2.
     expect(findComponent(page, WorkspaceGuide)).toBeUndefined()
 
     const done = render(baseData())
     expect(findComponent(done, WorkspaceGuide)).toBeDefined()
     expect(findComponent(done, SetupSteps).props.aiEnabled).toBe(false)
+  })
+
+  it('keeps Create with AI mounted while setup is in progress and after it is done', () => {
+    const aiModels = { used: 0, limit: 10 }
+    const inProgress = { done: false, steps: [{ id: 'create', title: 'a', state: 'done' }, { id: 'save', title: 'b', state: 'done' }, { id: 'turn-on', title: 'c', state: 'current' }] }
+    for (const setup of [inProgress, { done: true, steps: [] }]) {
+      const flow = findComponent(render(baseData({ setup, aiModels })), AiModelFlow)
+      expect(flow.props.initialAllowance).toBe(aiModels)
+      expect(flow.props.showBalance).toBe(false)
+    }
+    expect(findComponent(render(baseData({ aiModels: null })), AiModelFlow)).toBeUndefined()
+  })
+
+  it('shows recovery guidance mid-setup except the theme action that duplicates step 3', () => {
+    const setup = { done: false, steps: [] }
+    const recovery = { kind: 'recovery', title: 'A model needs attention', detail: 'Willow', action: { id: 'choose-model', mappingId: 'issue', label: 'Choose model' } }
+    const theme = { kind: 'recovery', title: 'Turn on try-on in your store', detail: 'x', action: { id: 'theme', mappingId: 't', label: 'Turn on try-on' } }
+    expect(findComponent(render(baseData({ setup, guide: recovery })), WorkspaceGuide)).toBeDefined()
+    expect(findComponent(render(baseData({ setup, guide: theme })), WorkspaceGuide)).toBeUndefined()
+    expect(findComponent(render(baseData({ setup, guide: { kind: 'complete', title: 'x', detail: 'y', action: null } })), WorkspaceGuide)).toBeUndefined()
   })
 
   it('renders merchant-safe page and dialog copy', () => {
