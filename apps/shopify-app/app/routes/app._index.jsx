@@ -407,6 +407,7 @@ export default function Workspace() {
       <RemoveTryOnDialog key={removeMapping?.id ?? 'no-remove'} mapping={removeMapping} onDone={refreshWorkspace} />
 
       <s-section slot="aside" heading="Support">
+        <s-paragraph><s-link href="/app/tutorial">Tutorial</s-link></s-paragraph>
         <s-paragraph><s-link href="/app/additional">Help and troubleshooting</s-link></s-paragraph>
         <s-paragraph><s-link href="/privacy" target="_blank">Privacy policy</s-link></s-paragraph>
         <s-paragraph>Need help? <s-link href="mailto:zendolabs@gmail.com">Contact support</s-link>.</s-paragraph>

@@ -70,6 +70,7 @@ describe('Help recovery actions', () => {
     expect(html).not.toMatch(
       /<s-page[^>]*inlineSize="small"[^>]*>[\s\S]*<s-section[^>]*slot="aside"/,
     )
+    expect(html).toContain('<s-section heading="New here?"><s-paragraph><s-link href="/app/tutorial">Follow the tutorial</s-link>')
     expect(html).toContain('href="/app"')
     expect(html).toContain('href="/app/models"')
     expect(html).toContain('href="/privacy" target="_blank"')

@@ -105,6 +105,7 @@ export default function App() {
             out of the menu list: the app's name in the sidebar already goes here. */}
         <s-link href="/app" rel="home">Workspace</s-link>
         <s-link href="/app/models">Models</s-link>
+        <s-link href="/app/tutorial">Tutorial</s-link>
         <s-link href="/app/additional">Help</s-link>
       </s-app-nav>
       <Outlet />

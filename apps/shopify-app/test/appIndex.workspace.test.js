@@ -458,6 +458,11 @@ describe('Workspace route composition', () => {
     expect(html).toContain('<s-link href="/app/additional">Help and troubleshooting</s-link>')
   })
 
+  it('links the Tutorial first in the workspace support panel', () => {
+    const html = renderToStaticMarkup(render(baseData()))
+    expect(html).toContain('heading="Support"><s-paragraph><s-link href="/app/tutorial">Tutorial</s-link></s-paragraph>')
+  })
+
   it('opens with the search from ?q= so Models can link to one model\'s products', () => {
     const page = render(baseData({
       mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }],

@@ -13,6 +13,10 @@ export default function HelpPage() {
 
   return (
     <s-page heading="Help">
+      <s-section heading="New here?">
+        <s-paragraph><s-link href="/app/tutorial">Follow the tutorial</s-link></s-paragraph>
+      </s-section>
+
       <s-section heading="Fit is too small or too large">
         <s-paragraph>
           Open the theme editor, open App embeds, select AR Try-on (or the AR
