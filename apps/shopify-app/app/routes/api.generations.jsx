@@ -33,6 +33,9 @@ const STATUS_BY_CODE = {
   DAILY_LIMIT: 429,
 }
 
+// Thrown by createGeneration before it creates the row.
+const PRE_INSERT_CODES = new Set(['BAD_PHOTOS', 'TOO_MANY_RUNNING', 'DAILY_LIMIT'])
+
 const MESSAGES = {
   BAD_PHOTOS: 'Choose 3 or 4 photos (front and sides work best).',
   BAD_PHOTO: "One of the photos couldn't be used. Use JPG, PNG or WebP photos of 10 MB or less, or choose different product photos.",
@@ -161,7 +164,10 @@ export const action = async ({ request }) => {
           productHandle: imported.handle,
         })
       } catch (error) {
-        // The copied photos belong to no generation; don't leave them orphaned.
+        // Only when the error says no row was created: createGeneration throws these
+        // before its insert. Anything else (a dropped connection after the insert)
+        // may have left a row pointing at these photos, so they stay.
+        if (!PRE_INSERT_CODES.has(error?.code)) throw error
         for (const ref of imported.photoRefs) {
           try {
             await deleteModelGlb(ref)

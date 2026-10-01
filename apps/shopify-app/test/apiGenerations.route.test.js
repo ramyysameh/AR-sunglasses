@@ -252,6 +252,19 @@ describe('product source', () => {
     expect(h.deleteGlb.mock.calls.map((c) => c[0])).toEqual(['r1', 'r2', 'r3'])
   })
 
+  it('keeps the imported photos when create fails after the row may exist', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      h.products.import.mockResolvedValue({ photoRefs: ['r1', 'r2', 'r3'], productId: 'gid://shopify/Product/42', title: 'GRIPZ', handle: 'gripz' })
+      h.gen.create.mockRejectedValue(new Error('connection reset after insert'))
+      const res = await api.action(post({ intent: 'create-from-product', productId: 'gid://shopify/Product/42', imageIds: JSON.stringify(['m1', 'm2', 'm3']) }))
+      expect(res.status).toBe(500)
+      expect(h.deleteGlb).not.toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
   it('still rethrows the create error when a cleanup delete fails', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
