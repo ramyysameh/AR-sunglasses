@@ -43,7 +43,7 @@ const MESSAGES = {
   PRODUCT_NOT_FOUND: 'That product is no longer available. Pick another one.',
   NOT_RETRYABLE: "This model can't be regenerated right now.",
   NOT_READY: 'This model is still being worked on. Refresh the page.',
-  RETRY_LIMIT: "You've used all 3 retries for these photos. Upload a new set to try again.",
+  RETRY_LIMIT: "You've used all 3 retries for these photos. Start again with different photos.",
   GLB_MISSING: "This model's file is no longer available. Try generating it again.",
   CHARGE_NOT_CONFIRMED: 'This model costs $5. Confirm to save it.',
   TOO_MANY_RUNNING: 'Two models are already being generated. Wait for one to finish.',

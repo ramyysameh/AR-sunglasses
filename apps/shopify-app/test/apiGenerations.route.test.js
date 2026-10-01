@@ -176,6 +176,12 @@ describe('api.generations', () => {
     }
   })
 
+  it('words the retry-limit message for both photo sources', async () => {
+    h.gen.create.mockRejectedValue(tagged('RETRY_LIMIT'))
+    const res = await api.action(post({ intent: 'retry', generationId: 'g1' }))
+    expect((await res.json()).error).toBe("You've used all 3 retries for these photos. Start again with different photos.")
+  })
+
   it('hides unexpected errors behind a generic 500', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
