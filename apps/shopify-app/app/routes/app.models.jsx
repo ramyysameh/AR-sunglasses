@@ -20,6 +20,9 @@ import { planUsage } from '../planUsage.server'
 import { needsFitReview } from '../tryonStatus.server'
 import ModelViewer from '../components/ModelViewer'
 import AiModelFlow from '../components/AiModelFlow'
+import AiModelUsage from '../components/AiModelUsage'
+import PlanUsage from '../components/PlanUsage'
+import workspaceStyles from '../styles/workspace.css?url'
 import { aiGenerationEnabled, getAllowance } from '../generations.server'
 import ModelFitReview from '../components/ModelFitReview'
 import { useMarkFitReviewed } from '../components/useMarkFitReviewed'
@@ -45,6 +48,8 @@ export {
   uploadValidationError,
 }
 
+export const links = () => [{ rel: 'stylesheet', href: workspaceStyles }]
+
 export const loader = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
   // Derived unconditionally, in both branches below: the review modal (every
@@ -57,7 +62,7 @@ export const loader = async ({ request }) => {
   // (App Store rejection Ref 127328).
   const activePlan = await getActivePlanName(admin, session.shop)
   if (!activePlan) {
-    return { assets: [], themeUrl, atLimit: false, pricingUrl: null }
+    return { assets: [], themeUrl, usage: null, atLimit: false, pricingUrl: null }
   }
   const aiEnabled = aiGenerationEnabled(session.shop)
   const [assets, used, allowance] = await Promise.all([
@@ -75,6 +80,7 @@ export const loader = async ({ request }) => {
   const ai = aiEnabled ? { allowance } : null
   return {
     ai,
+    usage,
     atLimit: usage.atLimit,
     pricingUrl: usage.pricingUrl,
     assets: assets.map(({ _count, ...a }) => ({
@@ -368,7 +374,7 @@ function ReviewFitModal({ asset, themeUrl, session, onDismiss }) {
 }
 
 export default function Models() {
-  const { assets, themeUrl, atLimit = false, pricingUrl = null, ai = null } = useLoaderData()
+  const { assets, themeUrl, usage = null, atLimit = false, pricingUrl = null, ai = null } = useLoaderData()
   const shopify = useAppBridge()
   const [renameModal, dispatchRenameModal] = useReducer(modalSessionReducer, {
     modelId: null,
@@ -409,6 +415,12 @@ export default function Models() {
           Add try-on
         </s-button>
       )}
+      {ai && (
+        <s-section heading="Free AI models">
+          <AiModelUsage allowance={ai.allowance} />
+        </s-section>
+      )}
+      <PlanUsage usage={usage} />
       {ai && <AiModelFlow initialAllowance={ai.allowance} />}
       <s-section heading="Model library">
         {assets.length === 0 ? (
