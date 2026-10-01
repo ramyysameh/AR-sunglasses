@@ -320,3 +320,36 @@ confirm dialog and cost guard are our only brakes.
 - Logos/branding on generated frames.
 - Bulk generation for many products at once.
 - A monthly-resetting allowance or usage caps.
+
+## Addendum (2026-10-01): generate from a product's photos
+
+Approved by the owner. "Create with AI" offers two sources: **From a product**
+(default) and **Upload photos** (unchanged).
+
+- **Flow.** Choose product (App Bridge product picker, single product) → the
+  product's images appear as thumbnails, first 4 pre-ticked → merchant ticks 3–4
+  → Generate. A product with fewer than 3 images says so and offers Upload photos.
+- **Server-side import.** The browser sends only the product GID and the ticked
+  media GIDs. The server reads the product through the Admin API
+  (`product.media`, `MediaImage.image.url(transform: {maxWidth: 2048,
+  maxHeight: 2048, preferredContentType: JPG})`), checks every ticked id belongs
+  to that product, downloads each image from `https://cdn.shopify.com` only
+  (jpeg/png/webp, ≤ 10 MB, 15 s timeout) and stores it under the same
+  shop-scoped `generation-photos/<shop>/<uuid>.<ext>` keys uploads use. From
+  there the pipeline is unchanged (retries, 30-day lifecycle rule, redact,
+  OpenAI fetching presigned URLs). Covered by the existing `write_products`
+  scope.
+- **Prompt.** Product photos have no known order, so for `photoSource =
+  'product'` the request says the photos show the same glasses from different
+  angles and may include a person or background, and to model only the glasses.
+  Uploads keep the front/left/right/back wording. Retries reuse the source.
+- **Data.** `ModelGeneration` gains `photoSource` (default `'upload'`),
+  `productId`, `productTitle`, `productHandle` (additive migration).
+- **Auto-map on save.** Saving a product-sourced model also maps it to that
+  product (same rules as "Add try-on": the plan's product limit applies to a
+  product without try-on yet; remapping replaces the previous model; the
+  `$app:tryon` metafield is published). It never undoes the save: at the
+  limit, or if mapping/publishing fails, the model stays saved and the merchant
+  is told why. The mapping helper is separate from `productActions.server.js`
+  on purpose — that file's tests are DB-backed and can't run against the
+  shared database.
