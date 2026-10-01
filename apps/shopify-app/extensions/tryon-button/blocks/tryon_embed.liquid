@@ -24,14 +24,57 @@
       // there is no embed root left and nothing to place.
       const root = document.querySelector('.ar-tryon[data-ar-tryon-placement="embed"]')
       if (!root) return
-      const submit = document.querySelector(
-        'main form[action*="/cart/add"] [type="submit"], main form[action*="/cart/add"] button[name="add"]',
-      )
-      if (submit) {
-        submit.insertAdjacentElement('afterend', root)
-      } else {
-        root.classList.add('ar-tryon--floating')
+
+      // Themes name their product area differently; look in <main> or any
+      // role="main" region for the Add to cart submit.
+      const scopes = ['main', '[role="main"]']
+      const submitSelector = scopes
+        .flatMap((scope) => [
+          `${scope} form[action*="/cart/add"] [type="submit"]`,
+          `${scope} form[action*="/cart/add"] button[name="add"]`,
+          `${scope} button[form][type="submit"]`,
+          `${scope} button[form][name="add"]`,
+        ])
+        .join(', ')
+
+      // In the theme editor the page is re-rendered constantly and the root must
+      // stay where Shopify put it, so float it instead of moving it into a form.
+      const inEditor = Boolean(root.dataset && root.dataset.arTryonDesignMode)
+
+      function place() {
+        const submit = inEditor ? null : document.querySelector(submitSelector)
+        if (submit) {
+          root.classList.remove('ar-tryon--floating')
+          // In a flex row the full-width button would squeeze in beside Add to
+          // cart; go after the row instead so it gets its own line.
+          const parent = submit.parentElement
+          const parentDisplay =
+            parent && typeof getComputedStyle === 'function' ? getComputedStyle(parent).display : ''
+          const anchor = /flex/.test(parentDisplay) ? parent : submit
+          anchor.insertAdjacentElement('afterend', root)
+        } else {
+          root.classList.add('ar-tryon--floating')
+          // A theme that swaps out <main> can take a floating root with it.
+          if (!root.isConnected && document.body) document.body.appendChild(root)
+        }
       }
+
+      place()
+      if (inEditor || typeof MutationObserver === 'undefined') return
+
+      // Themes re-render the product form (variant change) or replace <main>
+      // wholesale, which destroys the moved root. Put it back when that happens.
+      let pending = false
+      const recheck = () => {
+        pending = false
+        if (!root.isConnected) place()
+      }
+      new MutationObserver(() => {
+        if (pending || root.isConnected) return
+        pending = true
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(recheck)
+        else recheck()
+      }).observe(document.body, { childList: true, subtree: true })
     })()
   </script>
 {% endif %}
@@ -40,10 +83,11 @@
 {
   "name": "AR Try-on",
   "target": "body",
+  "enabled_on": { "templates": ["product"] },
   "settings": [
     { "type": "text", "id": "button_label", "label": "Button label", "default": "Try on" },
     { "type": "range", "id": "gscale", "label": "Glasses size", "min": 0.5, "max": 2.5, "step": 0.1, "unit": "x", "default": 1, "info": "Scales the glasses on the face. 1 = natural fit; higher = larger. Try ~1.6 if they look too small." },
-    { "type": "text", "id": "engine_url", "label": "Try-on engine URL", "default": "https://ar-sunglasses-tryon.vercel.app/tryon/index.html", "info": "Pre-filled with the hosted try-on engine -- only change this if you're running your own instance." }
+    { "type": "text", "id": "engine_url", "label": "Try-on engine URL", "default": "https://ar-sunglasses-tryon.vercel.app/tryon/index.html", "info": "Pre-filled with the hosted try-on engine -- only change this if you're running your own instance (e.g. a local dev URL)." }
   ]
 }
 {% endschema %}

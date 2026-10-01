@@ -296,14 +296,14 @@
   .ar-tryon[data-ar-tryon-placement="embed"] {
     margin-top: 10px;
   }
-  .ar-tryon--floating {
+  .ar-tryon.ar-tryon--floating {
     position: fixed;
     right: 16px;
-    bottom: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
     z-index: 50;
     margin: 0;
   }
-  .ar-tryon--floating .ar-tryon__open {
+  .ar-tryon.ar-tryon--floating .ar-tryon__open {
     width: auto;
     border-radius: 999px;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
