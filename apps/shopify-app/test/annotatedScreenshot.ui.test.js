@@ -42,6 +42,44 @@ describe('AnnotatedScreenshot', () => {
   })
 })
 
+describe('AnnotatedScreenshot details', () => {
+  const render = (extra = {}) => renderToStaticMarkup(React.createElement(AnnotatedScreenshot, {
+    src: '/tutorial/create.png', alt: 'Create with AI', width: 1280, height: 800, marks, ...extra,
+  }))
+
+  it('keeps the arrowhead undistorted: user-space units and no aspect-ratio fitting', () => {
+    const marker = render().match(/<marker[^>]*>/)[0]
+    expect(marker).toContain('preserveAspectRatio="none"')
+    expect(marker).toContain('markerUnits="userSpaceOnUse"')
+  })
+
+  it('gives each figure its own arrow marker id', () => {
+    const html = renderToStaticMarkup(React.createElement('div', null,
+      React.createElement(AnnotatedScreenshot, { src: '/a.png', alt: 'A', width: 1280, height: 800, marks }),
+      React.createElement(AnnotatedScreenshot, { src: '/b.png', alt: 'B', width: 1280, height: 800, marks })))
+    const ids = [...html.matchAll(/<marker[^>]*\sid="([^"]+)"/g)].map((m) => m[1])
+    const refs = [...html.matchAll(/marker-end="url\(#([^)]+)\)"/g)].map((m) => m[1])
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).not.toBe(ids[1])
+    expect(refs).toEqual(ids)
+  })
+
+  it('lazy-loads the screenshot', () => {
+    expect(render()).toContain('loading="lazy" decoding="async"')
+  })
+
+  it('draws nothing for unknown kinds or arrows without an end point', () => {
+    const html = render({ marks: [
+      { n: 1, kind: 'star', x: 10, y: 10, caption: 'Odd' },
+      { n: 2, kind: 'arrow', x: 10, y: 10, caption: 'No end' },
+    ] })
+    expect(html).not.toContain('NaN')
+    expect(html).not.toContain('<line')
+    expect(html).not.toContain('>1</text>')
+    expect(html).not.toContain('>2</text>')
+  })
+})
+
 describe('TUTORIAL_STEPS', () => {
   it('covers the four steps in order with marks inside the image', () => {
     expect(TUTORIAL_STEPS.map((s) => s.id)).toEqual(['create', 'save', 'turn-on', 'check'])
@@ -53,6 +91,16 @@ describe('TUTORIAL_STEPS', () => {
         expect(m.y).toBeGreaterThanOrEqual(0)
         expect(m.y).toBeLessThanOrEqual(100)
         expect(m.caption).toBeTruthy()
+        const inside = (v) => v >= 0 && v <= 100
+        if (m.kind === 'circle') {
+          expect(inside(m.x - m.w / 2) && inside(m.x + m.w / 2), `step ${step.id} mark ${m.n} x extent`).toBe(true)
+          expect(inside(m.y - m.h / 2) && inside(m.y + m.h / 2), `step ${step.id} mark ${m.n} y extent`).toBe(true)
+        } else if (m.kind === 'box') {
+          expect(inside(m.x + m.w), `step ${step.id} mark ${m.n} x extent`).toBe(true)
+          expect(inside(m.y + m.h), `step ${step.id} mark ${m.n} y extent`).toBe(true)
+        } else if (m.kind === 'arrow') {
+          expect(inside(m.toX) && inside(m.toY), `step ${step.id} mark ${m.n} arrow end`).toBe(true)
+        }
       }
     }
   })

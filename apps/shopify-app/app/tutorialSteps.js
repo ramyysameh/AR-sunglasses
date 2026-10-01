@@ -26,7 +26,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'turn-on',
     title: '3. Turn on try-on in your store',
-    intro: 'One switch adds the Try-on button to every product with a model.',
+    intro: 'One switch adds the Try on button to every product with a model.',
     image: { src: '/tutorial/turn-on.png', alt: 'The theme editor with the AR Try-on app embed switched on', width: 2560, height: 1600 },
     marks: [
       { n: 1, kind: 'circle', x: 14, y: 40, w: 22, h: 8, caption: 'AR Try-on is already switched on under App embeds.' },
@@ -36,7 +36,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'check',
     title: '4. Check your store',
-    intro: 'Open a product with a model. The Try-on button sits under Add to cart.',
+    intro: 'Open a product with a model. The Try on button sits under Add to cart.',
     image: { src: '/tutorial/storefront.png', alt: 'A product page with the Try on button under Add to cart', width: 2560, height: 1600 },
     marks: [
       { n: 1, kind: 'box', x: 58, y: 62, w: 34, h: 8, caption: 'The Try on button opens the camera try-on.' },

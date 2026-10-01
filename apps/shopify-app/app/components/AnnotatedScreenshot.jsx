@@ -18,6 +18,9 @@ function Badge({ x, y, n, aspect }) {
 }
 
 function Mark({ mark, aspect, arrowId }) {
+  // Unknown kinds or an arrow with no end point would draw NaN coordinates.
+  if (mark.kind === 'arrow' && !(Number.isFinite(mark.toX) && Number.isFinite(mark.toY))) return null
+  if (!['circle', 'box', 'arrow'].includes(mark.kind)) return null
   if (mark.kind === 'circle') {
     return (
       <g>
@@ -55,12 +58,14 @@ export default function AnnotatedScreenshot({ src, alt, width, height, marks }) 
   return (
     <figure style={{ margin: 0 }}>
       <div style={{ position: 'relative', width: '100%', aspectRatio: `${width} / ${height}`, border: '1px solid #e3e3e3', borderRadius: '8px', overflow: 'hidden' }}>
-        <img src={src} alt={alt} width={width} height={height} style={{ display: 'block', width: '100%', height: '100%' }} />
+        <img src={src} alt={alt} width={width} height={height} loading="lazy" decoding="async" style={{ display: 'block', width: '100%', height: '100%' }} />
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
           <defs>
             {/* userSpaceOnUse: with the default strokeWidth units the 3px
-                non-scaling stroke would blow the head up to ~15% of the image. */}
-            <marker id={arrowId} viewBox="0 0 10 10" refX="8" refY="5" markerUnits="userSpaceOnUse" markerWidth="3" markerHeight={3 * aspect} orient="auto-start-reverse">
+                non-scaling stroke would blow the head up to ~15% of the image.
+                preserveAspectRatio none: the default "meet" would re-square the
+                aspect-scaled markerHeight and leave the head squashed. */}
+            <marker id={arrowId} viewBox="0 0 10 10" refX="8" refY="5" markerUnits="userSpaceOnUse" preserveAspectRatio="none" markerWidth="3" markerHeight={3 * aspect} orient="auto-start-reverse">
               <path d="M0 0 L10 5 L0 10 z" fill={ACCENT} />
             </marker>
           </defs>
