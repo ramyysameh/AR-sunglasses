@@ -1,0 +1,49 @@
+{% comment %}
+  AR Try-on app embed. Switched on once for the whole store (the admin's "Turn
+  on try-on" deep link opens the theme editor with it active), it adds the
+  Try-on button to every product page whose product has a model -- no placing
+  blocks in templates. Same markup and script as the app block (snippet
+  tryon_core); if a page also has the block, the block (earlier in the DOM)
+  wins the first-instance dedupe and this copy removes itself.
+{% endcomment %}
+{% if request.page_type == 'product' and product %}
+  {% assign dialog_id = 'ar-tryon-dialog-embed-' | append: product.id %}
+  {% render 'tryon_core',
+    product: product,
+    engine_url: block.settings.engine_url,
+    model_url: '',
+    gscale: block.settings.gscale,
+    button_label: block.settings.button_label,
+    dialog_id: dialog_id,
+    attributes: block.shopify_attributes,
+    placement: 'embed'
+  %}
+  <script>
+    (() => {
+      // Runs after tryon_core's own script (dedupe + ping). If the block won,
+      // there is no embed root left and nothing to place.
+      const root = document.querySelector('.ar-tryon[data-ar-tryon-placement="embed"]')
+      if (!root) return
+      const submit = document.querySelector(
+        'main form[action*="/cart/add"] [type="submit"], main form[action*="/cart/add"] button[name="add"]',
+      )
+      if (submit) {
+        submit.insertAdjacentElement('afterend', root)
+      } else {
+        root.classList.add('ar-tryon--floating')
+      }
+    })()
+  </script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "AR Try-on",
+  "target": "body",
+  "settings": [
+    { "type": "text", "id": "button_label", "label": "Button label", "default": "Try on" },
+    { "type": "range", "id": "gscale", "label": "Glasses size", "min": 0.5, "max": 2.5, "step": 0.1, "unit": "x", "default": 1, "info": "Scales the glasses on the face. 1 = natural fit; higher = larger. Try ~1.6 if they look too small." },
+    { "type": "text", "id": "engine_url", "label": "Try-on engine URL", "default": "https://ar-sunglasses-tryon.vercel.app/tryon/index.html", "info": "Pre-filled with the hosted try-on engine -- only change this if you're running your own instance." }
+  ]
+}
+{% endschema %}

@@ -5,7 +5,7 @@ import { describe, it, expect, vi } from 'vitest'
 // this exercises exactly what merchants get. The script region contains no
 // Liquid tags, so it is valid JS as-is.
 const liquid = readFileSync(
-  new URL('../extensions/tryon-button/blocks/tryon_button.liquid', import.meta.url),
+  new URL('../extensions/tryon-button/snippets/tryon_core.liquid', import.meta.url),
   'utf8',
 )
 const scriptBody = liquid.slice(
@@ -160,6 +160,26 @@ describe('try-on block duplicate handling', () => {
 
     expect(roots[1].removed).toBe(false)
     expect(roots[1].innerHTML).toContain('more than once')
+  })
+
+  it('removes a losing embed copy even in the theme editor, without the duplicate notice', () => {
+    // The embed renders at the end of <body>, so a placed block always comes first.
+    const block = makeRoot({ designMode: true })
+    const embed = makeRoot({ designMode: true })
+    embed.dataset.arTryonPlacement = 'embed'
+    const roots = [block, embed]
+    roots.forEach((_, i) => runFor(i, roots))
+
+    expect(block.removed).toBe(false)
+    expect(embed.removed).toBe(true)
+    expect(embed.innerHTML).toBe('')
+  })
+
+  it('keeps the embed when it is the only copy', () => {
+    const embed = makeRoot()
+    embed.dataset.arTryonPlacement = 'embed'
+    runFor(0, [embed])
+    expect(embed.removed).toBe(false)
   })
 })
 
