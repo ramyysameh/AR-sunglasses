@@ -45,6 +45,8 @@ async function photoUrls(photoRefs) {
   return Promise.all(photoRefs.map((ref) => presignObjectRead(ref)))
 }
 
+const PHOTO_SOURCES = ['upload', 'product']
+
 function validPhotoRefs(shop, photoRefs) {
   return Array.isArray(photoRefs)
     && photoRefs.length >= 3
@@ -112,6 +114,8 @@ export function toClientGeneration(generation) {
     previewUrl: status === 'ready' ? `/generations/${generation.id}.glb` : null,
     confidence: generation.calibration?.confidence ?? null,
     paid: generation.paid,
+    photoSource: generation.photoSource ?? 'upload',
+    productTitle: generation.productTitle ?? null,
     modelAssetId: generation.modelAssetId,
     createdAt: generation.createdAt,
   }
@@ -123,7 +127,11 @@ export function toClientGeneration(generation) {
  * saved discards that result. Failing to reach OpenAI is not an exception: the
  * row comes back `failed`, which is free and shows the merchant a message.
  */
-export async function createGeneration(prisma, { shop, shopGid, photoRefs = null, retryOf = null, now = new Date() }) {
+export async function createGeneration(prisma, {
+  shop, shopGid, photoRefs = null, retryOf = null,
+  photoSource = 'upload', productId = null, productTitle = null, productHandle = null,
+  now = new Date(),
+}) {
   // The guard and the row it protects are created under one per-shop lock, so
   // two concurrent starts can't both pass the same count.
   const { generation, parent } = await prisma.$transaction(async (tx) => {
@@ -133,6 +141,7 @@ export async function createGeneration(prisma, { shop, shopGid, photoRefs = null
     let retryIndex = 0
     let parentRow = null
     let refs = photoRefs
+    let source = { photoSource, productId, productTitle, productHandle }
 
     if (retryOf) {
       parentRow = await tx.modelGeneration.findFirst({ where: { id: retryOf, shop } })
@@ -147,6 +156,14 @@ export async function createGeneration(prisma, { shop, shopGid, photoRefs = null
       refs = parentRow.photoRefs
       photoSetId = parentRow.photoSetId
       retryIndex = setSize
+      source = {
+        photoSource: parentRow.photoSource,
+        productId: parentRow.productId,
+        productTitle: parentRow.productTitle,
+        productHandle: parentRow.productHandle,
+      }
+    } else if (!PHOTO_SOURCES.includes(photoSource)) {
+      throw tagged('BAD_PHOTOS', 'unknown photo source')
     } else if (!validPhotoRefs(shop, refs)) {
       throw tagged('BAD_PHOTOS', "expected 3 or 4 of this shop's uploaded photos")
     }
@@ -154,7 +171,7 @@ export async function createGeneration(prisma, { shop, shopGid, photoRefs = null
     await assertCanStartGeneration(tx, shop, now)
 
     const created = await tx.modelGeneration.create({
-      data: { shop, shopGid, photoRefs: refs, photoSetId, retryIndex, status: 'queued', createdAt: now },
+      data: { shop, shopGid, photoRefs: refs, photoSetId, retryIndex, ...source, status: 'queued', createdAt: now },
     })
     return { generation: created, parent: parentRow }
   })
@@ -162,7 +179,10 @@ export async function createGeneration(prisma, { shop, shopGid, photoRefs = null
   // Slow network call: outside the transaction.
   let providerJobId
   try {
-    const started = await startGeneration({ images: await photoUrls(generation.photoRefs) })
+    const started = await startGeneration({
+      images: await photoUrls(generation.photoRefs),
+      source: generation.photoSource,
+    })
     providerJobId = started.providerJobId
   } catch (error) {
     console.error('AI generation start failed', generation.id, error)
@@ -221,6 +241,7 @@ async function retryOrFail(prisma, generation, reason, now) {
       const { providerJobId } = await startGeneration({
         images: await photoUrls(generation.photoRefs),
         feedback: feedbackFor(reason),
+        source: generation.photoSource,
       })
       return prisma.modelGeneration.update({
         where: { id: generation.id },
@@ -421,7 +442,12 @@ export async function saveGeneration(prisma, { shop, generationId, planName, acc
       console.error('AI model charge report failed; will re-send', generation.id, error)
     }
   }
-  return { assetId: asset.assetId, paid }
+  return {
+    assetId: asset.assetId,
+    paid,
+    productId: generation.productId ?? null,
+    productHandle: generation.productHandle ?? null,
+  }
 }
 
 // Photos and unsaved models are kept 30 days. Saved rows stay (the lifetime

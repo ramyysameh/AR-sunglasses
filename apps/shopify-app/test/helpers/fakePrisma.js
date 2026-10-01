@@ -67,6 +67,10 @@ function checkedData(data, method) {
 
 const DEFAULTS = {
   retryIndex: 0,
+  photoSource: 'upload',
+  productId: null,
+  productTitle: null,
+  productHandle: null,
   autoRetried: false,
   providerJobId: null,
   error: null,

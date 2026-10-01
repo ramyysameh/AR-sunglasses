@@ -105,6 +105,11 @@ model ModelGeneration {
   shopGid        String
   photoRefs      Json
   photoSetId     String
+  // 'upload' | 'product' (spec addendum 2026-10-01)
+  photoSource    String    @default("upload")
+  productId      String?
+  productTitle   String?
+  productHandle  String?
   retryIndex     Int       @default(0)
   autoRetried    Boolean   @default(false)
   providerJobId  String?

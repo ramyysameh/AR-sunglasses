@@ -122,7 +122,7 @@ describe('toClientGeneration', () => {
     expect(generations.toClientGeneration({ ...base, status: 'collecting' }).status).toBe('running')
     expect(generations.toClientGeneration({ ...base, status: 'ready' })).toEqual({
       id: 'g1', status: 'ready', error: null, retriesLeft: 2, previewUrl: '/generations/g1.glb',
-      confidence: 0.9, paid: null, modelAssetId: null, createdAt: NOW,
+      confidence: 0.9, paid: null, photoSource: 'upload', productTitle: null, modelAssetId: null, createdAt: NOW,
     })
     expect(generations.toClientGeneration({ ...base, status: 'failed' }).previewUrl).toBeNull()
   })
@@ -137,7 +137,7 @@ describe('createGeneration', () => {
   it('starts a job with signed photo URLs and marks it running', async () => {
     const prisma = createFakePrisma()
     const g = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW })
-    expect(deps.start).toHaveBeenCalledWith({ images: PHOTOS.map((k) => `https://signed.example/${k}`) })
+    expect(deps.start).toHaveBeenCalledWith({ images: PHOTOS.map((k) => `https://signed.example/${k}`), source: 'upload' })
     expect(g).toMatchObject({ status: 'running', providerJobId: 'resp_1', shopGid: SHOP_GID, retryIndex: 0, startedAt: NOW })
     expect(g.photoSetId).toEqual(expect.any(String))
   })
@@ -575,7 +575,7 @@ describe('saveGeneration', () => {
     const prisma = createFakePrisma()
     const g = await readyRow(prisma)
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
-      .resolves.toEqual({ assetId: 'asset-1', paid: false })
+      .resolves.toEqual({ assetId: 'asset-1', paid: false, productId: null, productHandle: null })
     const [, shopArg, bytes, filename, options] = deps.saveCalibratedModel.mock.calls[0]
     expect([shopArg, bytes.toString(), filename, options]).toEqual([SHOP, 'glb', 'AI model', { id: g.id }])
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({
@@ -591,7 +591,7 @@ describe('saveGeneration', () => {
     await seed(prisma, Array(10).fill('saved'))
     const g = await readyRow(prisma)
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
-      .resolves.toEqual({ assetId: 'asset-1', paid: true })
+      .resolves.toEqual({ assetId: 'asset-1', paid: true, productId: null, productHandle: null })
     expect(deps.report).toHaveBeenCalledWith({ shopGid: SHOP_GID, idempotencyKey: `aimodel_${g.id}`, timestamp: NOW })
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ paid: true, chargeReported: true })
   })
@@ -611,7 +611,7 @@ describe('saveGeneration', () => {
     await seed(prisma, Array(100).fill('saved'))
     const g = await readyRow(prisma)
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Pro', now: NOW }))
-      .resolves.toEqual({ assetId: 'asset-1', paid: false })
+      .resolves.toEqual({ assetId: 'asset-1', paid: false, productId: null, productHandle: null })
     expect(deps.report).not.toHaveBeenCalled()
   })
 
@@ -633,7 +633,7 @@ describe('saveGeneration', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
-        .resolves.toEqual({ assetId: 'asset-1', paid: true })
+        .resolves.toEqual({ assetId: 'asset-1', paid: true, productId: null, productHandle: null })
       expect(errorSpy).toHaveBeenCalled()
     } finally {
       errorSpy.mockRestore()
@@ -676,7 +676,7 @@ describe('saveGeneration', () => {
     const prisma = createFakePrisma()
     const g = await readyRow(prisma)
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
-      .resolves.toEqual({ assetId: 'asset-1', paid: false })
+      .resolves.toEqual({ assetId: 'asset-1', paid: false, productId: null, productHandle: null })
     expect(deps.report).not.toHaveBeenCalled()
   })
 
@@ -705,7 +705,7 @@ describe('saveGeneration', () => {
       prisma.modelAsset.findUnique = realFind
       expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'ready', paid: null })
 
-      await expect(generations.saveGeneration(prisma, input)).resolves.toEqual({ assetId: g.id, paid: true })
+      await expect(generations.saveGeneration(prisma, input)).resolves.toEqual({ assetId: g.id, paid: true, productId: null, productHandle: null })
     } finally {
       prisma.modelAsset.findUnique = realFind
       errorSpy.mockRestore()
@@ -730,7 +730,7 @@ describe('saveGeneration', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
-        .resolves.toEqual({ assetId: g.id, paid: true })
+        .resolves.toEqual({ assetId: g.id, paid: true, productId: null, productHandle: null })
       expect(warn).toHaveBeenCalledTimes(1)
     } finally {
       warn.mockRestore()
@@ -752,7 +752,7 @@ describe('saveGeneration', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
-        .resolves.toEqual({ assetId: g.id, paid: false })
+        .resolves.toEqual({ assetId: g.id, paid: false, productId: null, productHandle: null })
     } finally {
       warn.mockRestore()
     }
@@ -769,7 +769,7 @@ describe('saveGeneration', () => {
       throw Object.assign(new Error('Unique constraint failed on the fields: (`id`)'), { code: 'P2002' })
     })
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
-      .resolves.toEqual({ assetId: g.id, paid: false })
+      .resolves.toEqual({ assetId: g.id, paid: false, productId: null, productHandle: null })
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'saved', modelAssetId: g.id })
   })
 
@@ -793,7 +793,7 @@ describe('saveGeneration', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
-        .resolves.toEqual({ assetId: 'asset-1', paid: false })
+        .resolves.toEqual({ assetId: 'asset-1', paid: false, productId: null, productHandle: null })
       expect(errorSpy).toHaveBeenCalled()
     } finally {
       errorSpy.mockRestore()
@@ -933,5 +933,57 @@ describe('listGenerations', () => {
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toBeNull()
     expect(deps.objects.has(PHOTOS[1])).toBe(false)
     expect(deps.objects.has(PHOTOS[2])).toBe(false)
+  })
+})
+
+describe('product-sourced generations', () => {
+  beforeEach(() => {
+    deps.start.mockResolvedValue({ providerJobId: 'resp_p' })
+  })
+
+  it('stores the source and product and asks the generator for product wording', async () => {
+    const prisma = createFakePrisma()
+    const g = await generations.createGeneration(prisma, {
+      shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW,
+      photoSource: 'product', productId: 'gid://shopify/Product/42', productTitle: 'GRIPZ Pelmo', productHandle: 'gripz-pelmo',
+    })
+    expect(g).toMatchObject({ photoSource: 'product', productId: 'gid://shopify/Product/42', productTitle: 'GRIPZ Pelmo', productHandle: 'gripz-pelmo' })
+    expect(deps.start.mock.calls[0][0]).toMatchObject({ source: 'product' })
+  })
+
+  it('defaults to upload and refuses unknown sources', async () => {
+    const prisma = createFakePrisma()
+    const g = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW })
+    expect(g.photoSource).toBe('upload')
+    expect(deps.start.mock.calls[0][0]).toMatchObject({ source: 'upload' })
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW, photoSource: 'url' }))
+      .rejects.toMatchObject({ code: 'BAD_PHOTOS' })
+  })
+
+  it('retries and automatic retries keep the product source', async () => {
+    const prisma = createFakePrisma()
+    const parent = await prisma.modelGeneration.create({ data: row({ status: 'failed', photoSource: 'product', productId: 'gid://shopify/Product/42', productTitle: 'GRIPZ Pelmo', productHandle: 'gripz-pelmo' }) })
+    const retry = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: parent.id, now: NOW })
+    expect(retry).toMatchObject({ photoSource: 'product', productId: 'gid://shopify/Product/42', productTitle: 'GRIPZ Pelmo', productHandle: 'gripz-pelmo' })
+    expect(deps.start.mock.calls.at(-1)[0]).toMatchObject({ source: 'product' })
+
+    const running = await prisma.modelGeneration.create({ data: row({ status: 'running', providerJobId: 'resp_9', startedAt: NOW, photoSource: 'product' }) })
+    deps.check.mockResolvedValue({ state: 'failed', error: 'no_glb_output' })
+    await generations.advanceGeneration(prisma, running, NOW)
+    expect(deps.start.mock.calls.at(-1)[0]).toMatchObject({ source: 'product' })
+  })
+
+  it('exposes the source and product title to the client', () => {
+    const view = generations.toClientGeneration({ id: 'g', status: 'ready', error: null, retryIndex: 0, calibration: null, paid: null, modelAssetId: null, createdAt: NOW, photoSource: 'product', productTitle: 'GRIPZ Pelmo' })
+    expect(view).toMatchObject({ photoSource: 'product', productTitle: 'GRIPZ Pelmo' })
+  })
+
+  it('save returns the product so the route can map it', async () => {
+    const prisma = createFakePrisma()
+    const g = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/x.glb', photoSource: 'product', productId: 'gid://shopify/Product/42', productHandle: 'gripz-pelmo' }) })
+    deps.objects.set('generations/x.glb', Buffer.from('glb'))
+    deps.saveCalibratedModel.mockResolvedValue({ assetId: g.id })
+    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
+      .resolves.toEqual({ assetId: g.id, paid: false, productId: 'gid://shopify/Product/42', productHandle: 'gripz-pelmo' })
   })
 })
