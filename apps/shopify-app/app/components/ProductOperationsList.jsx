@@ -8,7 +8,7 @@ import TopLevelAdminAction from './TopLevelAdminAction'
 const STATUS_DETAILS = {
   live: { label: 'Live', tone: 'success' },
   'review-fit': { label: 'Needs fit review', tone: 'warning' },
-  'add-to-theme': { label: 'Not on theme', tone: 'warning' },
+  'add-to-theme': { label: 'Not live yet', tone: 'warning' },
   'model-issue': { label: 'Model issue', tone: 'critical' },
   'plan-limit': { label: 'Plan limit', tone: 'warning' },
 }
@@ -37,7 +37,7 @@ export function filterWorkspaceMappings(mappings, { status, query }) {
 export function primaryActionFor(mapping, pricingUrl) {
   if (mapping.status === 'live') return { id: 'preview', label: 'Preview' }
   if (mapping.status === 'add-to-theme') {
-    return { id: 'theme', label: 'Add to theme', href: mapping.themeUrl }
+    return { id: 'theme', label: 'Turn on try-on', href: mapping.themeUrl }
   }
   if (mapping.status === 'review-fit') return { id: 'review-fit', label: 'Review fit' }
   if (mapping.status === 'model-issue') return { id: 'choose-model', label: 'Choose model' }

@@ -3,6 +3,7 @@
 // "block not added" editor error. Keep this aligned with shopify.app.toml.
 const CANONICAL_API_KEY = 'be1db9d64c7c617dcd67f6add58f4824'
 const BLOCK_HANDLE = 'tryon_button'
+const EMBED_HANDLE = 'tryon_embed'
 
 function apiKey() {
   // Do not read SHOPIFY_API_KEY here. Some development/deployment environments
@@ -28,6 +29,20 @@ export function themeEditorUrl(shop, productHandle = null) {
   }
   url.searchParams.set('addAppBlockId', `${apiKey()}/${BLOCK_HANDLE}`)
   url.searchParams.set('target', 'mainSection')
+  return url.toString()
+}
+
+/**
+ * Deep link that opens the theme editor with the AR Try-on app embed switched
+ * on; the merchant only clicks Save. Embeds are store-wide, so no template or
+ * product is needed. Not embeddable: open top-level.
+ * @param {string} shop myshopify domain
+ */
+export function embedActivationUrl(shop) {
+  const domain = String(shop).replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const url = new URL(`https://${domain}/admin/themes/current/editor`)
+  url.searchParams.set('context', 'apps')
+  url.searchParams.set('activateAppId', `${apiKey()}/${EMBED_HANDLE}`)
   return url.toString()
 }
 

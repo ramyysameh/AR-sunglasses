@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { themeEditorUrl, previewUrl } from '../app/adminLinks.server.js'
+import { themeEditorUrl, previewUrl, embedActivationUrl } from '../app/adminLinks.server.js'
 
 describe('themeEditorUrl', () => {
   it('targets the product template on the current theme', () => {
@@ -40,4 +40,13 @@ describe('previewUrl', () => {
     expect(new URL(previewUrl(base)).searchParams.get('src')).toBe('preview')
   })
 
+})
+
+describe('embedActivationUrl', () => {
+  it('opens the theme editor with the try-on embed switched on', () => {
+    const url = new URL(embedActivationUrl('demo-shop.myshopify.com'))
+    expect(url.origin + url.pathname).toBe('https://demo-shop.myshopify.com/admin/themes/current/editor')
+    expect(url.searchParams.get('context')).toBe('apps')
+    expect(url.searchParams.get('activateAppId')).toBe('be1db9d64c7c617dcd67f6add58f4824/tryon_embed')
+  })
 })

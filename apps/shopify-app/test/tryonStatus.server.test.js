@@ -37,6 +37,12 @@ describe('productStatus', () => {
       .toMatchObject({ id: 'not_on_theme', tone: 'warning' })
   })
 
+  it('counts a mapping as on the theme once the store has try-on on', () => {
+    const mapping = { blockSeenAt: null, lastSeenLiveAt: null, modelAsset: { status: 'ready', confidence: 0.9 } }
+    expect(productStatus(mapping).id).toBe('not_on_theme')
+    expect(productStatus(mapping, { storeLive: true }).id).toBe('live')
+  })
+
   it('still reports a fit problem ahead of either theme signal', () => {
     expect(productStatus({ blockSeenAt: seen, lastSeenLiveAt: seen, modelAsset: { status: 'ready', confidence: 0.4 } }))
       .toMatchObject({ id: 'check_fit' })

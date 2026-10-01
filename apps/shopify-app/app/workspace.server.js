@@ -1,12 +1,12 @@
 import QRCode from 'qrcode'
 import prisma from './db.server.js'
-import { themeEditorUrl, previewUrl } from './adminLinks.server.js'
+import { themeEditorUrl, embedActivationUrl, previewUrl } from './adminLinks.server.js'
 import { getActivePlanName } from './billing.server.js'
 import { listMappings } from './models.server.js'
 import { planUsage } from './planUsage.server.js'
 import { fetchProductsByIds } from './products.server.js'
 import { publishMappings } from './tryonMetafield.server.js'
-import { productStatus } from './tryonStatus.server.js'
+import { isOnTheme, productStatus } from './tryonStatus.server.js'
 
 const STATUS_PRIORITY = {
   'model-issue': 0,
@@ -74,9 +74,9 @@ export function workspaceGuide({ assets, mappings, usage }) {
   if (theme) {
     return {
       kind: 'recovery',
-      title: 'Finish storefront setup',
-      detail: theme.product?.title,
-      action: { id: 'theme', href: theme.themeUrl, label: 'Add to theme' },
+      title: 'Turn on try-on in your store',
+      detail: 'In the theme editor, click Save.',
+      action: { id: 'theme', href: theme.themeUrl, label: 'Turn on try-on' },
     }
   }
   if (usage.atLimit) {
@@ -95,6 +95,30 @@ export function workspaceGuide({ assets, mappings, usage }) {
   }
 }
 
+const isReadyAsset = (asset) => Boolean(asset.fitReviewedAt) || String(asset.status).toLowerCase() === 'ready'
+
+/**
+ * The three setup steps on the home page: create models, save one (which maps
+ * it to its product), switch try-on on in the store. Each is done/current/upcoming.
+ */
+export function setupSteps({ assets, mappings, storeLive }) {
+  const done = [assets.some(isReadyAsset), mappings.length > 0, storeLive]
+  const current = done.indexOf(false)
+  const titles = [
+    ['create', 'Create 3D models'],
+    ['save', 'Review and save'],
+    ['turn-on', 'Turn on try-on in your store'],
+  ]
+  return {
+    done: current === -1,
+    steps: titles.map(([id, title], i) => ({
+      id,
+      title,
+      state: done[i] ? 'done' : i === current ? 'current' : 'upcoming',
+    })),
+  }
+}
+
 export function emptyWorkspace(shop) {
   const assets = []
   const mappings = []
@@ -106,6 +130,9 @@ export function emptyWorkspace(shop) {
     usage,
     guide: workspaceGuide({ assets, mappings, usage }),
     themeUrl: themeEditorUrl(shop),
+    setup: setupSteps({ assets, mappings, storeLive: false }),
+    embedUrl: embedActivationUrl(shop),
+    storefrontUrl: `https://${shop}`,
   }
 }
 
@@ -131,18 +158,20 @@ export async function loadWorkspace({ admin, shop, engineUrl }) {
     console.error('product enrichment failed', error)
   }
 
+  const storeLive = rawMappings.some((mapping) => isOnTheme(mapping))
+  const embedUrl = embedActivationUrl(shop)
+
   const enriched = await Promise.all(rawMappings.map(async (mapping) => {
-    const merchantStatus = productStatus(mapping)
+    const merchantStatus = productStatus(mapping, { storeLive })
     const status = normalizeWorkspaceStatus(merchantStatus)
     const product = products.get(mapping.productId) ?? null
-    const mappingThemeUrl = themeEditorUrl(shop, product?.handle || mapping.productHandle)
     const base = {
       ...mapping,
       product,
       modelAsset: mapping.modelAsset,
       status,
       merchantStatus,
-      themeUrl: mappingThemeUrl,
+      themeUrl: embedUrl,
     }
 
     try {
@@ -160,6 +189,9 @@ export async function loadWorkspace({ admin, shop, engineUrl }) {
 
   const mappings = sortWorkspaceMappings(enriched)
   const usage = planUsage({ planName: activePlan, used: mappings.length, shop })
+  const handle = rawMappings.find((mapping) => mapping.productHandle)?.productHandle
+    ?? enriched.find((mapping) => mapping.product?.handle)?.product.handle
+  const storefrontUrl = handle ? `https://${shop}/products/${handle}` : `https://${shop}`
 
   return {
     assets,
@@ -168,5 +200,8 @@ export async function loadWorkspace({ admin, shop, engineUrl }) {
     usage,
     guide: workspaceGuide({ assets, mappings, usage }),
     themeUrl: themeEditorUrl(shop),
+    setup: setupSteps({ assets, mappings, storeLive }),
+    embedUrl,
+    storefrontUrl,
   }
 }

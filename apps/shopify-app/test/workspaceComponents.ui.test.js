@@ -87,7 +87,7 @@ describe('workspace filtering and contextual actions', () => {
     expect(primaryActionFor(rows[1], '/plans')).toEqual({ id: 'choose-model', label: 'Choose model' })
     expect(primaryActionFor(rows[2], '/plans')).toEqual({
       id: 'theme',
-      label: 'Add to theme',
+      label: 'Turn on try-on',
       href: rows[2].themeUrl,
     })
     expect(primaryActionFor({ id: 'limited', status: 'plan-limit', usage: { pricingUrl: '/wrong' } }, '/plans'))
@@ -397,9 +397,9 @@ describe('workspace component accessibility contracts', () => {
       onRemove: vi.fn(),
     })
 
-    expect(buttonWithLabel(list, 'Add to theme')).toBeUndefined()
+    expect(buttonWithLabel(list, 'Turn on try-on')).toBeUndefined()
     // The row still says what is wrong, as a state rather than an action.
-    expect(renderToStaticMarkup(list)).toContain('>Not on theme<')
+    expect(renderToStaticMarkup(list)).toContain('>Not live yet<')
   })
 
   it('links plan-limit recovery only to page pricing and never changes the model', () => {
@@ -461,7 +461,7 @@ describe('workspace component accessibility contracts', () => {
     expect(html).toContain('aria-label="No image available for Gripz"')
     expect(html).toContain('>Live<')
     expect(html).toContain('>Model issue<')
-    expect(html).toContain('<s-badge tone="warning">Not on theme</s-badge>')
+    expect(html).toContain('<s-badge tone="warning">Not live yet</s-badge>')
     expect(html.match(/<s-menu/g)).toHaveLength(3)
     const menuLabels = [...html.matchAll(/<s-menu[^>]*>(.*?)<\/s-menu>/g)]
       .map(([, menu]) => [...menu.matchAll(/<s-button[^>]*>(.*?)<\/s-button>/g)]

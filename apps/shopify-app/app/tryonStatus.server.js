@@ -43,10 +43,13 @@ export function isOnTheme(mapping) {
 }
 
 /**
+ * `storeLive`: the shop's try-on has rendered on some product page. With the app
+ * embed the button is store-wide, so one sighting covers every mapped product.
  * @param {{ blockSeenAt?: Date|null, lastSeenLiveAt: Date|null, modelAsset: { status: string, confidence?: number|null } }} mapping
+ * @param {{ storeLive?: boolean }} [options]
  * @returns {{ id: 'check_fit'|'not_on_theme'|'live', label: string, tone: 'warning'|'success' }}
  */
-export function productStatus(mapping) {
+export function productStatus(mapping, { storeLive = false } = {}) {
   const asset = mapping.modelAsset ?? {}
 
   // Order is load-bearing; see the precedence test. The id stays `check_fit`
@@ -63,7 +66,7 @@ export function productStatus(mapping) {
   // theme yet" off it told correctly-set-up merchants they had not finished,
   // which pushed them into following "Add to theme" a second time -- and that
   // deep link adds another copy of the block every time it is followed.
-  if (!isOnTheme(mapping)) {
+  if (!storeLive && !isOnTheme(mapping)) {
     return { id: 'not_on_theme', label: 'Not on your theme yet', tone: 'warning' }
   }
   return { id: 'live', label: 'Live', tone: 'success' }
