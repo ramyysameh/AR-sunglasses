@@ -46,7 +46,7 @@ const MESSAGES = {
   RETRY_LIMIT: "You've used all 3 retries for these photos. Start again with different photos.",
   GLB_MISSING: "This model's file is no longer available. Try generating it again.",
   CHARGE_NOT_CONFIRMED: 'This model costs $5. Confirm to save it.',
-  TOO_MANY_RUNNING: 'Two models are already being generated. Wait for one to finish.',
+  TOO_MANY_RUNNING: 'Too many models are being generated. Wait for one to finish.',
   DAILY_LIMIT: "You've reached today's limit of 20 AI generations. Try again tomorrow.",
 }
 

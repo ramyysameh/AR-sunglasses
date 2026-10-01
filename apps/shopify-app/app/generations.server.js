@@ -17,7 +17,7 @@ import { tagged } from './errors.server.js'
  */
 
 export const LIMITS = {
-  running: 2,
+  running: 5,
   perDay: 20,
   retries: 3,
   timeoutMs: 15 * 60 * 1000,
@@ -36,7 +36,6 @@ export function isShopPhotoRef(shop, ref) {
 }
 
 const USED_STATUSES = ['saving', 'saved']
-const ACTIVE_STATUSES = ['queued', 'running', 'collecting']
 const RETRYABLE_STATUSES = ['ready', 'failed', 'discarded']
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -54,17 +53,23 @@ function validPhotoRefs(shop, photoRefs) {
     && photoRefs.every((ref) => isShopPhotoRef(shop, ref))
 }
 
+// Rows holding one of the shop's running slots: running, collecting, or queued
+// and already being started (startedAt set). A waiting row has startedAt null.
+async function slotsInUse(prisma, shop) {
+  const [active, starting] = await Promise.all([
+    prisma.modelGeneration.count({ where: { shop, status: { in: ['running', 'collecting'] } } }),
+    prisma.modelGeneration.count({ where: { shop, status: 'queued', startedAt: { not: null } } }),
+  ])
+  return active + starting
+}
+
 /**
- * The cost guard: at most LIMITS.running generations in flight and
- * LIMITS.perDay starts (plus automatic retries) in 24 hours. createGeneration
- * runs it under the per-shop lock; the photo presign runs it first, unlocked,
- * so a start that would be refused doesn't leave uploaded photos behind.
+ * The cost guard: at most LIMITS.perDay starts (plus automatic retries) in 24
+ * hours. Concurrency is no longer refused: over LIMITS.running, new rows wait
+ * in the queue (startQueued). The photo presign runs this first, unlocked, so
+ * a start that would be refused doesn't leave uploaded photos behind.
  */
 export async function assertCanStartGeneration(prisma, shop, now = new Date()) {
-  const running = await prisma.modelGeneration.count({ where: { shop, status: { in: ACTIVE_STATUSES } } })
-  if (running >= LIMITS.running) {
-    throw tagged('TOO_MANY_RUNNING', `shop already has ${running} generations running`)
-  }
   const since = new Date(now.getTime() - DAY_MS)
   const [started, autoRetries] = await Promise.all([
     prisma.modelGeneration.count({ where: { shop, createdAt: { gte: since } } }),
@@ -105,7 +110,10 @@ export async function getAllowance(prisma, shop, planName) {
 
 /** The shape the admin UI sees. Internal states collapse to what a merchant can act on. */
 export function toClientGeneration(generation) {
-  const status = ['queued', 'collecting'].includes(generation.status) ? 'running' : generation.status
+  const waiting = generation.status === 'queued' && !generation.startedAt
+  const status = waiting
+    ? 'queued'
+    : ['queued', 'collecting'].includes(generation.status) ? 'running' : generation.status
   return {
     id: generation.id,
     status,
@@ -170,13 +178,27 @@ export async function createGeneration(prisma, {
 
     await assertCanStartGeneration(tx, shop, now)
 
+    const startNow = (await slotsInUse(tx, shop)) < LIMITS.running
     const created = await tx.modelGeneration.create({
-      data: { shop, shopGid, photoRefs: refs, photoSetId, retryIndex, ...source, status: 'queued', createdAt: now },
+      data: {
+        shop, shopGid, photoRefs: refs, photoSetId, retryIndex, ...source,
+        status: 'queued', startedAt: startNow ? now : null, createdAt: now,
+      },
     })
     return { generation: created, parent: parentRow }
   })
 
-  // Slow network call: outside the transaction.
+  // Waiting for a slot: startQueued starts it when one frees up.
+  if (!generation.startedAt) return generation
+  const result = await startRow(prisma, generation, now)
+  // The unsaved result is only thrown away once its replacement is running.
+  if (result.status === 'running' && parent?.status === 'ready') await discardGeneration(prisma, shop, parent.id)
+  return result
+}
+
+// Slow network call: never inside a transaction. Failing to reach OpenAI is
+// not an exception: the row comes back `failed` (free).
+async function startRow(prisma, generation, now) {
   let providerJobId
   try {
     const started = await startGeneration({
@@ -191,15 +213,37 @@ export async function createGeneration(prisma, {
       data: { status: 'failed', error: 'start_failed' },
     })
   }
-
   // A database error here must surface, not mark a live OpenAI job as failed.
-  const running = await prisma.modelGeneration.update({
+  return prisma.modelGeneration.update({
     where: { id: generation.id },
     data: { status: 'running', providerJobId, startedAt: now },
   })
-  // The unsaved result is only thrown away once its replacement is running.
-  if (parent?.status === 'ready') await discardGeneration(prisma, shop, parent.id)
-  return running
+}
+
+/**
+ * Start waiting rows, oldest first, while the shop has free slots. Each row is
+ * claimed by setting startedAt (conditional on it still being null), so the
+ * webhook and a page poll can't start the same row twice.
+ * @returns {Promise<number>} how many rows were started
+ */
+export async function startQueued(prisma, shop, now = new Date()) {
+  let started = 0
+  while ((await slotsInUse(prisma, shop)) < LIMITS.running) {
+    const waiting = await prisma.modelGeneration.findMany({
+      where: { shop, status: 'queued', startedAt: null },
+      orderBy: { createdAt: 'desc' },
+    })
+    const next = waiting.at(-1)
+    if (!next) break
+    const claim = await prisma.modelGeneration.updateMany({
+      where: { id: next.id, status: 'queued', startedAt: null },
+      data: { startedAt: now },
+    })
+    if (claim.count === 0) continue
+    await startRow(prisma, { ...next, startedAt: now }, now)
+    started += 1
+  }
+  return started
 }
 
 /** Throw away an unsaved result (free). Photos stay: a later retry reuses them. */
@@ -270,7 +314,7 @@ export async function advanceGeneration(prisma, generation, now = new Date()) {
 
   const ageMs = now.getTime() - new Date(generation.startedAt).getTime()
   // Past this age a job that still can't be checked or collected is given up
-  // on, so it can't hold one of the shop's two running slots forever.
+  // on, so it can't hold one of the shop's running slots forever.
   const abandoned = ageMs > 2 * LIMITS.timeoutMs
 
   let result
@@ -336,7 +380,15 @@ export async function advanceGeneration(prisma, generation, now = new Date()) {
 export async function advanceByProviderJob(prisma, providerJobId, now = new Date()) {
   const generation = await prisma.modelGeneration.findFirst({ where: { providerJobId, status: 'running' } })
   if (!generation) return null
-  return advanceGeneration(prisma, generation, now)
+  const advanced = await advanceGeneration(prisma, generation, now)
+  if (advanced?.status !== 'running') {
+    try {
+      await startQueued(prisma, generation.shop, now)
+    } catch (error) {
+      console.error('AI generation queue start failed', generation.shop, error)
+    }
+  }
+  return advanced
 }
 
 // A generation's ModelAsset has the generation's id, so the asset a crashed
@@ -547,6 +599,13 @@ export async function listGenerations(prisma, shop, now = new Date()) {
     data: { status: 'running' },
   })
 
+  // A crash between claiming a queued row and starting it leaves it holding a
+  // slot forever; after 5 minutes give up on it (free).
+  await prisma.modelGeneration.updateMany({
+    where: { shop, status: 'queued', startedAt: { lt: new Date(now.getTime() - LIMITS.stuckMs) } },
+    data: { status: 'failed', error: 'start_failed' },
+  })
+
   await settleStuckSaves(prisma, shop, now)
 
   const running = await prisma.modelGeneration.findMany({ where: { shop, status: 'running' } })
@@ -556,6 +615,12 @@ export async function listGenerations(prisma, shop, now = new Date()) {
     } catch (error) {
       console.error('AI generation advance failed', generation.id, error)
     }
+  }
+
+  try {
+    await startQueued(prisma, shop, now)
+  } catch (error) {
+    console.error('AI generation queue start failed', shop, error)
   }
 
   const unreported = await prisma.modelGeneration.findMany({

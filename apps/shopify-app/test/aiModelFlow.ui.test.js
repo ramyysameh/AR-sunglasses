@@ -69,10 +69,8 @@ describe('generationView', () => {
     expect(view.actions).toEqual([])
   })
 
-  it('shows queued the same as running', () => {
-    expect(generationView({ status: 'queued', retriesLeft: 3 })).toEqual(
-      generationView({ status: 'running', retriesLeft: 3 }),
-    )
+  it('says a queued model is waiting for a free slot', () => {
+    expect(generationView({ status: 'queued', retriesLeft: 3 })).toMatchObject({ label: expect.stringMatching(/Waiting to start/), actions: [] })
   })
 
   it('never shows a raw status for an unknown one', () => {

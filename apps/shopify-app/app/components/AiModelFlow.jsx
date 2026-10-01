@@ -63,6 +63,7 @@ export function generationView(generation) {
   const retry = generation.retriesLeft > 0 ? ['retry'] : []
   switch (generation.status) {
     case 'queued':
+      return { label: 'Waiting to start. It begins when another model finishes.', tone: 'neutral', actions: [] }
     case 'running':
       return { label: 'Generating… this takes a few minutes. You can leave this page.', tone: 'info', actions: [] }
     case 'ready':

@@ -116,9 +116,10 @@ describe('aiGenerationEnabled', () => {
 })
 
 describe('toClientGeneration', () => {
-  it('folds queued and collecting into running and only exposes a preview when ready', () => {
+  it('folds a starting row and collecting into running, keeps a waiting row queued, and only exposes a preview when ready', () => {
     const base = { id: 'g1', error: null, retryIndex: 1, calibration: { confidence: 0.9 }, paid: null, modelAssetId: null, createdAt: NOW }
-    expect(generations.toClientGeneration({ ...base, status: 'queued' }).status).toBe('running')
+    expect(generations.toClientGeneration({ ...base, status: 'queued', startedAt: NOW }).status).toBe('running')
+    expect(generations.toClientGeneration({ ...base, status: 'queued', startedAt: null }).status).toBe('queued')
     expect(generations.toClientGeneration({ ...base, status: 'collecting' }).status).toBe('running')
     expect(generations.toClientGeneration({ ...base, status: 'ready' })).toEqual({
       id: 'g1', status: 'ready', error: null, retriesLeft: 2, previewUrl: '/generations/g1.glb',
@@ -168,11 +169,12 @@ describe('createGeneration', () => {
     expect(deps.start).not.toHaveBeenCalled()
   })
 
-  it('refuses a third concurrent generation', async () => {
+  it('queues a sixth concurrent generation instead of refusing it', async () => {
     const prisma = createFakePrisma()
-    await seed(prisma, ['running', 'collecting'])
-    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW }))
-      .rejects.toMatchObject({ code: 'TOO_MANY_RUNNING' })
+    await seed(prisma, ['running', 'running', 'running', 'running', 'collecting'], { startedAt: NOW })
+    const g = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW })
+    expect(g).toMatchObject({ status: 'queued', startedAt: null })
+    expect(deps.start).not.toHaveBeenCalled()
   })
 
   it('counts starts and automatic retries in the last 24 hours, ignoring older rows', async () => {
@@ -223,11 +225,22 @@ describe('createGeneration', () => {
 
   it('keeps a ready parent (and its GLB) when the guard refuses the retry', async () => {
     const prisma = createFakePrisma()
+    const parent = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/p.glb', createdAt: NOW }) })
+    deps.objects.set('generations/p.glb', Buffer.from('p'))
+    await seed(prisma, Array(19).fill('failed'), { createdAt: NOW, photoSetId: 'other' })
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: parent.id, now: NOW }))
+      .rejects.toMatchObject({ code: 'DAILY_LIMIT' })
+    expect((await prisma.modelGeneration.findUnique({ where: { id: parent.id } })).status).toBe('ready')
+    expect(deps.objects.has('generations/p.glb')).toBe(true)
+  })
+
+  it('keeps a ready parent while its retry waits for a slot', async () => {
+    const prisma = createFakePrisma()
     const parent = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/p.glb' }) })
     deps.objects.set('generations/p.glb', Buffer.from('p'))
-    await seed(prisma, ['running', 'running'])
-    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: parent.id, now: NOW }))
-      .rejects.toMatchObject({ code: 'TOO_MANY_RUNNING' })
+    await seed(prisma, Array(5).fill('running'), { startedAt: NOW, photoSetId: 'busy' })
+    const g = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: parent.id, now: NOW })
+    expect(g).toMatchObject({ status: 'queued', startedAt: null })
     expect((await prisma.modelGeneration.findUnique({ where: { id: parent.id } })).status).toBe('ready')
     expect(deps.objects.has('generations/p.glb')).toBe(true)
   })
@@ -300,11 +313,11 @@ describe('isShopPhotoRef', () => {
 })
 
 describe('assertCanStartGeneration', () => {
-  it('passes under the limits and refuses with the same codes as create', async () => {
+  it('passes under the daily limit however many are running, and refuses past it', async () => {
     const prisma = createFakePrisma()
     await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW)).resolves.toBeUndefined()
-    await seed(prisma, ['running', 'queued'])
-    await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW)).rejects.toMatchObject({ code: 'TOO_MANY_RUNNING' })
+    await seed(prisma, Array(6).fill('running'), { startedAt: NOW })
+    await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW)).resolves.toBeUndefined()
 
     const busy = createFakePrisma()
     await seed(busy, Array(20).fill('failed'), { createdAt: new Date(NOW.getTime() - 60_000) })
@@ -1032,5 +1045,81 @@ describe('product-sourced generations', () => {
     deps.saveCalibratedModel.mockResolvedValue({ assetId: g.id })
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
       .resolves.toEqual({ assetId: g.id, paid: false, productId: 'gid://shopify/Product/42', productHandle: 'gripz-pelmo' })
+  })
+})
+
+describe('start queue', () => {
+  const t = (min) => new Date(NOW.getTime() - min * 60_000)
+
+  it('starts up to 5 at once and queues the rest without calling OpenAI', async () => {
+    const prisma = createFakePrisma()
+    deps.start.mockResolvedValue({ providerJobId: 'resp_x' })
+    for (let i = 0; i < 5; i += 1) {
+      await prisma.modelGeneration.create({ data: row({ status: 'running', startedAt: NOW, photoSetId: `s${i}` }) })
+    }
+    const g = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW })
+    expect(g.status).toBe('queued')
+    expect(g.startedAt).toBeNull()
+    expect(deps.start).not.toHaveBeenCalled()
+    expect(generations.toClientGeneration(g).status).toBe('queued')
+  })
+
+  it('counts a row that is mid-start as holding a slot', async () => {
+    const prisma = createFakePrisma()
+    for (let i = 0; i < 4; i += 1) {
+      await prisma.modelGeneration.create({ data: row({ status: 'running', startedAt: NOW, photoSetId: `s${i}` }) })
+    }
+    await prisma.modelGeneration.create({ data: row({ status: 'queued', startedAt: NOW, photoSetId: 'starting' }) })
+    const g = await generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW })
+    expect(g.status).toBe('queued')
+    expect(g.startedAt).toBeNull()
+  })
+
+  it('startQueued starts the oldest waiting rows while slots are free', async () => {
+    const prisma = createFakePrisma()
+    deps.start.mockResolvedValue({ providerJobId: 'resp_q' })
+    for (let i = 0; i < 3; i += 1) {
+      await prisma.modelGeneration.create({ data: row({ status: 'running', startedAt: NOW, photoSetId: `s${i}` }) })
+    }
+    const older = await prisma.modelGeneration.create({ data: row({ status: 'queued', createdAt: t(3), photoSetId: 'q1' }) })
+    const middle = await prisma.modelGeneration.create({ data: row({ status: 'queued', createdAt: t(2), photoSetId: 'q2' }) })
+    const newest = await prisma.modelGeneration.create({ data: row({ status: 'queued', createdAt: t(1), photoSetId: 'q3' }) })
+    expect(await generations.startQueued(prisma, SHOP, NOW)).toBe(2)
+    expect((await prisma.modelGeneration.findUnique({ where: { id: older.id } })).status).toBe('running')
+    expect((await prisma.modelGeneration.findUnique({ where: { id: middle.id } })).status).toBe('running')
+    expect((await prisma.modelGeneration.findUnique({ where: { id: newest.id } })).status).toBe('queued')
+  })
+
+  it('a queued row whose start fails is failed, free', async () => {
+    const prisma = createFakePrisma()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    deps.start.mockRejectedValue(new Error('openai down'))
+    const q = await prisma.modelGeneration.create({ data: row({ status: 'queued', photoSetId: 'q' }) })
+    await generations.startQueued(prisma, SHOP, NOW)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: q.id } })).toMatchObject({ status: 'failed', error: 'start_failed' })
+  })
+
+  it('fails a row stuck mid-start for over 5 minutes so it frees its slot', async () => {
+    const prisma = createFakePrisma()
+    const stuck = await prisma.modelGeneration.create({ data: row({ status: 'queued', startedAt: t(6), photoSetId: 'x' }) })
+    await generations.listGenerations(prisma, SHOP, NOW)
+    expect(await prisma.modelGeneration.findUnique({ where: { id: stuck.id } })).toMatchObject({ status: 'failed', error: 'start_failed' })
+  })
+
+  it('listGenerations starts waiting rows', async () => {
+    const prisma = createFakePrisma()
+    deps.start.mockResolvedValue({ providerJobId: 'resp_l' })
+    const q = await prisma.modelGeneration.create({ data: row({ status: 'queued', photoSetId: 'q' }) })
+    await generations.listGenerations(prisma, SHOP, NOW)
+    expect((await prisma.modelGeneration.findUnique({ where: { id: q.id } })).status).toBe('running')
+  })
+
+  it('still refuses past the daily limit, counting waiting rows', async () => {
+    const prisma = createFakePrisma()
+    for (let i = 0; i < 20; i += 1) {
+      await prisma.modelGeneration.create({ data: row({ status: 'queued', createdAt: t(10), photoSetId: `d${i}` }) })
+    }
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW }))
+      .rejects.toMatchObject({ code: 'DAILY_LIMIT' })
   })
 })
