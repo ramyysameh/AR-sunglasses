@@ -66,3 +66,29 @@ describe('presignObjectRead', () => {
     expect(last.options).toEqual({ expiresIn: 3600 })
   })
 })
+
+describe('newPhotoRef', () => {
+  it('builds a shop-scoped key with the type extension, and refuses bad shops and types', async () => {
+    const { newPhotoRef } = await import('../app/storage.server.js')
+    expect(newPhotoRef('Gen-Test.myshopify.com', 'image/png')).toMatch(/^generation-photos\/gen-test\.myshopify\.com\/[0-9a-f-]+\.png$/)
+    expect(() => newPhotoRef('evil/../x', 'image/png')).toThrow(expect.objectContaining({ code: 'BAD_PHOTO' }))
+    expect(() => newPhotoRef('gen-test.myshopify.com', 'image/gif')).toThrow(expect.objectContaining({ code: 'BAD_PHOTO' }))
+    expect(() => newPhotoRef('gen-test.myshopify.com', 'constructor')).toThrow(expect.objectContaining({ code: 'BAD_PHOTO' }))
+  })
+})
+
+describe('savePhoto', () => {
+  it('puts the bytes with their content type', async () => {
+    const { S3Client } = await import('@aws-sdk/client-s3')
+    const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({})
+    try {
+      const { savePhoto } = await import('../app/storage.server.js')
+      await savePhoto('generation-photos/a.myshopify.com/x.jpg', Buffer.from('img'), 'image/jpeg')
+      const command = send.mock.calls.at(-1)[0]
+      expect(command.constructor.name).toBe('PutObjectCommand')
+      expect(command.input).toMatchObject({ Key: 'generation-photos/a.myshopify.com/x.jpg', ContentType: 'image/jpeg' })
+    } finally {
+      send.mockRestore()
+    }
+  })
+})
