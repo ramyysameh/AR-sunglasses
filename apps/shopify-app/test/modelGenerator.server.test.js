@@ -17,10 +17,18 @@ function fakeClient({
   fileBytes = Buffer.from('glTF-bytes'),
   listError = null,
   downloadError = null,
+  uploadError = null,
 } = {}) {
-  const calls = { created: [], downloaded: [], listed: [], cancelled: [] }
+  const calls = { created: [], downloaded: [], listed: [], cancelled: [], uploaded: [] }
   return {
     calls,
+    files: {
+      create: async (params) => {
+        if (uploadError) throw uploadError
+        calls.uploaded.push(params)
+        return { id: `file_${calls.uploaded.length}` }
+      },
+    },
     responses: {
       create: async (body) => {
         calls.created.push(body)
@@ -65,7 +73,11 @@ const citedMessage = {
   }],
 }
 
-afterEach(() => setGeneratorClient(null))
+afterEach(() => {
+  setGeneratorClient(null)
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 
 describe('buildGenerationRequest', () => {
   it('asks gpt-6.1-sol, in the background, with the code interpreter and every photo in order', () => {
@@ -80,6 +92,20 @@ describe('buildGenerationRequest', () => {
     expect(parts.filter((p) => p.type === 'input_image').map((p) => p.image_url)).toEqual(['u1', 'u2', 'u3', 'u4'])
   })
 
+  it('keeps logos and asks for a detail inventory', () => {
+    const { instructions } = buildGenerationRequest({ images: ['u1', 'u2', 'u3'] })
+    expect(instructions).not.toMatch(/No logos/)
+    expect(instructions).toMatch(/Logo_1/)
+    expect(instructions).toMatch(/alphaMode MASK/)
+    expect(instructions).toMatch(/inventory/)
+  })
+
+  it('gives the code interpreter the uploaded photo files and says where they are', () => {
+    const body = buildGenerationRequest({ images: ['u1', 'u2', 'u3'], fileIds: ['file_1', 'file_2', 'file_3'] })
+    expect(body.tools).toEqual([{ type: 'code_interpreter', container: { type: 'auto', file_ids: ['file_1', 'file_2', 'file_3'] } }])
+    expect(body.input[0].content.at(-1)).toMatchObject({ type: 'input_text', text: expect.stringMatching(/\/mnt\/data/) })
+  })
+
   it('appends retry feedback as a final text part', () => {
     const body = buildGenerationRequest({ images: ['a', 'b', 'c'], feedback: 'Fix the hinges.' })
     const last = body.input[0].content.at(-1)
@@ -88,11 +114,50 @@ describe('buildGenerationRequest', () => {
 })
 
 describe('startGeneration', () => {
-  it('returns the response id as the provider job id', async () => {
+  const PHOTOS = [
+    'https://bucket.example/generation-photos/s/one.jpg?X-Amz-Signature=x',
+    'https://bucket.example/generation-photos/s/two.png?X-Amz-Signature=x',
+    'https://bucket.example/generation-photos/s/three.webp?X-Amz-Signature=x',
+  ]
+
+  it('uploads each photo as an expiring file and hands the ids to the code interpreter', async () => {
+    const fetched = []
+    vi.stubGlobal('fetch', async (url) => {
+      fetched.push(url)
+      return new Response(Buffer.from('img'))
+    })
     const client = fakeClient()
     setGeneratorClient(client)
-    await expect(startGeneration({ images: ['a', 'b', 'c'] })).resolves.toEqual({ providerJobId: 'resp_1' })
-    expect(client.calls.created).toHaveLength(1)
+    await expect(startGeneration({ images: PHOTOS })).resolves.toEqual({ providerJobId: 'resp_1' })
+    expect(fetched).toEqual(PHOTOS)
+    expect(client.calls.uploaded.map((u) => u.file.name)).toEqual(['photo_1.jpg', 'photo_2.png', 'photo_3.webp'])
+    for (const upload of client.calls.uploaded) {
+      expect(upload.purpose).toBe('user_data')
+      expect(upload.expires_after).toEqual({ anchor: 'created_at', seconds: 86400 })
+    }
+    expect(client.calls.created[0].tools[0].container).toEqual({ type: 'auto', file_ids: ['file_1', 'file_2', 'file_3'] })
+    // The model still sees the photos as images too.
+    expect(client.calls.created[0].input[0].content.filter((p) => p.type === 'input_image')).toHaveLength(3)
+  })
+
+  it('still starts the job, without photo files, when an upload fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal('fetch', async () => new Response(Buffer.from('img')))
+    const client = fakeClient({ uploadError: new Error('upload refused') })
+    setGeneratorClient(client)
+    await expect(startGeneration({ images: PHOTOS })).resolves.toEqual({ providerJobId: 'resp_1' })
+    expect(client.calls.created[0].tools[0].container).toEqual({ type: 'auto' })
+    expect(console.warn).toHaveBeenCalled()
+  })
+
+  it('still starts the job when a photo cannot be downloaded', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal('fetch', async () => new Response('gone', { status: 403 }))
+    const client = fakeClient()
+    setGeneratorClient(client)
+    await expect(startGeneration({ images: PHOTOS })).resolves.toEqual({ providerJobId: 'resp_1' })
+    expect(client.calls.uploaded).toEqual([])
+    expect(client.calls.created[0].tools[0].container).toEqual({ type: 'auto' })
   })
 })
 
@@ -217,6 +282,7 @@ describe('buildGenerationRequest by source', () => {
   })
 
   it('passes the source through startGeneration', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     const client = fakeClient()
     setGeneratorClient(client)
     await startGeneration({ images: ['a', 'b', 'c'], source: 'product' })

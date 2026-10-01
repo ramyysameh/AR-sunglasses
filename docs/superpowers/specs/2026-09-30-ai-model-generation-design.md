@@ -127,7 +127,7 @@ produces a single binary glTF meeting the existing try-on spec:
   the bridge centre and the two hinge points (tags take precedence in
   calibration; auto-anchors are the fallback)
 - temples open at ~90°, the natural worn pose
-- no logos, text, background, or person
+- no background or person (logos and text: see the 2026-10-01 detail addendum)
 - save as `/mnt/data/model.glb` and cite the file in the final answer
 
 **`generations.server.js`**: the job state machine plus business rules.
@@ -317,7 +317,6 @@ confirm dialog and cost guard are our only brakes.
 ## Out of scope (v1)
 
 - Editing a generated model (colour tweaks, re-texturing) in the app.
-- Logos/branding on generated frames.
 - Bulk generation for many products at once.
 - A monthly-resetting allowance or usage caps.
 
@@ -353,3 +352,28 @@ Approved by the owner. "Create with AI" offers two sources: **From a product**
   is told why. The mapping helper is separate from `productActions.server.js`
   on purpose — that file's tests are DB-backed and can't run against the
   shared database.
+
+## Addendum (2026-10-01): details and logos (prompt version 2)
+
+Requested by the owner after the first real model (Gripz Pelmo) came out right
+but without its logo, because v1 told the model to leave logos out.
+
+- **Photos in the container.** The model only *sees* `input_image`s; its Python
+  can't read them. `startGeneration` now downloads each photo (presigned URL,
+  15 s timeout) and uploads it to OpenAI Files (`purpose: user_data`,
+  `expires_after` 24 h, so nothing needs cleaning up) as `photo_1.<ext>`, ...,
+  and passes the ids in `code_interpreter.container.file_ids`. The images are
+  still sent as `input_image`s too. If any download or upload fails, the job
+  starts anyway without files (logged), it just can't crop logos.
+- **Prompt v2.** Before modelling, the model writes an inventory of every
+  visible detail (logos/text, rivets, hinge hardware, accents, colour patterns,
+  lens tint/gradient, bridge, nose pads, temple tips, bevels) and builds each
+  item. Logos and text are cropped from the sharpest photo, background made
+  transparent, and placed as decal quads (`Logo_1`, `Logo_2`, ..., PNG ≤ 512 px,
+  `alphaMode MASK`, 0.3 mm off the surface) — the same decal approach as the
+  hand-built `gripzpelmo.glb`. The frame's shape stays symmetric, its details
+  go only where the photos show them. Colours are measured from pixels;
+  strongly tinted lenses use the top of the alpha range. The final message
+  lists the inventory as built / not built.
+- **Admin list.** A failed attempt is hidden once a newer attempt of the same
+  photo set exists (whatever its status); the latest failure stays visible.
