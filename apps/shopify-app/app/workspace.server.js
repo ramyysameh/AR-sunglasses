@@ -76,7 +76,7 @@ export function workspaceGuide({ assets, mappings, usage }) {
       kind: 'recovery',
       title: 'Turn on try-on in your store',
       detail: 'In the theme editor, click Save.',
-      action: { id: 'theme', href: theme.themeUrl, label: 'Turn on try-on' },
+      action: { id: 'theme', mappingId: theme.id, href: theme.themeUrl, label: 'Turn on try-on' },
     }
   }
   if (usage.atLimit) {

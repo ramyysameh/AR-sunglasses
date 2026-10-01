@@ -281,11 +281,11 @@ export default function Workspace() {
   const visibleMappings = filterWorkspaceMappings(data.mappings, { status, query })
   const hasOperations = data.mappings.length > 0
   const guideAction = data.guide.action
-  const guidedMappingId = guideAction?.id === 'choose-model' || guideAction?.id === 'review-fit'
-    ? guideAction.mappingId
-    : guideAction?.id === 'theme'
-      ? data.mappings.find((mapping) => mapping.themeUrl === guideAction.href)?.id ?? null
-      : null
+  // Every mapping's themeUrl is now the same store-wide embed link, so the
+  // guided row is identified by the id the guide carries, not by its URL.
+  const guidedMappingId = ['choose-model', 'review-fit', 'theme'].includes(guideAction?.id)
+    ? guideAction.mappingId ?? null
+    : null
 
   const openAddTryOn = addTryOnFocusController.open
   const handleGuideAction = (guideAction) => {

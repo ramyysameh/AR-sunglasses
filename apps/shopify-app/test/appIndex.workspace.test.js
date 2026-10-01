@@ -212,9 +212,9 @@ describe('Workspace route composition', () => {
       themeUrl: '/theme-editor',
     }, {
       kind: 'recovery',
-      title: 'Finish storefront setup',
-      detail: 'Lumen',
-      action: { id: 'theme', href: '/theme-editor', label: 'Add to theme' },
+      title: 'Turn on try-on in your store',
+      detail: 'In the theme editor, click Save.',
+      action: { id: 'theme', mappingId: 'theme', href: '/theme-editor', label: 'Turn on try-on' },
     }],
   ])('shows a compact plan route beside disabled Add while preserving the %s guide', (_case, mapping, guide) => {
     const page = render(baseData({
@@ -287,10 +287,28 @@ describe('Workspace route composition', () => {
     expect(harness.modalShow).toHaveBeenCalledWith('workspace-change-model')
   })
 
+  it('marks the guided theme row by id when every row shares the embed URL', () => {
+    const embedUrl = 'https://shop.test/admin/themes/current/editor?context=apps&activateAppId=key%2Ftryon_embed'
+    const page = render(baseData({
+      mappings: [
+        { id: 'first', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset, themeUrl: embedUrl },
+        { id: 'theme', status: 'add-to-theme', product: { title: 'Lumen' }, modelAsset: readyAsset, themeUrl: embedUrl },
+      ],
+      counts: { all: 2, live: 1, needsAttention: 1 },
+      guide: {
+        kind: 'recovery',
+        title: 'Turn on try-on in your store',
+        detail: 'In the theme editor, click Save.',
+        action: { id: 'theme', mappingId: 'theme', href: embedUrl, label: 'Turn on try-on' },
+      },
+    }))
+    expect(findComponent(page, ProductOperationsList).props.guidedMappingId).toBe('theme')
+  })
+
   it.each([
     ['empty', baseData({ assets: [], guide: { kind: 'setup', title: 'Upload your first model', detail: 'Add a ready-to-use eyewear model.', action: { id: 'add-try-on', label: 'Upload model' } } }), { id: 'add-try-on', label: 'Upload model' }],
     ['live', baseData({ mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }], counts: { all: 1, live: 1, needsAttention: 0 }, guide: { kind: 'complete', title: 'Everything is live', detail: '1 product is ready', action: null } }), { id: 'preview', label: 'Preview' }],
-    ['add-to-theme', baseData({ mappings: [{ id: 'theme', status: 'add-to-theme', product: { title: 'Lumen' }, modelAsset: readyAsset, themeUrl: 'https://shop.test/admin/themes/current/editor?previewPath=%2Fproducts%2Flumen&addAppBlockId=key%2Ftryon_button&target=mainSection' }], counts: { all: 1, live: 0, needsAttention: 1 }, guide: { kind: 'recovery', title: 'Finish storefront setup', detail: 'Lumen', action: { id: 'theme', label: 'Add to theme', href: 'https://shop.test/admin/themes/current/editor?previewPath=%2Fproducts%2Flumen&addAppBlockId=key%2Ftryon_button&target=mainSection' } } }), { id: 'theme', label: 'Add to theme', href: 'https://shop.test/admin/themes/current/editor?previewPath=%2Fproducts%2Flumen&addAppBlockId=key%2Ftryon_button&target=mainSection' }],
+    ['add-to-theme', baseData({ mappings: [{ id: 'theme', status: 'add-to-theme', product: { title: 'Lumen' }, modelAsset: readyAsset, themeUrl: 'https://shop.test/admin/themes/current/editor?context=apps&activateAppId=key%2Ftryon_embed' }], counts: { all: 1, live: 0, needsAttention: 1 }, guide: { kind: 'recovery', title: 'Turn on try-on in your store', detail: 'In the theme editor, click Save.', action: { id: 'theme', mappingId: 'theme', label: 'Turn on try-on', href: 'https://shop.test/admin/themes/current/editor?context=apps&activateAppId=key%2Ftryon_embed' } } }), { id: 'theme', mappingId: 'theme', label: 'Turn on try-on', href: 'https://shop.test/admin/themes/current/editor?context=apps&activateAppId=key%2Ftryon_embed' }],
     ['model-issue', baseData({ mappings: [{ id: 'issue', status: 'model-issue', product: { title: 'Willow' }, modelAsset: readyAsset }], counts: { all: 1, live: 0, needsAttention: 1 }, guide: { kind: 'recovery', title: 'A model needs attention', detail: 'Willow', action: { id: 'choose-model', mappingId: 'issue', label: 'Choose model' } } }), { id: 'choose-model', mappingId: 'issue', label: 'Choose model' }],
     ['plan-limit', baseData({ mappings: [{ id: 'live-limit', status: 'live', product: { title: 'Cedar' }, modelAsset: readyAsset }], counts: { all: 1, live: 1, needsAttention: 0 }, usage: { used: 1, limit: 1, atLimit: true, pricingUrl: '/plans' }, guide: { kind: 'recovery', title: 'Your plan limit is reached', detail: 'Upgrade before adding another product.', action: { id: 'plans', label: 'View plans', href: '/plans' } } }), { id: 'plans', label: 'View plans', href: '/plans' }],
   ])('exposes one merchant-safe contextual primary for %s', (_state, data, expected) => {
@@ -309,7 +327,7 @@ describe('Workspace route composition', () => {
   it.each([
     ['empty', baseData(), false],
     ['live', baseData({ mappings: [{ id: 'live', status: 'live', product: { title: 'Aviator' }, modelAsset: readyAsset }], counts: { all: 1, live: 1, needsAttention: 0 }, guide: { kind: 'complete', title: 'Everything is live', detail: '1 product is ready', action: null } })],
-    ['add-to-theme', baseData({ mappings: [{ id: 'theme', status: 'add-to-theme', product: { title: 'Lumen' }, modelAsset: readyAsset, themeUrl: 'https://shop.test/admin/themes/current/editor?previewPath=%2Fproducts%2Flumen&addAppBlockId=key%2Ftryon_button&target=mainSection' }], counts: { all: 1, live: 0, needsAttention: 1 } })],
+    ['add-to-theme', baseData({ mappings: [{ id: 'theme', status: 'add-to-theme', product: { title: 'Lumen' }, modelAsset: readyAsset, themeUrl: 'https://shop.test/admin/themes/current/editor?context=apps&activateAppId=key%2Ftryon_embed' }], counts: { all: 1, live: 0, needsAttention: 1 } })],
     ['model-issue', baseData({ mappings: [{ id: 'issue', status: 'model-issue', product: { title: 'Willow' }, modelAsset: readyAsset }], counts: { all: 1, live: 0, needsAttention: 1 } })],
     ['plan-limit', baseData({ mappings: [{ id: 'limit', status: 'plan-limit', product: { title: 'Cedar' }, modelAsset: readyAsset }], counts: { all: 1, live: 0, needsAttention: 1 }, usage: { used: 1, limit: 1, atLimit: true, pricingUrl: '/plans' } })],
   ])('keeps setup focused and adds operations only when there are mapped products for %s merchants', (_state, data, hasOperations = true) => {
@@ -334,7 +352,7 @@ describe('Workspace route composition', () => {
       status: 'add-to-theme',
       product: { title: 'Lumen' },
       modelAsset: readyAsset,
-      themeUrl: 'https://shop.test/admin/themes/current/editor?previewPath=%2Fproducts%2Flumen&addAppBlockId=key%2Ftryon_button&target=mainSection',
+      themeUrl: 'https://shop.test/admin/themes/current/editor?context=apps&activateAppId=key%2Ftryon_embed',
     }
     const page = render(baseData({ mappings: [mapping], counts: { all: 1, live: 0, needsAttention: 1 } }))
     const list = findComponent(page, ProductOperationsList)
