@@ -221,29 +221,49 @@ async function startRow(prisma, generation, now) {
 }
 
 /**
- * Start waiting rows, oldest first, while the shop has free slots. Each row is
- * claimed by setting startedAt (conditional on it still being null), so the
- * webhook and a page poll can't start the same row twice.
- * @returns {Promise<number>} how many rows were started
+ * Start waiting rows, oldest first, while the shop has free slots. The slot
+ * count, the pick and the claim (startedAt, one row per transaction) happen
+ * under the same per-shop lock createGeneration uses, so two webhooks, or a
+ * webhook and a poll or a create, can't start a row past LIMITS.running. The
+ * OpenAI call (startRow) stays outside the transaction.
+ * @returns {Promise<number>} how many rows reached running
  */
 export async function startQueued(prisma, shop, now = new Date()) {
   let started = 0
-  while ((await slotsInUse(prisma, shop)) < LIMITS.running) {
-    const waiting = await prisma.modelGeneration.findMany({
-      where: { shop, status: 'queued', startedAt: null },
-      orderBy: { createdAt: 'desc' },
+  for (;;) {
+    const next = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${shop}))`
+      if ((await slotsInUse(tx, shop)) >= LIMITS.running) return null
+      // Newest first, take the last: the oldest waiting row (the fake Prisma
+      // only supports a descending createdAt order).
+      const waiting = await tx.modelGeneration.findMany({
+        where: { shop, status: 'queued', startedAt: null },
+        orderBy: { createdAt: 'desc' },
+      })
+      const oldest = waiting.at(-1)
+      if (!oldest) return null
+      await tx.modelGeneration.update({ where: { id: oldest.id }, data: { startedAt: now } })
+      return { ...oldest, startedAt: now }
     })
-    const next = waiting.at(-1)
     if (!next) break
-    const claim = await prisma.modelGeneration.updateMany({
-      where: { id: next.id, status: 'queued', startedAt: null },
-      data: { startedAt: now },
-    })
-    if (claim.count === 0) continue
-    await startRow(prisma, { ...next, startedAt: now }, now)
+    const result = await startRow(prisma, next, now)
+    if (result.status !== 'running') continue
     started += 1
+    // A retry that waited discards the result it replaces only now that it runs.
+    if (next.retryIndex > 0) await discardSupersededParents(prisma, shop, next)
   }
   return started
+}
+
+async function discardSupersededParents(prisma, shop, started) {
+  try {
+    const parents = await prisma.modelGeneration.findMany({
+      where: { shop, photoSetId: started.photoSetId, status: 'ready', createdAt: { lt: started.createdAt } },
+    })
+    for (const parent of parents) await discardGeneration(prisma, shop, parent.id)
+  } catch (error) {
+    console.error('AI generation parent discard failed', started.id, error)
+  }
 }
 
 /** Throw away an unsaved result (free). Photos stay: a later retry reuses them. */

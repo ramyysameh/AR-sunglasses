@@ -569,6 +569,65 @@ describe('advanceByProviderJob', () => {
     await expect(generations.advanceByProviderJob(prisma, 'resp_live', NOW)).resolves.toMatchObject({ status: 'ready' })
     await expect(generations.advanceByProviderJob(prisma, 'resp_unknown', NOW)).resolves.toBeNull()
   })
+
+  describe('starting waiting rows', () => {
+    async function withWaiting(prisma) {
+      await prisma.modelGeneration.create({ data: row({ status: 'running', providerJobId: 'resp_live', startedAt: NOW }) })
+      const waiting = await prisma.modelGeneration.create({ data: row({ status: 'queued', photoSetId: 'w' }) })
+      deps.start.mockResolvedValue({ providerJobId: 'resp_next' })
+      return waiting
+    }
+    const statusOf = async (prisma, g) => (await prisma.modelGeneration.findUnique({ where: { id: g.id } })).status
+    const GOOD = { needsManual: false, confidence: null, fitMetadata: { provenance: { source: 'tagged' } } }
+
+    it('starts a waiting row when the advanced row becomes ready', async () => {
+      const prisma = createFakePrisma()
+      const waiting = await withWaiting(prisma)
+      deps.check.mockResolvedValue({ state: 'done', glbBytes: Buffer.from('glb') })
+      deps.calibrate.mockResolvedValue(GOOD)
+      await expect(generations.advanceByProviderJob(prisma, 'resp_live', NOW)).resolves.toMatchObject({ status: 'ready' })
+      expect(await statusOf(prisma, waiting)).toBe('running')
+    })
+
+    it('starts a waiting row when the advanced row fails', async () => {
+      const prisma = createFakePrisma()
+      const waiting = await withWaiting(prisma)
+      deps.check.mockResolvedValue({ state: 'failed', error: 'no_glb_output' })
+      // Its automatic retry is already spent, so it fails and frees the slot.
+      await prisma.modelGeneration.updateMany({ where: { providerJobId: 'resp_live' }, data: { autoRetried: true } })
+      await expect(generations.advanceByProviderJob(prisma, 'resp_live', NOW)).resolves.toMatchObject({ status: 'failed' })
+      expect(await statusOf(prisma, waiting)).toBe('running')
+    })
+
+    it('does not start waiting rows when the row stays running (automatic retry)', async () => {
+      const prisma = createFakePrisma()
+      const waiting = await withWaiting(prisma)
+      // The other 4 slots are busy, so only a freed slot could let the waiting row in.
+      for (let i = 0; i < 4; i += 1) {
+        await prisma.modelGeneration.create({ data: row({ status: 'running', startedAt: NOW, photoSetId: `b${i}` }) })
+      }
+      deps.check.mockResolvedValue({ state: 'failed', error: 'no_glb_output' })
+      deps.start.mockResolvedValue({ providerJobId: 'resp_retry' })
+      await expect(generations.advanceByProviderJob(prisma, 'resp_live', NOW)).resolves.toMatchObject({ status: 'running', autoRetried: true })
+      expect(await statusOf(prisma, waiting)).toBe('queued')
+      expect(deps.start).toHaveBeenCalledTimes(1)
+    })
+
+    it('logs a startQueued error without rejecting', async () => {
+      const prisma = createFakePrisma()
+      await withWaiting(prisma)
+      deps.check.mockResolvedValue({ state: 'done', glbBytes: Buffer.from('glb') })
+      deps.calibrate.mockResolvedValue(GOOD)
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        prisma.$transaction = vi.fn().mockRejectedValue(new Error('db down'))
+        await expect(generations.advanceByProviderJob(prisma, 'resp_live', NOW)).resolves.toMatchObject({ status: 'ready' })
+        expect(logged).toHaveBeenCalledWith('AI generation queue start failed', SHOP, expect.any(Error))
+      } finally {
+        logged.mockRestore()
+      }
+    })
+  })
 })
 
 describe('saveGeneration', () => {
@@ -1092,11 +1151,61 @@ describe('start queue', () => {
 
   it('a queued row whose start fails is failed, free', async () => {
     const prisma = createFakePrisma()
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    deps.start.mockRejectedValue(new Error('openai down'))
-    const q = await prisma.modelGeneration.create({ data: row({ status: 'queued', photoSetId: 'q' }) })
-    await generations.startQueued(prisma, SHOP, NOW)
-    expect(await prisma.modelGeneration.findUnique({ where: { id: q.id } })).toMatchObject({ status: 'failed', error: 'start_failed' })
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      deps.start.mockRejectedValue(new Error('openai down'))
+      const q = await prisma.modelGeneration.create({ data: row({ status: 'queued', photoSetId: 'q' }) })
+      expect(await generations.startQueued(prisma, SHOP, NOW)).toBe(0)
+      expect(await prisma.modelGeneration.findUnique({ where: { id: q.id } })).toMatchObject({ status: 'failed', error: 'start_failed' })
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
+  it('startQueued takes the per-shop lock for each row it considers', async () => {
+    const prisma = createFakePrisma()
+    deps.start.mockResolvedValue({ providerJobId: 'resp_lock' })
+    await prisma.modelGeneration.create({ data: row({ status: 'queued', photoSetId: 'q' }) })
+    expect(await generations.startQueued(prisma, SHOP, NOW)).toBe(1)
+    expect(prisma.locks.length).toBeGreaterThanOrEqual(1)
+    expect(prisma.locks.every((l) => l.length === 1 && l[0] === SHOP)).toBe(true)
+  })
+
+  it('startQueued discards the ready parent of a retry that waited', async () => {
+    const prisma = createFakePrisma()
+    deps.start.mockResolvedValue({ providerJobId: 'resp_retry' })
+    deps.objects.set('generations/p.glb', Buffer.from('p'))
+    const parent = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/p.glb', createdAt: t(5) }) })
+    const retry = await prisma.modelGeneration.create({ data: row({ status: 'queued', retryIndex: 1, createdAt: t(1) }) })
+    expect(await generations.startQueued(prisma, SHOP, NOW)).toBe(1)
+    expect((await prisma.modelGeneration.findUnique({ where: { id: retry.id } })).status).toBe('running')
+    expect((await prisma.modelGeneration.findUnique({ where: { id: parent.id } })).status).toBe('discarded')
+    expect(deps.objects.has('generations/p.glb')).toBe(false)
+  })
+
+  it('a failed parent discard is logged and does not undo the start', async () => {
+    const prisma = createFakePrisma()
+    deps.start.mockResolvedValue({ providerJobId: 'resp_retry' })
+    await prisma.modelGeneration.create({ data: row({ status: 'ready', createdAt: t(5) }) })
+    const retry = await prisma.modelGeneration.create({ data: row({ status: 'queued', retryIndex: 1, createdAt: t(1) }) })
+    prisma.modelGeneration.updateMany = vi.fn().mockRejectedValue(new Error('db blip'))
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(await generations.startQueued(prisma, SHOP, NOW)).toBe(1)
+      expect((await prisma.modelGeneration.findUnique({ where: { id: retry.id } })).status).toBe('running')
+      expect(logged).toHaveBeenCalledWith('AI generation parent discard failed', retry.id, expect.any(Error))
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
+  it('startQueued leaves other photo sets alone for a first attempt', async () => {
+    const prisma = createFakePrisma()
+    deps.start.mockResolvedValue({ providerJobId: 'resp_first' })
+    const other = await prisma.modelGeneration.create({ data: row({ status: 'ready', photoSetId: 'other', createdAt: t(5) }) })
+    await prisma.modelGeneration.create({ data: row({ status: 'queued', photoSetId: 'q', createdAt: t(1) }) })
+    expect(await generations.startQueued(prisma, SHOP, NOW)).toBe(1)
+    expect((await prisma.modelGeneration.findUnique({ where: { id: other.id } })).status).toBe('ready')
   })
 
   it('fails a row stuck mid-start for over 5 minutes so it frees its slot', async () => {
