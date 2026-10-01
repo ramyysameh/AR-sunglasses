@@ -60,9 +60,9 @@ describe('fetchProductImages', () => {
 
   it('refuses malformed ids without calling Shopify, and missing products', async () => {
     const admin = adminFor(null)
-    await expect(fetchProductImages(admin, 'gid://shopify/Order/1')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(fetchProductImages(admin, 'gid://shopify/Order/1')).rejects.toMatchObject({ code: 'PRODUCT_NOT_FOUND' })
     expect(admin.calls).toHaveLength(0)
-    await expect(fetchProductImages(admin, PRODUCT)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(fetchProductImages(admin, PRODUCT)).rejects.toMatchObject({ code: 'PRODUCT_NOT_FOUND' })
   })
 })
 

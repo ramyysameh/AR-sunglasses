@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   enabled: true,
   gen: {},
   presign: vi.fn(),
+  deleteGlb: vi.fn(),
   unwrap: vi.fn(),
   glb: new Map(),
   rows: new Map(),
@@ -36,6 +37,7 @@ vi.mock('../app/db.server.js', () => ({
 vi.mock('../app/storage.server.js', () => ({
   presignPhotoUpload: (...args) => h.presign(...args),
   readModelGlb: async (key) => h.glb.get(key) ?? null,
+  deleteModelGlb: (...args) => h.deleteGlb(...args),
 }))
 vi.mock('../app/modelGenerator.server.js', () => ({
   unwrapWebhook: (...args) => h.unwrap(...args),
@@ -76,6 +78,7 @@ beforeEach(() => {
   h.enabled = true
   h.gen = { list: vi.fn(), create: vi.fn(), save: vi.fn(), discard: vi.fn(), advance: vi.fn(), guard: vi.fn() }
   h.presign.mockReset()
+  h.deleteGlb.mockReset()
   h.unwrap.mockReset()
   h.glb.clear()
   h.rows.clear()
@@ -211,9 +214,12 @@ describe('product source', () => {
   })
 
   it('maps product-sourced saves and leaves upload saves alone', async () => {
-    h.gen.save.mockResolvedValue({ assetId: 'a1', paid: false, productId: 'gid://shopify/Product/42', productHandle: 'gripz' })
+    h.gen.save.mockResolvedValue({ assetId: 'a1', paid: true, productId: 'gid://shopify/Product/42', productHandle: 'gripz' })
     h.mapping.mockResolvedValue({ mapped: false, reason: 'product_limit' })
-    const body = await (await api.action(post({ intent: 'save', generationId: 'g1' }))).json()
+    const res = await api.action(post({ intent: 'save', generationId: 'g1', acceptCharge: 'true' }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ assetId: 'a1', paid: true })
     expect(body.mapping).toEqual({ mapped: false, reason: 'product_limit' })
     expect(h.mapping.mock.calls[0][0]).toMatchObject({ shop: h.shop, planName: 'Starter', productId: 'gid://shopify/Product/42', productHandle: 'gripz', modelAssetId: 'a1' })
 
@@ -225,9 +231,40 @@ describe('product source', () => {
   })
 
   it('maps product errors to merchant copy', async () => {
-    h.products.fetch.mockRejectedValue(Object.assign(new Error('x'), { code: 'NOT_FOUND' }))
+    h.products.fetch.mockRejectedValue(Object.assign(new Error('x'), { code: 'PRODUCT_NOT_FOUND' }))
     const res = await api.action(post({ intent: 'product-images', productId: 'gid://shopify/Product/1' }))
     expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ error: 'That product is no longer available. Pick another one.', code: 'PRODUCT_NOT_FOUND' })
+  })
+
+  it('refuses create-from-product at the guard before importing anything', async () => {
+    h.gen.guard.mockRejectedValue(tagged('DAILY_LIMIT'))
+    const res = await api.action(post({ intent: 'create-from-product', productId: 'gid://shopify/Product/42', imageIds: JSON.stringify(['m1', 'm2', 'm3']) }))
+    expect(res.status).toBe(429)
+    expect(h.products.import).not.toHaveBeenCalled()
+  })
+
+  it('deletes the imported photos when the generation cannot be created', async () => {
+    h.products.import.mockResolvedValue({ photoRefs: ['r1', 'r2', 'r3'], productId: 'gid://shopify/Product/42', title: 'GRIPZ', handle: 'gripz' })
+    h.gen.create.mockRejectedValue(tagged('TOO_MANY_RUNNING'))
+    const res = await api.action(post({ intent: 'create-from-product', productId: 'gid://shopify/Product/42', imageIds: JSON.stringify(['m1', 'm2', 'm3']) }))
+    expect(res.status).toBe(429)
+    expect(h.deleteGlb.mock.calls.map((c) => c[0])).toEqual(['r1', 'r2', 'r3'])
+  })
+
+  it('still rethrows the create error when a cleanup delete fails', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      h.products.import.mockResolvedValue({ photoRefs: ['r1', 'r2'], productId: 'gid://shopify/Product/42', title: 'GRIPZ', handle: 'gripz' })
+      h.gen.create.mockRejectedValue(tagged('TOO_MANY_RUNNING'))
+      h.deleteGlb.mockRejectedValueOnce(new Error('s3 down'))
+      const res = await api.action(post({ intent: 'create-from-product', productId: 'gid://shopify/Product/42', imageIds: JSON.stringify(['m1', 'm2', 'm3']) }))
+      expect(res.status).toBe(429)
+      expect(h.deleteGlb).toHaveBeenCalledTimes(2)
+      expect(logged).toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
   })
 })
 

@@ -1,7 +1,7 @@
 import { authenticate } from '../shopify.server'
 import prisma from '../db.server'
 import { getActivePlanName } from '../billing.server'
-import { presignPhotoUpload } from '../storage.server'
+import { presignPhotoUpload, deleteModelGlb } from '../storage.server'
 import {
   aiGenerationEnabled,
   assertCanStartGeneration,
@@ -23,6 +23,7 @@ const STATUS_BY_CODE = {
   BAD_PHOTOS: 400,
   BAD_PHOTO: 400,
   NOT_FOUND: 404,
+  PRODUCT_NOT_FOUND: 404,
   NOT_RETRYABLE: 409,
   NOT_READY: 409,
   RETRY_LIMIT: 409,
@@ -36,6 +37,7 @@ const MESSAGES = {
   BAD_PHOTOS: 'Choose 3 or 4 photos (front and sides work best).',
   BAD_PHOTO: "One of the photos couldn't be used. Use JPG, PNG or WebP photos of 10 MB or less, or choose different product photos.",
   NOT_FOUND: 'That model is no longer available. Refresh the page.',
+  PRODUCT_NOT_FOUND: 'That product is no longer available. Pick another one.',
   NOT_RETRYABLE: "This model can't be regenerated right now.",
   NOT_READY: 'This model is still being worked on. Refresh the page.',
   RETRY_LIMIT: "You've used all 3 retries for these photos. Upload a new set to try again.",
@@ -147,15 +149,28 @@ export const action = async ({ request }) => {
         productId: form.get('productId')?.toString(),
         imageIds: parseJson(form.get('imageIds')),
       })
-      const generation = await createGeneration(prisma, {
-        shop,
-        shopGid,
-        photoRefs: imported.photoRefs,
-        photoSource: 'product',
-        productId: imported.productId,
-        productTitle: imported.title,
-        productHandle: imported.handle,
-      })
+      let generation
+      try {
+        generation = await createGeneration(prisma, {
+          shop,
+          shopGid,
+          photoRefs: imported.photoRefs,
+          photoSource: 'product',
+          productId: imported.productId,
+          productTitle: imported.title,
+          productHandle: imported.handle,
+        })
+      } catch (error) {
+        // The copied photos belong to no generation; don't leave them orphaned.
+        for (const ref of imported.photoRefs) {
+          try {
+            await deleteModelGlb(ref)
+          } catch (cleanupError) {
+            console.error('Failed to clean up imported product photo', ref, cleanupError)
+          }
+        }
+        throw error
+      }
       return Response.json({ generation: toClientGeneration(generation) })
     }
 

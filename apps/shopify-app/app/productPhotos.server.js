@@ -37,11 +37,11 @@ export const PRODUCT_IMAGES_QUERY = `#graphql
 
 export async function fetchProductImages(admin, productId) {
   if (typeof productId !== 'string' || !PRODUCT_GID.test(productId)) {
-    throw tagged('NOT_FOUND', `not a product id: ${String(productId)}`)
+    throw tagged('PRODUCT_NOT_FOUND', `not a product id: ${String(productId)}`)
   }
   const res = await admin.graphql(PRODUCT_IMAGES_QUERY, { variables: { id: productId } })
   const product = (await res.json())?.data?.product
-  if (!product) throw tagged('NOT_FOUND', `product ${productId} not found`)
+  if (!product) throw tagged('PRODUCT_NOT_FOUND', `product ${productId} not found`)
   const images = (product.media?.nodes ?? [])
     .filter((node) => node?.mediaContentType === 'IMAGE' && node.image?.url)
     .map((node) => ({
