@@ -51,6 +51,10 @@ describe('Help loader', () => {
     expect(url.searchParams.get('addAppBlockId')).toBe(
       'be1db9d64c7c617dcd67f6add58f4824/tryon_button',
     )
+
+    const embed = new URL(result.embedUrl)
+    expect(embed.origin).toBe('https://help-recovery.myshopify.com')
+    expect(embed.searchParams.get('context')).toBe('apps')
   })
 })
 
@@ -58,6 +62,7 @@ describe('Help recovery actions', () => {
   it('renders every recovery destination with the required browsing target', () => {
     routeState.loaderData = {
       themeEditorUrl: 'https://admin.shopify.com/store/help-recovery/themes/current/editor?template=product',
+      embedUrl: 'https://admin.shopify.com/store/help-recovery/themes/current/editor?context=apps',
     }
 
     const html = renderToStaticMarkup(React.createElement(HelpPage))
@@ -78,7 +83,9 @@ describe('Help recovery actions', () => {
     expect(html).not.toMatch(/<a[^>]+href="https:\/\/admin\.shopify\.com[^>]*>/)
     expect(html.match(/icon="external"/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
     expect(html).toContain('accessibilityLabel="Open theme editor to adjust glasses size"')
-    expect(html).toContain('accessibilityLabel="Open theme editor to add the AR Try-On block"')
+    expect(html).toContain('accessibilityLabel="Turn on try-on in the theme editor"')
+    expect(html).toContain('accessibilityLabel="Place the AR Try-On block yourself"')
+    expect(html).toContain('open App embeds')
     expect(html).not.toMatch(/Check fit/)
     expect(html).toContain('Review fit')
   })
@@ -94,7 +101,8 @@ describe('Help recovery actions', () => {
   // loader's own themeEditorUrl.
   it('joins the loader theme URL to what each theme-editor action actually navigates to', () => {
     const themeUrl = 'https://admin.shopify.com/store/help-recovery/themes/current/editor?template=product'
-    routeState.loaderData = { themeEditorUrl: themeUrl }
+    const embedUrl = 'https://admin.shopify.com/store/help-recovery/themes/current/editor?context=apps'
+    routeState.loaderData = { themeEditorUrl: themeUrl, embedUrl }
 
     const tree = HelpPage()
     const externalButtons = findAllElements(tree, (node) => (
@@ -109,8 +117,11 @@ describe('Help recovery actions', () => {
     vi.unstubAllGlobals()
 
     expect(open).toHaveBeenCalledTimes(externalButtons.length)
+    const targets = open.mock.calls.map((call) => call[0])
+    expect(targets).toContain(embedUrl)
+    expect(targets).toContain(themeUrl)
     for (const call of open.mock.calls) {
-      expect(call).toEqual([themeUrl, '_top'])
+      expect(call[1]).toBe('_top')
     }
   })
 })

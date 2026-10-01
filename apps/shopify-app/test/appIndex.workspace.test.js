@@ -7,6 +7,7 @@ import ProductOperationsList, { primaryActionFor } from '../app/components/Produ
 import { AddTryOnFlow } from '../app/components/AddTryOnFlow.jsx'
 import TopLevelAdminAction from '../app/components/TopLevelAdminAction.jsx'
 import PlanUsage from '../app/components/PlanUsage.jsx'
+import SetupSteps from '../app/components/SetupSteps.jsx'
 import ModelFitReview from '../app/components/ModelFitReview.jsx'
 
 const harness = vi.hoisted(() => ({
@@ -86,6 +87,10 @@ function baseData(overrides = {}) {
     usage: { used: 0, limit: 5, atLimit: false, pricingUrl: '/plans' },
     guide: { kind: 'setup', title: 'Add your first product', detail: 'Choose a model.', action: { id: 'add-try-on', label: 'Add try-on' } },
     themeUrl: 'https://shop.test/admin/themes/current/editor?template=product',
+    setup: { done: true, steps: [] },
+    embedUrl: 'https://shop.test/admin/themes/current/editor?context=apps',
+    storefrontUrl: 'https://shop.test',
+    aiModels: null,
     ...overrides,
   }
 }
@@ -119,6 +124,28 @@ beforeEach(() => {
 })
 
 describe('Workspace route composition', () => {
+  it('shows the guided setup instead of the recovery guide until setup is done', () => {
+    const setup = {
+      done: false,
+      steps: [
+        { id: 'create', title: 'Create 3D models', state: 'current' },
+        { id: 'save', title: 'Review and save', state: 'upcoming' },
+        { id: 'turn-on', title: 'Turn on try-on in your store', state: 'upcoming' },
+      ],
+    }
+    const page = render(baseData({ setup, aiModels: { used: 0, limit: 10 } }))
+    const steps = findComponent(page, SetupSteps)
+    expect(steps.props.setup).toBe(setup)
+    expect(steps.props.embedUrl).toBe('https://shop.test/admin/themes/current/editor?context=apps')
+    expect(steps.props.storefrontUrl).toBe('https://shop.test')
+    expect(steps.props.aiEnabled).toBe(true)
+    expect(findComponent(page, WorkspaceGuide)).toBeUndefined()
+
+    const done = render(baseData())
+    expect(findComponent(done, WorkspaceGuide)).toBeDefined()
+    expect(findComponent(done, SetupSteps).props.aiEnabled).toBe(false)
+  })
+
   it('renders merchant-safe page and dialog copy', () => {
     const data = baseData({
       mappings: [{

@@ -9,11 +9,13 @@ import { loadWorkspace } from '../workspace.server'
 import prisma from '../db.server'
 import { aiGenerationEnabled, getAllowance } from '../generations.server'
 import { AddTryOnFlow, isReady as isReadyModel } from '../components/AddTryOnFlow'
+import AiModelFlow from '../components/AiModelFlow'
 import ModelFitReview from '../components/ModelFitReview'
 import { useMarkFitReviewed } from '../components/useMarkFitReviewed'
 import ModelPicker from '../components/ModelPicker'
 import PlanUsage from '../components/PlanUsage'
 import PreviewPanel from '../components/PreviewPanel'
+import SetupSteps from '../components/SetupSteps'
 import ProductOperationsList, { filterWorkspaceMappings } from '../components/ProductOperationsList'
 import WorkspaceFilters from '../components/WorkspaceFilters'
 import WorkspaceGuide from '../components/WorkspaceGuide'
@@ -344,7 +346,17 @@ export default function Workspace() {
             surfaces the limit too. Three routes to the same pricing page on one
             screen was noise, not urgency. */}
         <PlanUsage usage={data.usage} aiModels={data.aiModels} />
-        <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />
+        <SetupSteps
+          setup={data.setup}
+          embedUrl={data.embedUrl}
+          storefrontUrl={data.storefrontUrl}
+          aiEnabled={Boolean(data.aiModels)}
+          onUploadModel={openAddTryOn}
+          onCheckAgain={refreshWorkspace}
+        >
+          <AiModelFlow initialAllowance={data.aiModels} />
+        </SetupSteps>
+        {data.setup?.done && <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />}
         {hasOperations && (
           <>
             {/* A native Polaris card; padding="none" lets the table run to its edges.

@@ -1,22 +1,23 @@
 import { useLoaderData } from 'react-router'
-import { themeEditorUrl } from '../adminLinks.server.js'
+import { embedActivationUrl, themeEditorUrl } from '../adminLinks.server.js'
 import { authenticate } from '../shopify.server.js'
 import TopLevelAdminAction from '../components/TopLevelAdminAction.jsx'
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request)
-  return { themeEditorUrl: themeEditorUrl(session.shop) }
+  return { themeEditorUrl: themeEditorUrl(session.shop), embedUrl: embedActivationUrl(session.shop) }
 }
 
 export default function HelpPage() {
-  const { themeEditorUrl } = useLoaderData()
+  const { themeEditorUrl, embedUrl } = useLoaderData()
 
   return (
     <s-page heading="Help">
       <s-section heading="Fit is too small or too large">
         <s-paragraph>
-          Open the theme editor, select the AR Try-On block on the product page,
-          and adjust Glasses size. Start at 1, then preview the product.
+          Open the theme editor, open App embeds, select AR Try-on (or the AR
+          Try-On block if you placed it), and adjust Glasses size. Start at 1,
+          then preview the product.
         </s-paragraph>
         <TopLevelAdminAction
           href={themeEditorUrl}
@@ -28,24 +29,25 @@ export default function HelpPage() {
 
       <s-section heading="Try on button is missing">
         <s-paragraph>
-          {/* Upstream's workspace redesign removed the standalone Products
-              page (app.products.jsx now redirects to /app), so this points at
-              the Workspace. The theme editor stays plain prose rather than
-              upstream's inline <a target="_top">: the section already ends in
-              a TopLevelAdminAction "Open theme editor" button, which is the
-              reliable break-out for a Shopify admin destination (a raw
-              target="_top" anchor mid-sentence duplicates that action and
-              fragments the sentence at narrow widths). */}
-          Assign a model to the product in <s-link href="/app">Workspace</s-link>,
-          then add the AR Try-On block to the product template in the theme editor.
-          The button stays hidden until both are ready.
+          Save a model for the product (or add try-on to it in <s-link href="/app">Workspace</s-link>),
+          then turn on try-on in your store: it adds the button to every product with a model.
+          In the theme editor, click Save.
+        </s-paragraph>
+        <TopLevelAdminAction
+          href={embedUrl}
+          accessibilityLabel="Turn on try-on in the theme editor"
+        >
+          Turn on try-on
+        </TopLevelAdminAction>
+        <s-paragraph>
+          Want the button somewhere specific? Place the AR Try-On block on your product template instead.
         </s-paragraph>
         <TopLevelAdminAction
           href={themeEditorUrl}
-          accessibilityLabel="Open theme editor to add the AR Try-On block"
+          accessibilityLabel="Place the AR Try-On block yourself"
           variant="tertiary"
         >
-          Open theme editor
+          Place the button yourself
         </TopLevelAdminAction>
       </s-section>
 
