@@ -552,9 +552,25 @@ export async function listGenerations(prisma, shop, now = new Date()) {
     }
   }
 
-  return prisma.modelGeneration.findMany({
+  const rows = await prisma.modelGeneration.findMany({
     where: { shop, status: { in: ['queued', 'running', 'collecting', 'ready', 'saving', 'failed'] } },
     orderBy: { createdAt: 'desc' },
     take: 20,
   })
+  return hideSupersededFailures(prisma, shop, rows)
+}
+
+// A failed attempt is only worth showing while it is the latest try of its
+// photos. Once a retry exists (whatever became of it), that row is the one the
+// merchant acts on and the old failure is just clutter.
+async function hideSupersededFailures(prisma, shop, rows) {
+  const failedSets = [...new Set(rows.filter((r) => r.status === 'failed').map((r) => r.photoSetId))]
+  if (failedSets.length === 0) return rows
+  const attempts = await prisma.modelGeneration.findMany({ where: { shop, photoSetId: { in: failedSets } } })
+  const latest = new Map()
+  for (const attempt of attempts) {
+    const seen = latest.get(attempt.photoSetId)
+    if (!seen || attempt.createdAt > seen) latest.set(attempt.photoSetId, attempt.createdAt)
+  }
+  return rows.filter((r) => r.status !== 'failed' || r.createdAt >= latest.get(r.photoSetId))
 }

@@ -843,12 +843,36 @@ describe('listGenerations', () => {
   it('returns active rows newest first, without saved or discarded ones', async () => {
     const prisma = createFakePrisma()
     const t = (min) => new Date(NOW.getTime() - min * 60_000)
-    await prisma.modelGeneration.create({ data: row({ status: 'failed', createdAt: t(3) }) })
+    await prisma.modelGeneration.create({ data: row({ status: 'failed', photoSetId: 'set-2', createdAt: t(3) }) })
     await prisma.modelGeneration.create({ data: row({ status: 'ready', createdAt: t(1) }) })
     await prisma.modelGeneration.create({ data: row({ status: 'saved', createdAt: t(2) }) })
     await prisma.modelGeneration.create({ data: row({ status: 'discarded', createdAt: t(0) }) })
     const rows = await generations.listGenerations(prisma, SHOP, NOW)
     expect(rows.map((r) => r.status)).toEqual(['ready', 'failed'])
+  })
+
+  it('hides a failed attempt once a retry of the same photos exists, whatever became of the retry', async () => {
+    const t = (min) => new Date(NOW.getTime() - min * 60_000)
+    for (const retryStatus of ['running', 'ready', 'saved', 'discarded', 'failed']) {
+      const prisma = createFakePrisma()
+      const first = await prisma.modelGeneration.create({ data: row({ status: 'failed', createdAt: t(10) }) })
+      const retry = await prisma.modelGeneration.create({ data: row({ status: retryStatus, retryIndex: 1, providerJobId: 'resp_r', startedAt: NOW, createdAt: t(5) }) })
+      deps.check.mockResolvedValue({ state: 'running' })
+      const ids = (await generations.listGenerations(prisma, SHOP, NOW)).map((r) => r.id)
+      expect(ids, retryStatus).not.toContain(first.id)
+      if (['running', 'failed'].includes(retryStatus)) expect(ids, retryStatus).toContain(retry.id)
+    }
+  })
+
+  it('keeps showing the latest failed attempt, and failures of other photos', async () => {
+    const prisma = createFakePrisma()
+    const t = (min) => new Date(NOW.getTime() - min * 60_000)
+    const mine = await prisma.modelGeneration.create({ data: row({ status: 'failed', createdAt: t(10) }) })
+    const other = await prisma.modelGeneration.create({ data: row({ status: 'failed', photoSetId: 'set-2', createdAt: t(20) }) })
+    await prisma.modelGeneration.create({ data: row({ status: 'ready', photoSetId: 'set-3', createdAt: t(1) }) })
+    const ids = (await generations.listGenerations(prisma, SHOP, NOW)).map((r) => r.id)
+    expect(ids).toContain(mine.id)
+    expect(ids).toContain(other.id)
   })
 
   it('hands back a row stuck saving for over 15 minutes, but not a recent one', async () => {
