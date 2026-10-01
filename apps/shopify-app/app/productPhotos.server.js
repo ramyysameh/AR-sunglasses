@@ -66,11 +66,13 @@ async function download(url, fetchImpl) {
   if (!isCdnUrl(url)) throw tagged('BAD_PHOTO', `product image is not on ${CDN_HOST}`)
   let res
   try {
-    res = await fetchImpl(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
+    // redirect: 'error' -- a redirect could leave the CDN before the host check
+    // below ever sees it, so a redirecting response is refused outright.
+    res = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) })
   } catch (error) {
     throw tagged('BAD_PHOTO', `product image download failed: ${error?.message}`)
   }
-  // Redirects are followed; the final address must still be the CDN.
+  // Belt and braces: redirects are refused above, but the final address must still be the CDN.
   if (res.url && !isCdnUrl(res.url)) throw tagged('BAD_PHOTO', 'product image redirected off the CDN')
   if (!res.ok) throw tagged('BAD_PHOTO', `product image download failed: ${res.status}`)
   const contentType = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()

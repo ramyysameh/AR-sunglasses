@@ -119,6 +119,17 @@ describe('importProductPhotos', () => {
       .rejects.toMatchObject({ code: 'BAD_PHOTO' })
   })
 
+  it('never follows redirects (they could leave the CDN before the host check)', async () => {
+    const fetchImpl = okFetch()
+    await importProductPhotos({ admin: adminFor(product), shop: SHOP, productId: PRODUCT, imageIds: ids(1, 2, 3), fetchImpl })
+    for (const [, options] of fetchImpl.mock.calls) expect(options.redirect).toBe('error')
+
+    // fetch rejects for a redirect under redirect: 'error'
+    const redirecting = vi.fn(async () => { throw new TypeError('fetch failed: unexpected redirect') })
+    await expect(importProductPhotos({ admin: adminFor(product), shop: SHOP, productId: PRODUCT, imageIds: ids(1, 2, 3), fetchImpl: redirecting }))
+      .rejects.toMatchObject({ code: 'BAD_PHOTO' })
+  })
+
   it('cleans up stored photos when storage itself fails', async () => {
     store.failSave = true
     await expect(importProductPhotos({ admin: adminFor(product), shop: SHOP, productId: PRODUCT, imageIds: ids(1, 2, 3), fetchImpl: okFetch() }))
