@@ -22,6 +22,7 @@ import { addGeneratedModelToProduct } from '../aiProductMapping.server'
 const STATUS_BY_CODE = {
   BAD_PHOTOS: 400,
   BAD_PHOTO: 400,
+  BAD_PRODUCTS: 400,
   NOT_FOUND: 404,
   PRODUCT_NOT_FOUND: 404,
   NOT_RETRYABLE: 409,
@@ -38,6 +39,7 @@ const PRE_INSERT_CODES = new Set(['BAD_PHOTOS', 'TOO_MANY_RUNNING', 'DAILY_LIMIT
 
 const MESSAGES = {
   BAD_PHOTOS: 'Choose 3 or 4 photos (front and sides work best).',
+  BAD_PRODUCTS: 'Choose 1 to 5 products.',
   BAD_PHOTO: "One of the photos couldn't be used. Use JPG, PNG or WebP photos of 10 MB or less, or choose different product photos.",
   NOT_FOUND: 'That model is no longer available. Refresh the page.',
   PRODUCT_NOT_FOUND: 'That product is no longer available. Pick another one.',
@@ -60,6 +62,38 @@ async function shopGidFor(admin) {
   const shopGid = (await res.json())?.data?.shop?.id
   if (!shopGid) throw new Error('shop id lookup failed')
   return shopGid
+}
+
+async function deletePhotos(refs) {
+  for (const ref of refs) {
+    try {
+      await deleteModelGlb(ref)
+    } catch (cleanupError) {
+      console.error('Failed to clean up imported product photo', ref, cleanupError)
+    }
+  }
+}
+
+// Import a product's chosen photos and start (or queue) its generation.
+async function generateFromProduct({ admin, shop, shopGid, productId, imageIds }) {
+  const imported = await importProductPhotos({ admin, shop, productId, imageIds })
+  try {
+    return await createGeneration(prisma, {
+      shop,
+      shopGid,
+      photoRefs: imported.photoRefs,
+      photoSource: 'product',
+      productId: imported.productId,
+      productTitle: imported.title,
+      productHandle: imported.handle,
+    })
+  } catch (error) {
+    // Only when the error says no row was created: createGeneration throws these
+    // before its insert. Anything else (a dropped connection after the insert)
+    // may have left a row pointing at these photos, so they stay.
+    if (PRE_INSERT_CODES.has(error?.code)) await deletePhotos(imported.photoRefs)
+    throw error
+  }
 }
 
 function errorResponse(error) {
@@ -145,39 +179,46 @@ export const action = async ({ request }) => {
     if (intent === 'create-from-product') {
       // Same reasoning as presign-photos: refuse before anything is stored.
       await assertCanStartGeneration(prisma, shop)
-      const shopGid = await shopGidFor(admin)
-      const imported = await importProductPhotos({
+      const generation = await generateFromProduct({
         admin,
         shop,
+        shopGid: await shopGidFor(admin),
         productId: form.get('productId')?.toString(),
         imageIds: parseJson(form.get('imageIds')),
       })
-      let generation
-      try {
-        generation = await createGeneration(prisma, {
-          shop,
-          shopGid,
-          photoRefs: imported.photoRefs,
-          photoSource: 'product',
-          productId: imported.productId,
-          productTitle: imported.title,
-          productHandle: imported.handle,
-        })
-      } catch (error) {
-        // Only when the error says no row was created: createGeneration throws these
-        // before its insert. Anything else (a dropped connection after the insert)
-        // may have left a row pointing at these photos, so they stay.
-        if (!PRE_INSERT_CODES.has(error?.code)) throw error
-        for (const ref of imported.photoRefs) {
-          try {
-            await deleteModelGlb(ref)
-          } catch (cleanupError) {
-            console.error('Failed to clean up imported product photo', ref, cleanupError)
-          }
-        }
-        throw error
-      }
       return Response.json({ generation: toClientGeneration(generation) })
+    }
+
+    if (intent === 'create-from-products') {
+      let items
+      try {
+        items = JSON.parse(form.get('items')?.toString() ?? '')
+      } catch {
+        items = null
+      }
+      if (!Array.isArray(items) || items.length < 1 || items.length > 5) {
+        throw Object.assign(new Error('bad product list'), { code: 'BAD_PRODUCTS' })
+      }
+      await assertCanStartGeneration(prisma, shop)
+      const shopGid = await shopGidFor(admin)
+      // One product after another, so each row's queue decision sees the previous one.
+      const results = []
+      for (const item of items) {
+        const productId = item?.productId?.toString() ?? null
+        try {
+          const generation = await generateFromProduct({ admin, shop, shopGid, productId, imageIds: item?.imageIds })
+          results.push({ productId, generation: toClientGeneration(generation) })
+        } catch (error) {
+          const known = STATUS_BY_CODE[error?.code]
+          if (!known) console.error('AI bulk generation item failed', productId, error)
+          results.push({
+            productId,
+            code: known ? error.code : 'UNKNOWN',
+            error: known ? MESSAGES[error.code] : 'Something went wrong. Try again.',
+          })
+        }
+      }
+      return Response.json({ results })
     }
 
     if (intent === 'save') {

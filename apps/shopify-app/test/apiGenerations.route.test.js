@@ -287,6 +287,76 @@ describe('product source', () => {
   })
 })
 
+describe('create-from-products', () => {
+  beforeEach(() => {
+    h.gen.guard = vi.fn(async () => {})
+    h.deleteGlb.mockReset()
+    h.products.import.mockReset()
+    h.products.import.mockImplementation(async ({ productId }) => ({
+      photoRefs: [`p/${productId}/1.jpg`, `p/${productId}/2.jpg`, `p/${productId}/3.jpg`],
+      productId,
+      title: `Title ${productId}`,
+      handle: `handle-${productId}`,
+    }))
+    h.gen.create = vi.fn(async (_prisma, input) => ({ id: `gen-${input.productId}`, status: 'running' }))
+  })
+
+  const items = (ids) => JSON.stringify(ids.map((productId) => ({ productId, imageIds: ['i1', 'i2', 'i3'] })))
+
+  it('creates one generation per product, in order', async () => {
+    const res = await api.action(post({ intent: 'create-from-products', items: items(['A', 'B']) }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.results).toEqual([
+      { productId: 'A', generation: { id: 'gen-A', status: 'running' } },
+      { productId: 'B', generation: { id: 'gen-B', status: 'running' } },
+    ])
+    expect(h.gen.create.mock.calls[1][1]).toMatchObject({ photoSource: 'product', productTitle: 'Title B', productHandle: 'handle-B' })
+  })
+
+  it('reports a failing product without stopping the others', async () => {
+    h.products.import.mockImplementationOnce(async () => { throw tagged('PRODUCT_NOT_FOUND') })
+    const body = await (await api.action(post({ intent: 'create-from-products', items: items(['A', 'B']) }))).json()
+    expect(body.results[0]).toMatchObject({ productId: 'A', code: 'PRODUCT_NOT_FOUND', error: expect.any(String) })
+    expect(body.results[1]).toMatchObject({ productId: 'B', generation: { id: 'gen-B' } })
+  })
+
+  it('hides raw exception text for an unexpected failure', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      h.products.import.mockImplementationOnce(async () => { throw new Error('secret db detail') })
+      const body = await (await api.action(post({ intent: 'create-from-products', items: items(['A', 'B']) }))).json()
+      expect(body.results[0]).toEqual({ productId: 'A', code: 'UNKNOWN', error: 'Something went wrong. Try again.' })
+      expect(JSON.stringify(body)).not.toContain('secret db detail')
+      expect(body.results[1]).toMatchObject({ productId: 'B', generation: { id: 'gen-B' } })
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
+  it('deletes imported photos when the row was never created', async () => {
+    h.gen.create = vi.fn(async () => { throw tagged('DAILY_LIMIT') })
+    const body = await (await api.action(post({ intent: 'create-from-products', items: items(['A']) }))).json()
+    expect(body.results[0]).toMatchObject({ code: 'DAILY_LIMIT' })
+    expect(h.deleteGlb.mock.calls.map(([ref]) => ref)).toEqual(['p/A/1.jpg', 'p/A/2.jpg', 'p/A/3.jpg'])
+  })
+
+  it('refuses an empty list or more than 5 products', async () => {
+    for (const ids of [[], ['1', '2', '3', '4', '5', '6']]) {
+      const res = await api.action(post({ intent: 'create-from-products', items: items(ids) }))
+      expect(res.status).toBe(400)
+      expect((await res.json()).code).toBe('BAD_PRODUCTS')
+    }
+  })
+
+  it('checks the daily limit before importing anything', async () => {
+    h.gen.guard = vi.fn(async () => { throw tagged('DAILY_LIMIT') })
+    const res = await api.action(post({ intent: 'create-from-products', items: items(['A']) }))
+    expect(res.status).toBe(429)
+    expect(h.products.import).not.toHaveBeenCalled()
+  })
+})
+
 describe('generations/:id.glb', () => {
   it('serves a ready model without caching, and 404s anything else', async () => {
     h.rows.set('g1', { id: 'g1', status: 'ready', glbRef: 'generations/g1.glb' })
