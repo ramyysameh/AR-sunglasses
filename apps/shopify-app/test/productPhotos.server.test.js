@@ -130,6 +130,16 @@ describe('importProductPhotos', () => {
       .rejects.toMatchObject({ code: 'BAD_PHOTO' })
   })
 
+  it('tags a body that fails mid-read as BAD_PHOTO', async () => {
+    const brokenBody = vi.fn(async () => {
+      const res = new Response('x', { status: 200, headers: { 'content-type': 'image/jpeg' } })
+      res.arrayBuffer = async () => { throw new Error('terminated') }
+      return res
+    })
+    await expect(importProductPhotos({ admin: adminFor(product), shop: SHOP, productId: PRODUCT, imageIds: ids(1, 2, 3), fetchImpl: brokenBody }))
+      .rejects.toMatchObject({ code: 'BAD_PHOTO' })
+  })
+
   it('cleans up stored photos when storage itself fails', async () => {
     store.failSave = true
     await expect(importProductPhotos({ admin: adminFor(product), shop: SHOP, productId: PRODUCT, imageIds: ids(1, 2, 3), fetchImpl: okFetch() }))

@@ -78,7 +78,12 @@ async function download(url, fetchImpl) {
   const contentType = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
   if (!PHOTO_TYPES.includes(contentType)) throw tagged('BAD_PHOTO', `product image type ${contentType}`)
   if (Number(res.headers.get('content-length')) > MAX_PHOTO_BYTES) throw tagged('BAD_PHOTO', 'product image too large')
-  const bytes = Buffer.from(await res.arrayBuffer())
+  let bytes
+  try {
+    bytes = Buffer.from(await res.arrayBuffer())
+  } catch (error) {
+    throw tagged('BAD_PHOTO', `product image download failed: ${error?.message}`)
+  }
   if (bytes.length === 0 || bytes.length > MAX_PHOTO_BYTES) throw tagged('BAD_PHOTO', `product image size ${bytes.length}`)
   return { bytes, contentType }
 }
