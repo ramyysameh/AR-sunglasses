@@ -1,29 +1,71 @@
 // app/components/ModelViewer.jsx
 /* eslint-disable react/prop-types -- plain JSX component, no PropTypes lib in use elsewhere */
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
-/** model-viewer's zoom() takes "key presses": positive zooms in. */
-export function zoomStep(direction) {
-  return direction === "in" ? 1 : -1;
+/** ExpandedViewer renders the large preview overlay content (testable with renderToStaticMarkup). */
+export function ExpandedViewer({ src, alt, canFullscreen, onClose, onFullscreen }) {
+  const overlayRef = useRef(null);
+
+  return (
+    <div
+      ref={overlayRef}
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 1000,
+        backgroundColor: "white",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px", borderBottom: "1px solid #eee" }}>
+        <strong>{alt}</strong>
+        <div style={{ display: "flex", gap: "8px" }}>
+          {canFullscreen && (
+            <button
+              type="button"
+              aria-label="Full screen"
+              onClick={onFullscreen}
+              style={{ padding: "8px 12px", cursor: "pointer", border: "1px solid #d4d4d4", borderRadius: "4px", background: "#fff" }}
+            >
+              Full screen
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="Close large preview"
+            onClick={onClose}
+            style={{ padding: "8px 12px", cursor: "pointer", border: "1px solid #d4d4d4", borderRadius: "4px", background: "#fff" }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+      <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+        <model-viewer
+          src={src}
+          alt={alt}
+          camera-controls
+          style={{ width: "100%", height: "100%", backgroundColor: "transparent" }}
+        ></model-viewer>
+      </div>
+      <div style={{ textAlign: "center", padding: "12px", fontSize: "14px", color: "#666" }}>
+        Drag to rotate. Scroll or pinch to zoom.
+      </div>
+    </div>
+  );
 }
 
-const controlStyle = {
-  width: "32px",
-  height: "32px",
-  border: "1px solid #d4d4d4",
-  borderRadius: "8px",
-  background: "#fff",
-  font: "inherit",
-  fontSize: "16px",
-  lineHeight: "1",
-  cursor: "pointer",
-};
-
-export default function ModelViewer({ src, alt = "3D model preview", height = 160, controls = false }) {
+export default function ModelViewer({ src, alt = "3D model preview", height = 160, expandable = false }) {
   const holderRef = useRef(null);
-  const viewerRef = useRef(null);
+  const expandButtonRef = useRef(null);
   const [visible, setVisible] = useState(false);
   const [ready, setReady] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   // Mount only when scrolled near the viewport (long lists stay fast).
   useEffect(() => {
@@ -52,41 +94,91 @@ export default function ModelViewer({ src, alt = "3D model preview", height = 16
     return () => { cancelled = true; };
   }, [visible, ready]);
 
-  function zoom(direction) {
-    const viewer = viewerRef.current;
-    if (viewer && typeof viewer.zoom === "function") viewer.zoom(zoomStep(direction));
-  }
+  // Handle Esc key to close expanded view.
+  useEffect(() => {
+    if (!expanded) return;
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setExpanded(false);
+        expandButtonRef.current?.focus();
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("keydown", handleKeyDown);
+      return () => document.removeEventListener("keydown", handleKeyDown);
+    }
+  }, [expanded]);
 
-  function reset() {
-    const viewer = viewerRef.current;
-    if (!viewer) return;
-    viewer.cameraOrbit = "auto auto auto";
-    viewer.fieldOfView = "auto";
-    if (typeof viewer.jumpCameraToGoal === "function") viewer.jumpCameraToGoal();
-  }
+  const canFullscreen = typeof document !== "undefined" && Boolean(document.fullscreenEnabled);
+
+  const handleFullscreen = () => {
+    if (typeof document !== "undefined") {
+      const overlay = document.querySelector("[data-expanded-viewer]");
+      if (overlay?.requestFullscreen) {
+        overlay.requestFullscreen();
+      }
+    }
+  };
 
   return (
-    <div ref={holderRef} style={{ position: "relative", width: "100%", height: `${height}px` }}>
-      {ready ? (
-        <model-viewer
-          ref={viewerRef}
-          src={src}
-          alt={alt}
-          camera-controls
-          style={{ width: "100%", height: "100%", backgroundColor: "transparent" }}
-        ></model-viewer>
-      ) : (
-        <s-stack direction="block" alignItems="center" justifyContent="center">
-          <s-spinner accessibilityLabel="Loading 3D preview"></s-spinner>
-        </s-stack>
-      )}
-      {controls && (
-        <div style={{ position: "absolute", right: "8px", bottom: "8px", display: "flex", gap: "6px" }}>
-          <button type="button" aria-label="Zoom in" style={controlStyle} onClick={() => zoom("in")}>+</button>
-          <button type="button" aria-label="Zoom out" style={controlStyle} onClick={() => zoom("out")}>−</button>
-          <button type="button" aria-label="Reset view" style={controlStyle} onClick={reset}>↺</button>
-        </div>
-      )}
-    </div>
+    <>
+      <div ref={holderRef} style={{ position: "relative", width: "100%", height: `${height}px` }}>
+        {ready ? (
+          <model-viewer
+            src={src}
+            alt={alt}
+            camera-controls
+            disable-zoom
+            style={{ width: "100%", height: "100%", backgroundColor: "transparent" }}
+          ></model-viewer>
+        ) : (
+          <s-stack direction="block" alignItems="center" justifyContent="center">
+            <s-spinner accessibilityLabel="Loading 3D preview"></s-spinner>
+          </s-stack>
+        )}
+        {expandable && (
+          <button
+            ref={expandButtonRef}
+            type="button"
+            aria-label="Open large preview"
+            onClick={() => setExpanded(true)}
+            style={{
+              position: "absolute",
+              top: "8px",
+              right: "8px",
+              padding: "6px 12px",
+              background: "#fff",
+              border: "1px solid #d4d4d4",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "16px",
+            }}
+          >
+            ⤢ Expand
+          </button>
+        )}
+      </div>
+      {expanded && typeof document !== "undefined" &&
+        createPortal(
+          <div data-expanded-viewer>
+            <ExpandedViewer
+              src={src}
+              alt={alt}
+              canFullscreen={canFullscreen}
+              onClose={() => {
+                setExpanded(false);
+                expandButtonRef.current?.focus();
+              }}
+              onFullscreen={handleFullscreen}
+            />
+            {!ready && (
+              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.8)" }}>
+                <s-spinner accessibilityLabel="Loading 3D preview"></s-spinner>
+              </div>
+            )}
+          </div>,
+          document.body
+        )}
+    </>
   );
 }

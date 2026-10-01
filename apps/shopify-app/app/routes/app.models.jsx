@@ -440,7 +440,7 @@ export default function Models() {
                   borderRadius="base"
                 >
                   <s-stack direction="block" gap="base">
-                    <ModelViewer src={`/models/${asset.id}.glb`} alt={displayName} />
+                    <ModelViewer src={`/models/${asset.id}.glb`} alt={displayName} expandable />
                     <s-stack direction="inline" gap="small-500" alignItems="center">
                       <s-heading>{displayName}</s-heading>
                       {/* Keyed on the loader's needsReview (status OR low

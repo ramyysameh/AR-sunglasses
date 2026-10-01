@@ -137,7 +137,7 @@ function GenerationRow({ generation, disabled, onAction }) {
       <s-stack direction="block" gap="base">
         <s-badge tone={view.tone}>{view.label}</s-badge>
         {generation.productTitle && <s-text color="subdued">From {generation.productTitle}</s-text>}
-        {generation.previewUrl && <ModelViewer src={generation.previewUrl} alt="AI-generated model preview" height={320} controls />}
+        {generation.previewUrl && <ModelViewer src={generation.previewUrl} alt="AI-generated model preview" height={320} expandable />}
         {view.actions.length > 0 && (
           <s-stack direction="inline" gap="small-200">
             {view.actions.map((action) => (
