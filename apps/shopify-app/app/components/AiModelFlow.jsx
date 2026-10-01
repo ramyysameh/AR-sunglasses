@@ -95,6 +95,7 @@ export { productTooFewPhotos } from './AiProductSource'
 export function mappingMessage(mapping, productTitle) {
   if (!mapping) return null
   const name = productTitle || 'the product'
+  if (mapping.mapped && mapping.replaced) return `Model saved and now used for try-on on ${name} (it replaced the previous model).`
   if (mapping.mapped) return `Model saved and added to ${name}.`
   if (mapping.reason === 'product_limit') return `Model saved. Your plan's product limit is reached, so it wasn't added to ${name}.`
   return `Model saved, but it couldn't be added to ${name}. Use Add try-on to add it.`

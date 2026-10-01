@@ -29,7 +29,7 @@ describe('addGeneratedModelToProduct', () => {
 
   it('remaps a product that already has try-on even at the limit', async () => {
     const prisma = prismaWith({ existing: { id: 'm1' }, count: 10 })
-    await expect(addGeneratedModelToProduct(args(prisma))).resolves.toEqual({ mapped: true })
+    await expect(addGeneratedModelToProduct(args(prisma))).resolves.toEqual({ mapped: true, replaced: true })
     expect(prisma.productMapping.count).not.toHaveBeenCalled()
   })
 

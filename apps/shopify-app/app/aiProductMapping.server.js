@@ -11,8 +11,9 @@ import { publishMapping } from './tryonMetafield.server.js'
  * save has already succeeded and must not look like a failure.
  */
 export async function addGeneratedModelToProduct({ prisma, admin, shop, planName, productId, productHandle, modelAssetId }) {
+  let existing
   try {
-    const existing = await prisma.productMapping.findUnique({ where: { shop_productId: { shop, productId } } })
+    existing = await prisma.productMapping.findUnique({ where: { shop_productId: { shop, productId } } })
     if (!existing) {
       const count = await prisma.productMapping.count({ where: { shop } })
       if (count >= planLimit(planName)) return { mapped: false, reason: 'product_limit' }
@@ -28,5 +29,5 @@ export async function addGeneratedModelToProduct({ prisma, admin, shop, planName
     console.error('AI model auto-map: try-on metafield publish failed', productId, error)
     return { mapped: false, reason: 'publish_failed' }
   }
-  return { mapped: true }
+  return existing ? { mapped: true, replaced: true } : { mapped: true }
 }

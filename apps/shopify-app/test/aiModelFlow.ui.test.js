@@ -122,6 +122,7 @@ describe('product photo selection', () => {
 describe('mappingMessage', () => {
   it('says what happened to the product after a save', () => {
     expect(mappingMessage({ mapped: true }, 'GRIPZ')).toBe('Model saved and added to GRIPZ.')
+    expect(mappingMessage({ mapped: true, replaced: true }, 'GRIPZ')).toBe('Model saved and now used for try-on on GRIPZ (it replaced the previous model).')
     expect(mappingMessage({ mapped: false, reason: 'product_limit' }, 'GRIPZ')).toMatch(/product limit/)
     expect(mappingMessage({ mapped: false, reason: 'publish_failed' }, 'GRIPZ')).toMatch(/Add try-on/)
     expect(mappingMessage(undefined, 'GRIPZ')).toBeNull()
