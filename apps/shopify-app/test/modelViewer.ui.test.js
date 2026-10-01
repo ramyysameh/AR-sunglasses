@@ -23,8 +23,8 @@ describe('ModelViewer', () => {
 })
 
 describe('ExpandedViewer', () => {
-  const html = (canFullscreen) => renderToStaticMarkup(React.createElement(ExpandedViewer, {
-    src: '/m.glb', alt: 'Aviator', canFullscreen, onClose: () => {}, onFullscreen: () => {},
+  const html = (canFullscreen, ready = true) => renderToStaticMarkup(React.createElement(ExpandedViewer, {
+    src: '/m.glb', alt: 'Aviator', ready, canFullscreen, onClose: () => {}, onFullscreen: () => {}, closeButtonRef: {},
   }))
 
   it('shows a zoomable viewer with a close button', () => {
@@ -35,10 +35,20 @@ describe('ExpandedViewer', () => {
     expect(out).not.toContain('disable-zoom')
     expect(out).toContain('aria-label="Close large preview"')
     expect(out).toContain('Drag to rotate. Scroll or pinch to zoom.')
+    expect(out).toContain('role="dialog"')
+    expect(out).toContain('aria-modal="true"')
   })
 
   it('offers full screen only when the browser allows it', () => {
     expect(html(true)).toContain('aria-label="Full screen"')
     expect(html(false)).not.toContain('aria-label="Full screen"')
+  })
+
+  it('shows spinner and no model-viewer when not ready', () => {
+    const out = html(false, false)
+    expect(out).toContain('accessibilityLabel="Loading 3D preview"')
+    expect(out).not.toContain('<model-viewer')
+    expect(out).toContain('role="dialog"')
+    expect(out).toContain('aria-modal="true"')
   })
 })

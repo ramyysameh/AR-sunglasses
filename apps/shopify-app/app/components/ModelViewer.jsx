@@ -4,12 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 /** ExpandedViewer renders the large preview overlay content (testable with renderToStaticMarkup). */
-export function ExpandedViewer({ src, alt, canFullscreen, onClose, onFullscreen }) {
-  const overlayRef = useRef(null);
-
+export function ExpandedViewer({ src, alt, ready, canFullscreen, onClose, onFullscreen, closeButtonRef }) {
   return (
     <div
-      ref={overlayRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={alt}
       style={{
         position: "fixed",
         top: 0,
@@ -36,6 +36,7 @@ export function ExpandedViewer({ src, alt, canFullscreen, onClose, onFullscreen 
             </button>
           )}
           <button
+            ref={closeButtonRef}
             type="button"
             aria-label="Close large preview"
             onClick={onClose}
@@ -46,16 +47,24 @@ export function ExpandedViewer({ src, alt, canFullscreen, onClose, onFullscreen 
         </div>
       </div>
       <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-        <model-viewer
-          src={src}
-          alt={alt}
-          camera-controls
-          style={{ width: "100%", height: "100%", backgroundColor: "transparent" }}
-        ></model-viewer>
+        {ready ? (
+          <model-viewer
+            src={src}
+            alt={alt}
+            camera-controls
+            style={{ width: "100%", height: "100%", backgroundColor: "transparent" }}
+          ></model-viewer>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+            <s-spinner accessibilityLabel="Loading 3D preview"></s-spinner>
+          </div>
+        )}
       </div>
-      <div style={{ textAlign: "center", padding: "12px", fontSize: "14px", color: "#666" }}>
-        Drag to rotate. Scroll or pinch to zoom.
-      </div>
+      {ready && (
+        <div style={{ textAlign: "center", padding: "12px", fontSize: "14px", color: "#666" }}>
+          Drag to rotate. Scroll or pinch to zoom.
+        </div>
+      )}
     </div>
   );
 }
@@ -63,9 +72,12 @@ export function ExpandedViewer({ src, alt, canFullscreen, onClose, onFullscreen 
 export default function ModelViewer({ src, alt = "3D model preview", height = 160, expandable = false }) {
   const holderRef = useRef(null);
   const expandButtonRef = useRef(null);
+  const overlayRef = useRef(null);
+  const closeButtonRef = useRef(null);
   const [visible, setVisible] = useState(false);
   const [ready, setReady] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const prevOverflowRef = useRef(null);
 
   // Mount only when scrolled near the viewport (long lists stay fast).
   useEffect(() => {
@@ -94,13 +106,22 @@ export default function ModelViewer({ src, alt = "3D model preview", height = 16
     return () => { cancelled = true; };
   }, [visible, ready]);
 
+  const close = () => {
+    setExpanded(false);
+    expandButtonRef.current?.focus();
+    // Restore scroll lock
+    if (typeof document !== "undefined" && prevOverflowRef.current !== null) {
+      document.body.style.overflow = prevOverflowRef.current;
+      prevOverflowRef.current = null;
+    }
+  };
+
   // Handle Esc key to close expanded view.
   useEffect(() => {
     if (!expanded) return;
     const handleKeyDown = (e) => {
       if (e.key === "Escape") {
-        setExpanded(false);
-        expandButtonRef.current?.focus();
+        close();
       }
     };
     if (typeof document !== "undefined") {
@@ -109,14 +130,27 @@ export default function ModelViewer({ src, alt = "3D model preview", height = 16
     }
   }, [expanded]);
 
+  // Lock scroll when expanded, move focus to Close button.
+  useEffect(() => {
+    if (!expanded) return;
+    if (typeof document !== "undefined") {
+      prevOverflowRef.current = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      closeButtonRef.current?.focus();
+    }
+    return () => {
+      if (typeof document !== "undefined" && prevOverflowRef.current !== null) {
+        document.body.style.overflow = prevOverflowRef.current;
+        prevOverflowRef.current = null;
+      }
+    };
+  }, [expanded]);
+
   const canFullscreen = typeof document !== "undefined" && Boolean(document.fullscreenEnabled);
 
   const handleFullscreen = () => {
-    if (typeof document !== "undefined") {
-      const overlay = document.querySelector("[data-expanded-viewer]");
-      if (overlay?.requestFullscreen) {
-        overlay.requestFullscreen();
-      }
+    if (overlayRef.current?.requestFullscreen) {
+      overlayRef.current.requestFullscreen().catch(() => {});
     }
   };
 
@@ -160,22 +194,16 @@ export default function ModelViewer({ src, alt = "3D model preview", height = 16
       </div>
       {expanded && typeof document !== "undefined" &&
         createPortal(
-          <div data-expanded-viewer>
+          <div ref={overlayRef}>
             <ExpandedViewer
               src={src}
               alt={alt}
+              ready={ready}
               canFullscreen={canFullscreen}
-              onClose={() => {
-                setExpanded(false);
-                expandButtonRef.current?.focus();
-              }}
+              onClose={close}
               onFullscreen={handleFullscreen}
+              closeButtonRef={closeButtonRef}
             />
-            {!ready && (
-              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(255,255,255,0.8)" }}>
-                <s-spinner accessibilityLabel="Loading 3D preview"></s-spinner>
-              </div>
-            )}
           </div>,
           document.body
         )}
