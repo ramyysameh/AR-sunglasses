@@ -12,6 +12,8 @@ import {
   discardGeneration,
   toClientGeneration,
 } from '../generations.server'
+import { fetchProductImages, importProductPhotos } from '../productPhotos.server'
+import { addGeneratedModelToProduct } from '../aiProductMapping.server'
 
 // Resource route (no default export), for the same reason as api.model-upload:
 // fetch() + json() needs a real JSON Response, not the rendered document.
@@ -31,8 +33,8 @@ const STATUS_BY_CODE = {
 }
 
 const MESSAGES = {
-  BAD_PHOTOS: 'Add 3 or 4 photos: front, left side, right side, and optionally back.',
-  BAD_PHOTO: 'Use JPG, PNG or WebP photos of 10 MB or less.',
+  BAD_PHOTOS: 'Choose 3 or 4 photos (front and sides work best).',
+  BAD_PHOTO: "One of the photos couldn't be used. Use JPG, PNG or WebP photos of 10 MB or less, or choose different product photos.",
   NOT_FOUND: 'That model is no longer available. Refresh the page.',
   NOT_RETRYABLE: "This model can't be regenerated right now.",
   NOT_READY: 'This model is still being worked on. Refresh the page.',
@@ -47,6 +49,13 @@ const SHOP_ID_QUERY = `#graphql
   query ShopId {
     shop { id }
   }`
+
+async function shopGidFor(admin) {
+  const res = await admin.graphql(SHOP_ID_QUERY)
+  const shopGid = (await res.json())?.data?.shop?.id
+  if (!shopGid) throw new Error('shop id lookup failed')
+  return shopGid
+}
 
 function errorResponse(error) {
   const status = STATUS_BY_CODE[error?.code]
@@ -111,25 +120,63 @@ export const action = async ({ request }) => {
     }
 
     if (intent === 'create' || intent === 'retry') {
-      const res = await admin.graphql(SHOP_ID_QUERY)
-      const shopGid = (await res.json())?.data?.shop?.id
-      if (!shopGid) throw new Error('shop id lookup failed')
       const generation = await createGeneration(prisma, {
         shop,
-        shopGid,
+        shopGid: await shopGidFor(admin),
         photoRefs: intent === 'create' ? parseJson(form.get('photoRefs')) : null,
         retryOf: intent === 'retry' ? generationId : null,
       })
       return Response.json({ generation: toClientGeneration(generation) })
     }
 
+    if (intent === 'product-images') {
+      const product = await fetchProductImages(admin, form.get('productId')?.toString())
+      return Response.json({
+        product: { id: product.productId, title: product.title },
+        images: product.images.map(({ id, thumbnailUrl, altText }) => ({ id, thumbnailUrl, altText })),
+      })
+    }
+
+    if (intent === 'create-from-product') {
+      // Same reasoning as presign-photos: refuse before anything is stored.
+      await assertCanStartGeneration(prisma, shop)
+      const shopGid = await shopGidFor(admin)
+      const imported = await importProductPhotos({
+        admin,
+        shop,
+        productId: form.get('productId')?.toString(),
+        imageIds: parseJson(form.get('imageIds')),
+      })
+      const generation = await createGeneration(prisma, {
+        shop,
+        shopGid,
+        photoRefs: imported.photoRefs,
+        photoSource: 'product',
+        productId: imported.productId,
+        productTitle: imported.title,
+        productHandle: imported.handle,
+      })
+      return Response.json({ generation: toClientGeneration(generation) })
+    }
+
     if (intent === 'save') {
-      return Response.json(await saveGeneration(prisma, {
+      const saved = await saveGeneration(prisma, {
         shop,
         generationId,
         planName,
         acceptCharge: form.get('acceptCharge') === 'true',
-      }))
+      })
+      if (!saved.productId) return Response.json(saved)
+      const mapping = await addGeneratedModelToProduct({
+        prisma,
+        admin,
+        shop,
+        planName,
+        productId: saved.productId,
+        productHandle: saved.productHandle,
+        modelAssetId: saved.assetId,
+      })
+      return Response.json({ ...saved, mapping })
     }
 
     if (intent === 'discard') {

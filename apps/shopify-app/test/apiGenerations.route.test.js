@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   unwrap: vi.fn(),
   glb: new Map(),
   rows: new Map(),
+  products: { fetch: vi.fn(), import: vi.fn() },
+  mapping: vi.fn(),
 }))
 
 vi.mock('../app/shopify.server.js', () => ({
@@ -37,6 +39,13 @@ vi.mock('../app/storage.server.js', () => ({
 }))
 vi.mock('../app/modelGenerator.server.js', () => ({
   unwrapWebhook: (...args) => h.unwrap(...args),
+}))
+vi.mock('../app/productPhotos.server.js', () => ({
+  fetchProductImages: (...a) => h.products.fetch(...a),
+  importProductPhotos: (...a) => h.products.import(...a),
+}))
+vi.mock('../app/aiProductMapping.server.js', () => ({
+  addGeneratedModelToProduct: (...a) => h.mapping(...a),
 }))
 vi.mock('../app/generations.server.js', () => ({
   aiGenerationEnabled: () => h.enabled,
@@ -70,6 +79,9 @@ beforeEach(() => {
   h.unwrap.mockReset()
   h.glb.clear()
   h.rows.clear()
+  h.products.fetch.mockReset()
+  h.products.import.mockReset()
+  h.mapping.mockReset()
 })
 
 describe('api.generations', () => {
@@ -176,6 +188,46 @@ describe('api.generations', () => {
 
   it('400s an unknown intent', async () => {
     expect((await api.action(post({ intent: 'bogus' }))).status).toBe(400)
+  })
+})
+
+describe('product source', () => {
+  it("lists a product's images as thumbnails only", async () => {
+    h.products.fetch.mockResolvedValue({ productId: 'gid://shopify/Product/42', title: 'GRIPZ', handle: 'g', images: [{ id: 'm1', url: 'https://cdn.shopify.com/big.jpg', thumbnailUrl: 'https://cdn.shopify.com/t.jpg', altText: 'front' }] })
+    const body = await (await api.action(post({ intent: 'product-images', productId: 'gid://shopify/Product/42' }))).json()
+    expect(body).toEqual({ product: { id: 'gid://shopify/Product/42', title: 'GRIPZ' }, images: [{ id: 'm1', thumbnailUrl: 'https://cdn.shopify.com/t.jpg', altText: 'front' }] })
+  })
+
+  it('creates from a product: guard first, then import, then a product-sourced generation', async () => {
+    const order = []
+    h.gen.guard.mockImplementation(async () => { order.push('guard') })
+    h.products.import.mockImplementation(async () => { order.push('import'); return { photoRefs: ['r1', 'r2', 'r3'], productId: 'gid://shopify/Product/42', title: 'GRIPZ', handle: 'gripz' } })
+    h.gen.create.mockImplementation(async () => { order.push('create'); return { id: 'g9', status: 'running' } })
+    const body = await (await api.action(post({ intent: 'create-from-product', productId: 'gid://shopify/Product/42', imageIds: JSON.stringify(['m1', 'm2', 'm3']) }))).json()
+    expect(order).toEqual(['guard', 'import', 'create'])
+    expect(h.products.import.mock.calls[0][0]).toMatchObject({ shop: h.shop, productId: 'gid://shopify/Product/42', imageIds: ['m1', 'm2', 'm3'] })
+    expect(h.gen.create.mock.calls[0][1]).toMatchObject({ photoRefs: ['r1', 'r2', 'r3'], photoSource: 'product', productId: 'gid://shopify/Product/42', productTitle: 'GRIPZ', productHandle: 'gripz', shopGid: 'gid://shopify/Shop/7' })
+    expect(body).toEqual({ generation: { id: 'g9', status: 'running' } })
+  })
+
+  it('maps product-sourced saves and leaves upload saves alone', async () => {
+    h.gen.save.mockResolvedValue({ assetId: 'a1', paid: false, productId: 'gid://shopify/Product/42', productHandle: 'gripz' })
+    h.mapping.mockResolvedValue({ mapped: false, reason: 'product_limit' })
+    const body = await (await api.action(post({ intent: 'save', generationId: 'g1' }))).json()
+    expect(body.mapping).toEqual({ mapped: false, reason: 'product_limit' })
+    expect(h.mapping.mock.calls[0][0]).toMatchObject({ shop: h.shop, planName: 'Starter', productId: 'gid://shopify/Product/42', productHandle: 'gripz', modelAssetId: 'a1' })
+
+    h.mapping.mockClear()
+    h.gen.save.mockResolvedValue({ assetId: 'a2', paid: false, productId: null, productHandle: null })
+    const plain = await (await api.action(post({ intent: 'save', generationId: 'g2' }))).json()
+    expect(plain.mapping).toBeUndefined()
+    expect(h.mapping).not.toHaveBeenCalled()
+  })
+
+  it('maps product errors to merchant copy', async () => {
+    h.products.fetch.mockRejectedValue(Object.assign(new Error('x'), { code: 'NOT_FOUND' }))
+    const res = await api.action(post({ intent: 'product-images', productId: 'gid://shopify/Product/1' }))
+    expect(res.status).toBe(404)
   })
 })
 
