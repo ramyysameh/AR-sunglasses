@@ -97,15 +97,17 @@ export async function importProductPhotos({ admin, shop, productId, imageIds, fe
   const chosen = imageIds.map((id) => byId.get(id))
   if (chosen.some((image) => !image)) throw tagged('BAD_PHOTOS', 'a chosen photo is not on this product')
 
-  const photoRefs = []
-  try {
-    for (const image of chosen) {
-      const { bytes, contentType } = await download(image.url, fetchImpl)
-      const ref = newPhotoRef(shop, contentType)
-      await savePhoto(ref, bytes, contentType)
-      photoRefs.push(ref)
-    }
-  } catch (error) {
+  // Download in parallel (sequential worst case was 4 x 15 s). allSettled, not
+  // all: every in-flight save must finish so a failure can delete all of them.
+  const settled = await Promise.allSettled(chosen.map(async (image) => {
+    const { bytes, contentType } = await download(image.url, fetchImpl)
+    const ref = newPhotoRef(shop, contentType)
+    await savePhoto(ref, bytes, contentType)
+    return ref
+  }))
+  const photoRefs = settled.filter((item) => item.status === 'fulfilled').map((item) => item.value)
+  const failure = settled.find((item) => item.status === 'rejected')
+  if (failure) {
     for (const ref of photoRefs) {
       try {
         await deleteModelGlb(ref)
@@ -113,7 +115,7 @@ export async function importProductPhotos({ admin, shop, productId, imageIds, fe
         console.error('product photo cleanup failed', ref, cleanupError)
       }
     }
-    throw error
+    throw failure.reason
   }
   return { photoRefs, productId: product.productId, title: product.title, handle: product.handle }
 }

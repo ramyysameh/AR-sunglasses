@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-const store = vi.hoisted(() => ({ saved: new Map(), deleted: [], failSave: false }))
+const store = vi.hoisted(() => ({ saved: new Map(), deleted: [], failOnSave: 0, saveCalls: 0 }))
 vi.mock('../app/storage.server.js', () => ({
   MAX_PHOTO_BYTES: 10 * 1024 * 1024,
   newPhotoRef: (shop, type) => `generation-photos/${shop}/${store.saved.size + store.deleted.length}-${Math.random().toString(16).slice(2, 8)}.${type === 'image/png' ? 'png' : 'jpg'}`,
   savePhoto: async (key, bytes, type) => {
-    if (store.failSave) throw new Error('s3 down')
+    store.saveCalls += 1
+    if (store.failOnSave && store.saveCalls === store.failOnSave) throw new Error('s3 down')
     store.saved.set(key, { bytes, type })
   },
   deleteModelGlb: async (key) => { store.deleted.push(key); store.saved.delete(key) },
@@ -37,7 +38,8 @@ const okFetch = (type = 'image/jpeg', body = 'jpegbytes') => vi.fn(async (url) =
 beforeEach(() => {
   store.saved.clear()
   store.deleted.length = 0
-  store.failSave = false
+  store.failOnSave = 0
+  store.saveCalls = 0
 })
 
 describe('fetchProductImages', () => {
@@ -141,8 +143,40 @@ describe('importProductPhotos', () => {
   })
 
   it('cleans up stored photos when storage itself fails', async () => {
-    store.failSave = true
+    store.failOnSave = 2
     await expect(importProductPhotos({ admin: adminFor(product), shop: SHOP, productId: PRODUCT, imageIds: ids(1, 2, 3), fetchImpl: okFetch() }))
       .rejects.toThrow('s3 down')
+    // the 1st save succeeded before the 2nd failed; saves are parallel so the 3rd
+    // lands too -- both are deleted, nothing is left behind
+    expect(store.deleted).toHaveLength(2)
+    expect(store.saved.size).toBe(0)
+  })
+
+  it('downloads in parallel and returns the refs in the order the images were chosen', async () => {
+    // the first image is the slowest; refs must still follow imageIds order
+    const delays = { 'p1.jpg': 40, 'p2.jpg': 20, 'p3.jpg': 0 }
+    let inFlight = 0
+    let peak = 0
+    const fetchImpl = vi.fn(async (url) => {
+      inFlight += 1
+      peak = Math.max(peak, inFlight)
+      const key = Object.keys(delays).find((k) => url.includes(k))
+      await new Promise((resolve) => setTimeout(resolve, delays[key]))
+      inFlight -= 1
+      return new Response(`bytes-${key}`, { status: 200, headers: { 'content-type': 'image/jpeg' } })
+    })
+    const result = await importProductPhotos({ admin: adminFor(product), shop: SHOP, productId: PRODUCT, imageIds: ids(1, 2, 3), fetchImpl })
+    expect(peak).toBe(3)
+    expect(result.photoRefs.map((ref) => Buffer.from(store.saved.get(ref).bytes).toString())).toEqual(['bytes-p1.jpg', 'bytes-p2.jpg', 'bytes-p3.jpg'])
+  })
+
+  it('deletes the photos that did save when another image fails', async () => {
+    const fetchImpl = vi.fn(async (url) => (url.includes('p2.jpg')
+      ? new Response('nope', { status: 500 })
+      : new Response('jpg', { status: 200, headers: { 'content-type': 'image/jpeg' } })))
+    await expect(importProductPhotos({ admin: adminFor(product), shop: SHOP, productId: PRODUCT, imageIds: ids(1, 2, 3), fetchImpl }))
+      .rejects.toMatchObject({ code: 'BAD_PHOTO' })
+    expect(store.deleted).toHaveLength(2)
+    expect(store.saved.size).toBe(0)
   })
 })
