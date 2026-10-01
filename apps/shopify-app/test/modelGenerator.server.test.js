@@ -201,3 +201,25 @@ describe('cancelGeneration', () => {
     }
   })
 })
+
+describe('buildGenerationRequest by source', () => {
+  it('keeps the labelled front/left/right wording for uploads', () => {
+    const text = buildGenerationRequest({ images: ['a', 'b', 'c'] }).input[0].content[0].text
+    expect(text).toMatch(/front, left side, right side/)
+  })
+
+  it('describes product photos as unordered angles and says to model only the glasses', () => {
+    const text = buildGenerationRequest({ images: ['a', 'b', 'c', 'd'], source: 'product' }).input[0].content[0].text
+    expect(text).not.toMatch(/left side, right side/)
+    expect(text).toMatch(/4 product photos/)
+    expect(text).toMatch(/different angles/)
+    expect(text).toMatch(/only the glasses/)
+  })
+
+  it('passes the source through startGeneration', async () => {
+    const client = fakeClient()
+    setGeneratorClient(client)
+    await startGeneration({ images: ['a', 'b', 'c'], source: 'product' })
+    expect(client.calls.created[0].input[0].content[0].text).toMatch(/product photos/)
+  })
+})

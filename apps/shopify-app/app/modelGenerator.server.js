@@ -53,11 +53,18 @@ export function setGeneratorClient(fake) {
   client = fake
 }
 
-export function buildGenerationRequest({ images, feedback = null }) {
+function introText(images, source) {
+  if (source === 'product') {
+    return `These ${images.length} product photos show one pair of glasses from different angles, in no particular order. Some may show the glasses worn by a person or on a background: model only the glasses. Build its 3D model.`
+  }
+  return `These ${images.length} photos show one pair of glasses: front, left side, right side${images.length > 3 ? ', back' : ''}. Build its 3D model.`
+}
+
+export function buildGenerationRequest({ images, feedback = null, source = 'upload' }) {
   const content = [
     {
       type: 'input_text',
-      text: `These ${images.length} photos show one pair of glasses: front, left side, right side${images.length > 3 ? ', back' : ''}. Build its 3D model.`,
+      text: introText(images, source),
     },
     ...images.map((url) => ({ type: 'input_image', image_url: url, detail: 'high' })),
   ]
@@ -74,8 +81,8 @@ export function buildGenerationRequest({ images, feedback = null }) {
   }
 }
 
-export async function startGeneration({ images, feedback = null }) {
-  const response = await getClient().responses.create(buildGenerationRequest({ images, feedback }))
+export async function startGeneration({ images, feedback = null, source = 'upload' }) {
+  const response = await getClient().responses.create(buildGenerationRequest({ images, feedback, source }))
   return { providerJobId: response.id }
 }
 
