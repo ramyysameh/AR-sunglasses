@@ -90,6 +90,31 @@ export function canGenerateFromProduct(selected) {
   return selected.length >= 3 && selected.length <= 4
 }
 
+export const MAX_PRODUCTS = 5
+
+export function pickedFromLookup(product, images) {
+  return { id: product.id, title: product.title, images, selected: defaultImageSelection(images) }
+}
+
+export function bulkItems(picked) {
+  return picked
+    .filter((product) => canGenerateFromProduct(product.selected))
+    .map((product) => ({ productId: product.id, imageIds: product.selected }))
+}
+
+export function generateLabel(count) {
+  if (count === 1) return 'Generate 3D model'
+  return count > 1 ? `Generate 3D models (${count})` : 'Generate 3D models'
+}
+
+export function bulkResultMessage(results, picked) {
+  const failed = (results ?? []).filter((result) => result.error)
+  if (!failed.length) return null
+  return failed
+    .map((result) => `${picked.find((p) => p.id === result.productId)?.title ?? 'A product'}: ${result.error}`)
+    .join(' ')
+}
+
 // Lives with the component that renders it; re-exported so callers/tests keep one import.
 export { productTooFewPhotos } from './AiProductSource'
 
@@ -171,9 +196,7 @@ export default function AiModelFlow({ initialAllowance }) {
   const revalidator = useRevalidator()
   const [photos, setPhotos] = useState({})
   const [source, setSource] = useState('product')
-  const [product, setProduct] = useState(null)
-  const [productImages, setProductImages] = useState([])
-  const [selectedImages, setSelectedImages] = useState([])
+  const [picked, setPicked] = useState([])
   const [generations, setGenerations] = useState([])
   const [allowance, setAllowance] = useState(initialAllowance ?? null)
   const [busy, setBusy] = useState(false)
@@ -279,26 +302,26 @@ export default function AiModelFlow({ initialAllowance }) {
     }
   }
 
-  async function chooseProduct() {
+  async function chooseProducts() {
     setBusy(true)
     setError(null)
     try {
       const selection = await shopify.resourcePicker({
         type: 'product',
         action: 'select',
-        ...(product ? { selectionIds: [{ id: product.id }] } : {}),
+        multiple: MAX_PRODUCTS,
+        selectionIds: picked.map((p) => ({ id: p.id })),
       })
-      if (!selection?.[0]) return
-      // Drop the old product first so a failed lookup can't leave Generate armed with it.
-      setProduct(null)
-      setProductImages([])
-      setSelectedImages([])
-      const res = await postForm({ intent: 'product-images', productId: selection[0].id })
-      if (!res.ok) throw new ShownError(res.body.error ?? GENERIC_ERROR)
-      const images = Array.isArray(res.body.images) ? res.body.images : []
-      setProduct(res.body.product)
-      setProductImages(images)
-      setSelectedImages(defaultImageSelection(images))
+      if (!selection) return
+      const ids = selection.slice(0, MAX_PRODUCTS).map((item) => item.id)
+      // Keep ticks the merchant already changed; look up only new products.
+      const kept = picked.filter((p) => ids.includes(p.id))
+      const fresh = await Promise.all(ids.filter((id) => !kept.some((p) => p.id === id)).map(async (id) => {
+        const res = await postForm({ intent: 'product-images', productId: id })
+        if (!res.ok) throw new ShownError(res.body.error ?? GENERIC_ERROR)
+        return pickedFromLookup(res.body.product, Array.isArray(res.body.images) ? res.body.images : [])
+      }))
+      setPicked(ids.map((id) => kept.find((p) => p.id === id) ?? fresh.find((p) => p.id === id)).filter(Boolean))
     } catch (e) {
       reportFailure(e, 'AI product photos failed')
     } finally {
@@ -306,23 +329,22 @@ export default function AiModelFlow({ initialAllowance }) {
     }
   }
 
-  async function generateFromProduct() {
+  async function generateFromProducts() {
     setBusy(true)
     setGenerating(true)
     setError(null)
     try {
-      const created = await postForm({
-        intent: 'create-from-product',
-        productId: product.id,
-        imageIds: JSON.stringify(selectedImages),
-      })
+      const items = bulkItems(picked)
+      const created = await postForm({ intent: 'create-from-products', items: JSON.stringify(items) })
       if (!created.ok) throw new ShownError(created.body.error ?? GENERIC_ERROR)
-      setProduct(null)
-      setProductImages([])
-      setSelectedImages([])
+      const message = bulkResultMessage(created.body.results, picked)
+      // Keep only the products that didn't start, so the merchant can fix and resend them.
+      const startedIds = (created.body.results ?? []).filter((r) => r.generation).map((r) => r.productId)
+      setPicked((current) => current.filter((p) => !startedIds.includes(p.id)))
+      if (message) setError(message)
       await refresh()
     } catch (e) {
-      reportFailure(e, 'AI generation from product failed')
+      reportFailure(e, 'AI generation from products failed')
     } finally {
       setBusy(false)
       setGenerating(false)
@@ -386,7 +408,7 @@ export default function AiModelFlow({ initialAllowance }) {
       <s-stack direction="block" gap="base">
         <s-stack direction="inline" gap="small-200">
           <s-button variant={source === 'product' ? 'primary' : 'secondary'} onClick={() => switchSource('product')}>
-            From a product
+            From products
           </s-button>
           <s-button variant={source === 'upload' ? 'primary' : 'secondary'} onClick={() => switchSource('upload')}>
             Upload photos
@@ -401,24 +423,25 @@ export default function AiModelFlow({ initialAllowance }) {
         {source === 'product' ? (
           <>
             <s-paragraph>
-              Pick a product from your store and we&apos;ll build its 3D model from the product photos.
+              Pick products from your store and we&apos;ll build their 3D models from the product photos.
             </s-paragraph>
             <AiProductSource
-              product={product}
-              images={productImages}
-              selected={selectedImages}
+              picked={picked}
               disabled={busy}
-              onChoose={chooseProduct}
-              onToggle={(id) => setSelectedImages((current) => toggleImage(current, id))}
+              onChoose={chooseProducts}
+              onToggle={(productId, imageId) => setPicked((current) => current.map((p) => (
+                p.id === productId ? { ...p, selected: toggleImage(p.selected, imageId) } : p
+              )))}
+              onRemove={(productId) => setPicked((current) => current.filter((p) => p.id !== productId))}
             />
             <s-stack direction="inline">
               <s-button
                 variant="primary"
-                disabled={busy || !product || !canGenerateFromProduct(selectedImages)}
+                disabled={busy || bulkItems(picked).length === 0}
                 {...(generating ? { loading: true } : {})}
-                onClick={generateFromProduct}
+                onClick={generateFromProducts}
               >
-                Generate 3D model
+                {generateLabel(bulkItems(picked).length)}
               </s-button>
             </s-stack>
           </>

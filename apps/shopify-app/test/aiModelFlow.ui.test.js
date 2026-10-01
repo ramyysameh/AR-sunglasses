@@ -12,6 +12,11 @@ import {
   canGenerateFromProduct,
   mappingMessage,
   productTooFewPhotos,
+  MAX_PRODUCTS,
+  pickedFromLookup,
+  bulkItems,
+  generateLabel,
+  bulkResultMessage,
 } from '../app/components/AiModelFlow.jsx'
 
 const file = (type = 'image/jpeg', size = 1000) => ({ type, size, name: 'x' })
@@ -124,5 +129,44 @@ describe('mappingMessage', () => {
     expect(mappingMessage({ mapped: false, reason: 'product_limit' }, 'GRIPZ')).toMatch(/product limit/)
     expect(mappingMessage({ mapped: false, reason: 'publish_failed' }, 'GRIPZ')).toMatch(/Add try-on/)
     expect(mappingMessage(undefined, 'GRIPZ')).toBeNull()
+  })
+})
+
+describe('bulk product generation', () => {
+  const images = (n) => Array.from({ length: n }, (_, i) => ({ id: `i${i}`, thumbnailUrl: `t${i}`, altText: '' }))
+
+  it('pre-ticks the first 4 photos of each picked product', () => {
+    expect(pickedFromLookup({ id: 'P', title: 'Aviator' }, images(6))).toEqual({
+      id: 'P', title: 'Aviator', images: images(6), selected: ['i0', 'i1', 'i2', 'i3'],
+    })
+  })
+
+  it('sends only products with 3 or 4 ticked photos', () => {
+    const picked = [
+      { id: 'A', selected: ['1', '2', '3'] },
+      { id: 'B', selected: ['1', '2'] },
+      { id: 'C', selected: ['1', '2', '3', '4'] },
+    ]
+    expect(bulkItems(picked)).toEqual([
+      { productId: 'A', imageIds: ['1', '2', '3'] },
+      { productId: 'C', imageIds: ['1', '2', '3', '4'] },
+    ])
+  })
+
+  it('labels the button with how many models will be made', () => {
+    expect(generateLabel(0)).toBe('Generate 3D models')
+    expect(generateLabel(1)).toBe('Generate 3D model')
+    expect(generateLabel(3)).toBe('Generate 3D models (3)')
+  })
+
+  it('names the products that could not start', () => {
+    const picked = [{ id: 'A', title: 'Aviator' }, { id: 'B', title: 'Round' }]
+    expect(bulkResultMessage([{ productId: 'A', generation: {} }, { productId: 'B', error: 'That product is no longer available. Pick another one.' }], picked))
+      .toBe("Round: That product is no longer available. Pick another one.")
+    expect(bulkResultMessage([{ productId: 'A', generation: {} }], picked)).toBeNull()
+  })
+
+  it('allows at most 5 products', () => {
+    expect(MAX_PRODUCTS).toBe(5)
   })
 })
