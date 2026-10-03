@@ -18,7 +18,7 @@ import { tagged } from './errors.server.js'
 
 export const LIMITS = {
   running: 5,
-  perDay: 20,
+  perDay: 40,
   retries: 3,
   timeoutMs: 15 * 60 * 1000,
   retentionDays: 30,

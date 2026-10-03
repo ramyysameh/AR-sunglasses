@@ -182,16 +182,17 @@ describe('createGeneration', () => {
     const old = new Date(NOW.getTime() - 25 * 60 * 60 * 1000)
     const input = { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW }
 
-    // 15 + 2 rows + 2 automatic retries = 19 < 20; the 10 old rows must not count.
+    const L = generations.LIMITS.perDay
+    // (L-5) + 2 rows + 2 automatic retries = L-1 < L; the 10 old rows must not count.
     const under = createFakePrisma()
-    await seed(under, Array(15).fill('failed'), { createdAt: recent })
+    await seed(under, Array(L - 5).fill('failed'), { createdAt: recent })
     await seed(under, Array(2).fill('failed'), { createdAt: recent, autoRetried: true })
     await seed(under, Array(10).fill('failed'), { createdAt: old, autoRetried: true })
     await expect(generations.createGeneration(under, input)).resolves.toMatchObject({ status: 'running' })
 
-    // 16 + 2 rows + 2 automatic retries = 20 >= 20.
+    // (L-4) + 2 rows + 2 automatic retries = L >= L.
     const over = createFakePrisma()
-    await seed(over, Array(16).fill('failed'), { createdAt: recent })
+    await seed(over, Array(L - 4).fill('failed'), { createdAt: recent })
     await seed(over, Array(2).fill('failed'), { createdAt: recent, autoRetried: true })
     await expect(generations.createGeneration(over, input)).rejects.toMatchObject({ code: 'DAILY_LIMIT' })
   })
@@ -227,7 +228,7 @@ describe('createGeneration', () => {
     const prisma = createFakePrisma()
     const parent = await prisma.modelGeneration.create({ data: row({ status: 'ready', glbRef: 'generations/p.glb', createdAt: NOW }) })
     deps.objects.set('generations/p.glb', Buffer.from('p'))
-    await seed(prisma, Array(19).fill('failed'), { createdAt: NOW, photoSetId: 'other' })
+    await seed(prisma, Array(generations.LIMITS.perDay - 1).fill('failed'), { createdAt: NOW, photoSetId: 'other' })
     await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: parent.id, now: NOW }))
       .rejects.toMatchObject({ code: 'DAILY_LIMIT' })
     expect((await prisma.modelGeneration.findUnique({ where: { id: parent.id } })).status).toBe('ready')
@@ -320,7 +321,7 @@ describe('assertCanStartGeneration', () => {
     await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW)).resolves.toBeUndefined()
 
     const busy = createFakePrisma()
-    await seed(busy, Array(20).fill('failed'), { createdAt: new Date(NOW.getTime() - 60_000) })
+    await seed(busy, Array(generations.LIMITS.perDay).fill('failed'), { createdAt: new Date(NOW.getTime() - 60_000) })
     await expect(generations.assertCanStartGeneration(busy, SHOP, NOW)).rejects.toMatchObject({ code: 'DAILY_LIMIT' })
   })
 })
@@ -328,13 +329,14 @@ describe('assertCanStartGeneration', () => {
 describe('remainingToday', () => {
   it('is the daily limit minus starts and automatic retries in the last 24h, never negative', async () => {
     const prisma = createFakePrisma()
-    await expect(generations.remainingToday(prisma, SHOP, NOW)).resolves.toBe(20)
+    const L = generations.LIMITS.perDay
+    await expect(generations.remainingToday(prisma, SHOP, NOW)).resolves.toBe(L)
     await seed(prisma, ['failed', 'failed', 'ready'], { createdAt: new Date(NOW.getTime() - 60_000) })
     await seed(prisma, ['ready'], { createdAt: new Date(NOW.getTime() - 60_000), autoRetried: true })
     await seed(prisma, ['ready'], { createdAt: new Date(NOW.getTime() - 25 * 3600_000) })
     await seed(prisma, ['ready'], { createdAt: NOW, shop: 'other.myshopify.com' })
-    await expect(generations.remainingToday(prisma, SHOP, NOW)).resolves.toBe(20 - 4 - 1)
-    await seed(prisma, Array(30).fill('failed'), { createdAt: NOW })
+    await expect(generations.remainingToday(prisma, SHOP, NOW)).resolves.toBe(L - 4 - 1)
+    await seed(prisma, Array(L + 10).fill('failed'), { createdAt: NOW })
     await expect(generations.remainingToday(prisma, SHOP, NOW)).resolves.toBe(0)
   })
 })
@@ -1271,7 +1273,7 @@ describe('start queue', () => {
 
   it('still refuses past the daily limit, counting waiting rows', async () => {
     const prisma = createFakePrisma()
-    for (let i = 0; i < 20; i += 1) {
+    for (let i = 0; i < generations.LIMITS.perDay; i += 1) {
       await prisma.modelGeneration.create({ data: row({ status: 'queued', createdAt: t(10), photoSetId: `d${i}` }) })
     }
     await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, now: NOW }))

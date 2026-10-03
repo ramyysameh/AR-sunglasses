@@ -50,7 +50,7 @@ const MESSAGES = {
   GLB_MISSING: "This model's file is no longer available. Try generating it again.",
   CHARGE_NOT_CONFIRMED: 'This model costs $5. Confirm to save it.',
   TOO_MANY_RUNNING: 'Too many models are being generated. Wait for one to finish.',
-  DAILY_LIMIT: "You've reached today's limit of 20 AI generations. Try again tomorrow.",
+  DAILY_LIMIT: "You've reached today's limit of 40 AI generations. Try again tomorrow.",
 }
 
 const SHOP_ID_QUERY = `#graphql
