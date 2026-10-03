@@ -5,6 +5,7 @@ import { presignPhotoUpload, deleteModelGlb } from '../storage.server'
 import {
   aiGenerationEnabled,
   assertCanStartGeneration,
+  remainingToday,
   getAllowance,
   listGenerations,
   createGeneration,
@@ -228,14 +229,23 @@ export const action = async ({ request }) => {
       // Import every product's photos in parallel (the slow CDN + storage part),
       // then create the generations one after another in request order, so each
       // row's queue/daily decision sees the previous one.
+      // Only as many products as the day still allows are imported at all, so
+      // an over-limit request doesn't copy photos it would only delete again.
+      const remaining = await remainingToday(prisma, shop)
       const imports = await Promise.allSettled(
-        items.map((item, i) => importProductPhotos({ admin, shop, productId: ids[i], imageIds: item?.imageIds })),
+        items.map((item, i) => (i < remaining
+          ? importProductPhotos({ admin, shop, productId: ids[i], imageIds: item?.imageIds })
+          : Promise.resolve(null))),
       )
       const results = []
       let dailyLimitHit = false
       for (let i = 0; i < items.length; i++) {
         const productId = ids[i]
         const settled = imports[i]
+        if (i >= remaining) {
+          results.push({ productId, code: 'DAILY_LIMIT', error: MESSAGES.DAILY_LIMIT })
+          continue
+        }
         if (settled.status === 'rejected') {
           results.push(failureResult(productId, settled.reason))
           continue

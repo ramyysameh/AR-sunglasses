@@ -37,6 +37,7 @@ export function isShopPhotoRef(shop, ref) {
 
 const USED_STATUSES = ['saving', 'saved']
 const RETRYABLE_STATUSES = ['ready', 'failed', 'discarded']
+const IN_FLIGHT_STATUSES = ['queued', 'running', 'collecting']
 const DAY_MS = 24 * 60 * 60 * 1000
 
 // OpenAI fetches the photos itself, so it gets short-lived signed URLs.
@@ -70,14 +71,25 @@ async function slotsInUse(prisma, shop) {
  * a start that would be refused doesn't leave uploaded photos behind.
  */
 export async function assertCanStartGeneration(prisma, shop, now = new Date()) {
+  const used = await startsInLastDay(prisma, shop, now)
+  if (used >= LIMITS.perDay) {
+    throw tagged('DAILY_LIMIT', `shop started ${used} generations in 24h`)
+  }
+}
+
+// Starts plus automatic retries in the last 24 hours: what the daily cap counts.
+async function startsInLastDay(prisma, shop, now) {
   const since = new Date(now.getTime() - DAY_MS)
   const [started, autoRetries] = await Promise.all([
     prisma.modelGeneration.count({ where: { shop, createdAt: { gte: since } } }),
     prisma.modelGeneration.count({ where: { shop, createdAt: { gte: since }, autoRetried: true } }),
   ])
-  if (started + autoRetries >= LIMITS.perDay) {
-    throw tagged('DAILY_LIMIT', `shop started ${started + autoRetries} generations in 24h`)
-  }
+  return started + autoRetries
+}
+
+/** How many more generations the shop may start today (never negative). */
+export async function remainingToday(prisma, shop, now = new Date()) {
+  return Math.max(0, LIMITS.perDay - await startsInLastDay(prisma, shop, now))
 }
 
 /**
@@ -161,6 +173,12 @@ export async function createGeneration(prisma, {
       // attempt can't restart the count.
       const setSize = await tx.modelGeneration.count({ where: { shop, photoSetId: parentRow.photoSetId } })
       if (setSize > LIMITS.retries) throw tagged('RETRY_LIMIT', 'no retries left for this photo set')
+      // One attempt at a time per photo set: a waiting or running sibling means
+      // this parent was superseded, so a second retry would race the first.
+      const inFlight = await tx.modelGeneration.count({
+        where: { shop, photoSetId: parentRow.photoSetId, status: { in: IN_FLIGHT_STATUSES } },
+      })
+      if (inFlight > 0) throw tagged('NOT_RETRYABLE', 'another attempt for this photo set is already in progress')
       refs = parentRow.photoRefs
       photoSetId = parentRow.photoSetId
       retryIndex = setSize
@@ -242,10 +260,22 @@ export async function startQueued(prisma, shop, now = new Date()) {
       })
       const oldest = waiting.at(-1)
       if (!oldest) return null
+      // A retry that waited while its photo set was saved meanwhile is moot:
+      // free it (no OpenAI call, no slot held) and look at the next one.
+      if (oldest.retryIndex > 0) {
+        const used = await tx.modelGeneration.count({
+          where: { shop, photoSetId: oldest.photoSetId, status: { in: USED_STATUSES } },
+        })
+        if (used > 0) {
+          await tx.modelGeneration.update({ where: { id: oldest.id }, data: { status: 'discarded' } })
+          return { discarded: true }
+        }
+      }
       await tx.modelGeneration.update({ where: { id: oldest.id }, data: { startedAt: now } })
       return { ...oldest, startedAt: now }
     })
     if (!next) break
+    if (next.discarded) continue
     const result = await startRow(prisma, next, now)
     if (result.status !== 'running') continue
     started += 1

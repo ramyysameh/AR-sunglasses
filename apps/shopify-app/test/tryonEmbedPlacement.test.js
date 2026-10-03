@@ -182,3 +182,30 @@ describe('embed re-placement after the theme re-renders', () => {
     expect(state.appended).toBe(root)
   })
 })
+
+describe('embed placement never throws on the storefront', () => {
+  const throwing = () => { throw new Error('theme broke querySelector') }
+
+  it('swallows a throwing querySelector during the first placement', () => {
+    const state = { root: makeRoot() }
+    Object.defineProperty(state, 'submit', { get: throwing })
+    expect(() => run(state)).not.toThrow()
+  })
+
+  it('swallows an error while placing inside the observer callback', () => {
+    const { FakeObserver, created } = makeObserver()
+    const root = makeRoot()
+    const state = { root, submit: makeSubmit('block') }
+    run(state, { MutationObserver: FakeObserver, requestAnimationFrame: (f) => f() })
+    root.isConnected = false
+    Object.defineProperty(state, 'submit', { get: throwing })
+    expect(() => created[0].cb()).not.toThrow()
+  })
+
+  it('swallows a failing insert', () => {
+    const root = makeRoot()
+    const submit = makeSubmit('block')
+    submit.insertAdjacentElement = throwing
+    expect(() => run({ root, submit })).not.toThrow()
+  })
+})

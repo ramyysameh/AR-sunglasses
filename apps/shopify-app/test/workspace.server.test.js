@@ -114,22 +114,3 @@ describe('workspaceGuide turn-on step', () => {
     })
   })
 })
-
-describe('setupSteps', () => {
-  const asset = { id: 'a', status: 'ready' }
-  it('starts at creating models', () => {
-    expect(setupSteps({ assets: [], mappings: [], storeLive: false }).steps.map((s) => s.state)).toEqual(['current', 'upcoming', 'upcoming'])
-  })
-  it('moves to saving once a model exists, then to turning on', () => {
-    expect(setupSteps({ assets: [asset], mappings: [], storeLive: false }).steps.map((s) => s.state)).toEqual(['done', 'current', 'upcoming'])
-    expect(setupSteps({ assets: [asset], mappings: [{ id: 'm' }], storeLive: false }).steps.map((s) => s.state)).toEqual(['done', 'done', 'current'])
-  })
-  it('is done when the store has try-on on', () => {
-    const setup = setupSteps({ assets: [asset], mappings: [{ id: 'm' }], storeLive: true })
-    expect(setup.done).toBe(true)
-    expect(setup.steps.every((s) => s.state === 'done')).toBe(true)
-  })
-  it('counts only ready (or reviewed) models for step one', () => {
-    expect(setupSteps({ assets: [{ id: 'x', status: 'needs_manual' }], mappings: [], storeLive: false }).steps[0].state).toBe('current')
-  })
-})

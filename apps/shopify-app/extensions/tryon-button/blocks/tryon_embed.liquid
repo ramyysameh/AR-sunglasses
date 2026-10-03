@@ -41,21 +41,28 @@
       // stay where Shopify put it, so float it instead of moving it into a form.
       const inEditor = Boolean(root.dataset && root.dataset.arTryonDesignMode)
 
+      // This runs on a live storefront inside a theme we don't control: a
+      // failed placement must never surface as a page error, so it is swallowed
+      // and the button simply stays wherever it already is.
       function place() {
-        const submit = inEditor ? null : document.querySelector(submitSelector)
-        if (submit) {
-          root.classList.remove('ar-tryon--floating')
-          // In a flex row the full-width button would squeeze in beside Add to
-          // cart; go after the row instead so it gets its own line.
-          const parent = submit.parentElement
-          const parentDisplay =
-            parent && typeof getComputedStyle === 'function' ? getComputedStyle(parent).display : ''
-          const anchor = /flex/.test(parentDisplay) ? parent : submit
-          anchor.insertAdjacentElement('afterend', root)
-        } else {
-          root.classList.add('ar-tryon--floating')
-          // A theme that swaps out <main> can take a floating root with it.
-          if (!root.isConnected && document.body) document.body.appendChild(root)
+        try {
+          const submit = inEditor ? null : document.querySelector(submitSelector)
+          if (submit) {
+            root.classList.remove('ar-tryon--floating')
+            // In a flex row the full-width button would squeeze in beside Add to
+            // cart; go after the row instead so it gets its own line.
+            const parent = submit.parentElement
+            const parentDisplay =
+              parent && typeof getComputedStyle === 'function' ? getComputedStyle(parent).display : ''
+            const anchor = /flex/.test(parentDisplay) ? parent : submit
+            anchor.insertAdjacentElement('afterend', root)
+          } else {
+            root.classList.add('ar-tryon--floating')
+            // A theme that swaps out <main> can take a floating root with it.
+            if (!root.isConnected && document.body) document.body.appendChild(root)
+          }
+        } catch (error) {
+          // intentionally silent
         }
       }
 

@@ -52,6 +52,7 @@ vi.mock('../app/aiProductMapping.server.js', () => ({
 vi.mock('../app/generations.server.js', () => ({
   aiGenerationEnabled: () => h.enabled,
   assertCanStartGeneration: (...args) => h.gen.guard(...args),
+  remainingToday: (...args) => h.gen.remaining(...args),
   getAllowance: async () => ({ allowance: 10, used: 1, unlimited: false, freeRemaining: 9 }),
   listGenerations: (...args) => h.gen.list(...args),
   createGeneration: (...args) => h.gen.create(...args),
@@ -76,7 +77,7 @@ const tagged = (code) => Object.assign(new Error(code), { code })
 beforeEach(() => {
   h.plan = 'Starter'
   h.enabled = true
-  h.gen = { list: vi.fn(), create: vi.fn(), save: vi.fn(), discard: vi.fn(), advance: vi.fn(), guard: vi.fn() }
+  h.gen = { list: vi.fn(), create: vi.fn(), save: vi.fn(), discard: vi.fn(), advance: vi.fn(), guard: vi.fn(), remaining: vi.fn(async () => 20) }
   h.presign.mockReset()
   h.deleteGlb.mockReset()
   h.unwrap.mockReset()
@@ -339,6 +340,27 @@ describe('create-from-products', () => {
     const body = await (await api.action(post({ intent: 'create-from-products', items: items(['A']) }))).json()
     expect(body.results[0]).toMatchObject({ code: 'DAILY_LIMIT' })
     expect(h.deleteGlb.mock.calls.map(([ref]) => ref)).toEqual(['p/A/1.jpg', 'p/A/2.jpg', 'p/A/3.jpg'])
+  })
+
+  it('does not import more products than the day allows', async () => {
+    h.gen.remaining = vi.fn(async () => 2)
+    const body = await (await api.action(post({ intent: 'create-from-products', items: items(['A', 'B', 'C', 'D']) }))).json()
+    expect(h.products.import.mock.calls.map(([a]) => a.productId)).toEqual(['A', 'B'])
+    expect(h.gen.create).toHaveBeenCalledTimes(2)
+    expect(body.results).toEqual([
+      { productId: 'A', generation: { id: 'gen-A', status: 'running' } },
+      { productId: 'B', generation: { id: 'gen-B', status: 'running' } },
+      { productId: 'C', code: 'DAILY_LIMIT', error: expect.any(String) },
+      { productId: 'D', code: 'DAILY_LIMIT', error: expect.any(String) },
+    ])
+    expect(h.deleteGlb).not.toHaveBeenCalled()
+  })
+
+  it('imports nothing when no starts are left', async () => {
+    h.gen.remaining = vi.fn(async () => 0)
+    const body = await (await api.action(post({ intent: 'create-from-products', items: items(['A', 'B']) }))).json()
+    expect(h.products.import).not.toHaveBeenCalled()
+    expect(body.results.map((r) => r.code)).toEqual(['DAILY_LIMIT', 'DAILY_LIMIT'])
   })
 
   it('refuses malformed or non-array items with BAD_PRODUCTS', async () => {

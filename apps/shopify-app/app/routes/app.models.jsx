@@ -421,7 +421,7 @@ export default function Models() {
         </s-section>
       )}
       <PlanUsage usage={usage} />
-      {ai && <AiModelFlow initialAllowance={ai.allowance} />}
+      {ai && <AiModelFlow initialAllowance={ai.allowance} showBalance={false} />}
       <s-section heading="Model library">
         {assets.length === 0 ? (
           <s-stack direction="block" gap="base">

@@ -18,7 +18,7 @@ export const TUTORIAL_STEPS = [
     intro: 'Check each model, zoom in on the details, then save it. Saving adds try-on to its product.',
     image: { src: '/tutorial/review.png', alt: 'A generated model ready to review', width: 2560, height: 1600 },
     marks: [
-      { n: 1, kind: 'box', x: 30, y: 30, w: 50, h: 40, caption: 'Drag to rotate, scroll or use + and − to zoom.' },
+      { n: 1, kind: 'box', x: 30, y: 30, w: 50, h: 40, caption: 'Expand for a large view: drag to rotate, scroll or pinch to zoom.' },
       { n: 2, kind: 'circle', x: 33, y: 80, w: 12, h: 6, caption: 'Save model. Free models left are shown at the top of the Models page.' },
       { n: 3, kind: 'arrow', x: 70, y: 82, toX: 50, toY: 80, caption: 'Not right? Try again (3 free retries) or Discard.' },
     ],
@@ -30,7 +30,7 @@ export const TUTORIAL_STEPS = [
     image: { src: '/tutorial/turn-on.png', alt: 'The theme editor with the AR Try-on app embed switched on', width: 2560, height: 1600 },
     marks: [
       { n: 1, kind: 'circle', x: 14, y: 40, w: 22, h: 8, caption: 'AR Try-on is already switched on under App embeds.' },
-      { n: 2, kind: 'circle', x: 93, y: 5, w: 8, h: 6, caption: 'Click Save. That is the only step in the theme editor.' },
+      { n: 2, kind: 'circle', x: 90, y: 8, w: 8, h: 6, caption: 'Click Save. That is the only step in the theme editor.' },
     ],
   },
   {

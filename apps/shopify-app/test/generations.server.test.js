@@ -325,6 +325,20 @@ describe('assertCanStartGeneration', () => {
   })
 })
 
+describe('remainingToday', () => {
+  it('is the daily limit minus starts and automatic retries in the last 24h, never negative', async () => {
+    const prisma = createFakePrisma()
+    await expect(generations.remainingToday(prisma, SHOP, NOW)).resolves.toBe(20)
+    await seed(prisma, ['failed', 'failed', 'ready'], { createdAt: new Date(NOW.getTime() - 60_000) })
+    await seed(prisma, ['ready'], { createdAt: new Date(NOW.getTime() - 60_000), autoRetried: true })
+    await seed(prisma, ['ready'], { createdAt: new Date(NOW.getTime() - 25 * 3600_000) })
+    await seed(prisma, ['ready'], { createdAt: NOW, shop: 'other.myshopify.com' })
+    await expect(generations.remainingToday(prisma, SHOP, NOW)).resolves.toBe(20 - 4 - 1)
+    await seed(prisma, Array(30).fill('failed'), { createdAt: NOW })
+    await expect(generations.remainingToday(prisma, SHOP, NOW)).resolves.toBe(0)
+  })
+})
+
 describe('discardGeneration', () => {
   it('discards a ready or failed generation and deletes its pending GLB', async () => {
     const prisma = createFakePrisma()
@@ -1197,6 +1211,38 @@ describe('start queue', () => {
     } finally {
       logged.mockRestore()
     }
+  })
+
+  it('refuses a retry while another attempt in the photo set is queued, running or collecting', async () => {
+    for (const sibling of ['queued', 'running', 'collecting']) {
+      const prisma = createFakePrisma()
+      const parent = await prisma.modelGeneration.create({ data: row({ status: 'ready', createdAt: t(5) }) })
+      await prisma.modelGeneration.create({ data: row({ status: sibling, retryIndex: 1, createdAt: t(1) }) })
+      await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, retryOf: parent.id, now: NOW }))
+        .rejects.toMatchObject({ code: 'NOT_RETRYABLE' })
+      expect(await prisma.modelGeneration.count({ where: { shop: SHOP } })).toBe(2)
+    }
+  })
+
+  it('startQueued discards a waiting retry whose photo set already has a saved row, and starts the next one', async () => {
+    const prisma = createFakePrisma()
+    deps.start.mockResolvedValue({ providerJobId: 'resp_next' })
+    await prisma.modelGeneration.create({ data: row({ status: 'saved', createdAt: t(9) }) })
+    const stale = await prisma.modelGeneration.create({ data: row({ status: 'queued', retryIndex: 1, createdAt: t(3) }) })
+    const next = await prisma.modelGeneration.create({ data: row({ status: 'queued', photoSetId: 'other', createdAt: t(2) }) })
+    expect(await generations.startQueued(prisma, SHOP, NOW)).toBe(1)
+    expect(deps.start).toHaveBeenCalledTimes(1)
+    expect((await prisma.modelGeneration.findUnique({ where: { id: stale.id } })).status).toBe('discarded')
+    expect((await prisma.modelGeneration.findUnique({ where: { id: next.id } })).status).toBe('running')
+  })
+
+  it('startQueued also discards a waiting retry whose set has a saving row', async () => {
+    const prisma = createFakePrisma()
+    await prisma.modelGeneration.create({ data: row({ status: 'saving', createdAt: t(9) }) })
+    const stale = await prisma.modelGeneration.create({ data: row({ status: 'queued', retryIndex: 1, createdAt: t(3) }) })
+    expect(await generations.startQueued(prisma, SHOP, NOW)).toBe(0)
+    expect(deps.start).not.toHaveBeenCalled()
+    expect((await prisma.modelGeneration.findUnique({ where: { id: stale.id } })).status).toBe('discarded')
   })
 
   it('startQueued leaves other photo sets alone for a first attempt', async () => {

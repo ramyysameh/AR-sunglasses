@@ -81,7 +81,12 @@ describe('AnnotatedScreenshot details', () => {
 })
 
 describe('TUTORIAL_STEPS', () => {
-  it('covers the four steps in order with marks inside the image', () => {
+  it('uses the large-view caption for the 3D preview', () => {
+    const save = TUTORIAL_STEPS.find((st) => st.id === 'save')
+    expect(save.marks[0].caption).toBe('Expand for a large view: drag to rotate, scroll or pinch to zoom.')
+  })
+
+  it('covers the four steps in order with marks and number badges inside the image', () => {
     expect(TUTORIAL_STEPS.map((s) => s.id)).toEqual(['create', 'save', 'turn-on', 'check'])
     for (const step of TUTORIAL_STEPS) {
       expect(step.image.src).toMatch(/^\/tutorial\/.+\.png$/)
@@ -101,6 +106,15 @@ describe('TUTORIAL_STEPS', () => {
         } else if (m.kind === 'arrow') {
           expect(inside(m.toX) && inside(m.toY), `step ${step.id} mark ${m.n} arrow end`).toBe(true)
         }
+        // The number badge is drawn at a fixed anchor and is round on screen, so
+        // its y radius is stretched by the image aspect ratio.
+        const rx = 2.2
+        const ry = 2.2 * (step.image.width / step.image.height)
+        const badge = m.kind === 'circle' ? { x: m.x + m.w / 2 + 1.5, y: m.y - m.h / 2 }
+          : m.kind === 'box' ? { x: m.x - 1.5, y: m.y - 1.5 }
+            : { x: m.x, y: m.y }
+        expect(badge.x - rx >= 0 && badge.x + rx <= 100, `step ${step.id} mark ${m.n} badge x extent`).toBe(true)
+        expect(badge.y - ry >= 0 && badge.y + ry <= 100, `step ${step.id} mark ${m.n} badge y extent`).toBe(true)
       }
     }
   })
