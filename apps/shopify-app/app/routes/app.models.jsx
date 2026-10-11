@@ -10,6 +10,7 @@ import { deleteModelGlb } from '../storage.server'
 import { markFitReviewed } from '../models.server'
 import { themeEditorUrl } from '../adminLinks.server'
 import { planUsage } from '../planUsage.server'
+import { publishMappings, unpublishMappings } from '../tryonMetafield.server'
 // A .server.js import used only inside the loader below (never referenced
 // from the component body) is stripped from the client bundle by the
 // `.server.js` naming convention -- same pattern app.products.jsx already
@@ -124,15 +125,34 @@ export const action = async ({ request }) => {
     if (!id) return { error: 'Missing model.' }
     const asset = await prisma.modelAsset.findFirst({
       where: { id, shop: session.shop },
-      include: { _count: { select: { mappings: true } } },
+      include: { mappings: { select: { productId: true } } },
     })
     if (!asset) return { error: 'That model no longer exists.' }
-    // The FK is ON DELETE RESTRICT, so deleting a mapped model would throw a
-    // raw Prisma error. Refuse with something a merchant can act on instead.
-    if (asset._count.mappings > 0) {
-      return { error: `That model is used by ${asset._count.mappings} product(s). Remove try-on from them first.` }
+    // Deleting a model in use also removes try-on from its products. Same
+    // order as the Workspace's unmap: hide the storefront button first, so a
+    // Shopify failure leaves everything in place and the merchant can retry.
+    const productIds = asset.mappings.map((m) => m.productId)
+    try {
+      await unpublishMappings(admin, productIds)
+    } catch (e) {
+      console.error('try-on metafield unpublish failed', e)
+      return { error: "Try-on couldn't be removed from your storefront. Nothing was changed; try again." }
     }
-    await prisma.modelAsset.delete({ where: { id: asset.id } })
+    try {
+      // The FK is ON DELETE RESTRICT, so the mappings go first, together.
+      await prisma.$transaction([
+        prisma.productMapping.deleteMany({ where: { shop: session.shop, modelAssetId: asset.id } }),
+        prisma.modelAsset.delete({ where: { id: asset.id } }),
+      ])
+    } catch (e) {
+      console.error('model delete failed', e)
+      try {
+        await publishMappings(admin, productIds)
+      } catch (recoveryError) {
+        console.error('try-on metafield recovery publish failed', recoveryError)
+      }
+      return { error: "The model couldn't be deleted. Your storefront was restored where possible; try again." }
+    }
     try {
       await deleteModelGlb(asset.storageRef)
     } catch (e) {
@@ -269,7 +289,7 @@ function RenameModal({ asset, session, onDismiss }) {
   )
 }
 
-function DeleteModalContent({ modelId }) {
+function DeleteModalContent({ modelId, mappingCount = 0 }) {
   const fetcher = useFetcher()
   const shopify = useAppBridge()
 
@@ -290,6 +310,12 @@ function DeleteModalContent({ modelId }) {
   return (
     <>
       <s-stack direction="block" gap="base">
+        {mappingCount > 0 && (
+          <s-banner tone="warning">
+            This model is used by {mappingCount} product{mappingCount === 1 ? '' : 's'}.
+            Deleting it also removes try-on from {mappingCount === 1 ? 'that product' : 'those products'}.
+          </s-banner>
+        )}
         <s-paragraph>
           This removes the model and its 3D file. You can&apos;t undo it, and you&apos;ll
           need to upload the file again to use it later.
@@ -326,7 +352,7 @@ function DeleteModal({ asset, modelId, session, onDismiss }) {
       id="delete-model"
       heading={asset ? `Delete ${modelName(asset)}?` : 'Delete model?'}
     >
-      <DeleteModalContent key={session} modelId={modelId} />
+      <DeleteModalContent key={session} modelId={modelId} mappingCount={asset?.mappingCount ?? 0} />
     </s-modal>
   )
 }
@@ -472,8 +498,6 @@ export default function Models() {
                       <s-text color="subdued">
                         Used by {asset.mappingCount} product{asset.mappingCount === 1 ? '' : 's'}.{' '}
                         <s-link href={`/app?q=${encodeURIComponent(displayName)}`}>View products</s-link>
-                        {/* Says why Delete is missing instead of just hiding it. */}
-                        {' '}Remove it from {asset.mappingCount === 1 ? 'that product' : 'those products'} to delete it.
                       </s-text>
                     ) : (
                       <s-text color="subdued">Not used by any products</s-text>
@@ -502,21 +526,20 @@ export default function Models() {
                       >
                         Rename
                       </s-button>
-                      {asset.mappingCount === 0 && (
-                        <s-button
-                          variant="tertiary"
-                          tone="critical"
-                          icon="delete"
-                          commandFor="delete-model"
-                          command="--show"
-                          onClick={() => dispatchDeleteModal({
-                            type: 'open',
-                            modelId: asset.id,
-                          })}
-                        >
-                          Delete
-                        </s-button>
-                      )}
+                      <s-button
+                        variant="tertiary"
+                        tone="critical"
+                        icon="delete"
+                        commandFor="delete-model"
+                        command="--show"
+                        accessibilityLabel={`Delete ${displayName}`}
+                        onClick={() => dispatchDeleteModal({
+                          type: 'open',
+                          modelId: asset.id,
+                        })}
+                      >
+                        Delete
+                      </s-button>
                     </s-stack>
                   </s-stack>
                 </s-box>

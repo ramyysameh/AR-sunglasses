@@ -214,7 +214,8 @@ describe('Models UI behavior', () => {
     expect(html).not.toMatch(/A1 pipeline|calibrat|manual anchor|geometric confidence/i)
     expect(html.match(/id="rename-model"/g)).toHaveLength(1)
     expect(html.match(/id="delete-model"/g)).toHaveLength(1)
-    expect(html.match(/commandFor="delete-model"/g)).toHaveLength(2)
+    // Every card's Delete (--show) plus the modal's own Cancel (--hide).
+    expect(html.match(/commandFor="delete-model"/g)).toHaveLength(3)
     expect(html.match(/id="review-model-fit"/g)).toHaveLength(1)
     // One card action (--show) plus the modal's own Close button (--hide).
     expect(html.match(/commandFor="review-model-fit"/g)).toHaveLength(2)
@@ -345,12 +346,15 @@ describe('ModelPicker (assets shaped like the Models route loader)', () => {
     expect(html).not.toContain('href="/app/models"')
   })
 
-  it('puts each card action in the action row and explains a missing Delete', () => {
+  it('puts each card action in the action row, with Delete on every card', () => {
     const html = renderToStaticMarkup(React.createElement(Models))
 
-    // Ready, in-use model: Add try-on deep link, no Delete, and a reason why.
+    // Ready, in-use model: Add try-on deep link, and Delete even though
+    // products use it (the dialog warns that it removes their try-on).
     expect(html).toContain('<s-button href="/app?add=1&amp;model=used-model" accessibilityLabel="Add try-on with Pelmo black">Add try-on</s-button>')
-    expect(html).toContain('Remove it from those products to delete it.')
+    expect(html).toContain('accessibilityLabel="Delete Pelmo black"')
+    expect(html).toContain('accessibilityLabel="Delete aviator.glb"')
+    expect(html).not.toContain('to delete it.')
     // Model that needs review: Review fit is a regular action, not squeezed
     // into the heading row as a tertiary link.
     expect(html).toMatch(/<s-button commandFor="review-model-fit" command="--show" accessibilityLabel="Review fit for aviator.glb">Review fit<\/s-button>/)

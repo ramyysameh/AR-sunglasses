@@ -84,16 +84,21 @@ export async function publishMapping(admin, productId) {
   return publishMappings(admin, [productId])
 }
 
-/** Hide the try-on block on this product again. */
-export async function unpublishMapping(admin, productId) {
-  const errors = await mutate(
-    admin,
-    DELETE_MUTATION,
-    { metafields: [{ ownerId: productId, namespace: TRYON_NAMESPACE, key: TRYON_KEY }] },
-    'metafieldsDelete',
-  )
+/** Hide the try-on block on these products again. */
+export async function unpublishMappings(admin, productIds) {
+  const ids = [...new Set(productIds)].filter(Boolean)
+  if (ids.length === 0) return
+  const errors = []
+  for (const batch of chunk(ids)) {
+    const metafields = batch.map((ownerId) => ({ ownerId, namespace: TRYON_NAMESPACE, key: TRYON_KEY }))
+    errors.push(...(await mutate(admin, DELETE_MUTATION, { metafields }, 'metafieldsDelete')))
+  }
   const real = errors.filter((e) => !ALREADY_GONE.test(e?.message ?? ''))
   if (real.length) {
     throw tagged('METAFIELD_DELETE_FAILED', real.map((e) => e.message).join('; '))
   }
+}
+
+export async function unpublishMapping(admin, productId) {
+  return unpublishMappings(admin, [productId])
 }
