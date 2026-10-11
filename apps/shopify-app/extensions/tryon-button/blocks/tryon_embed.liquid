@@ -37,6 +37,26 @@
         ])
         .join(', ')
 
+      // Shopify's dynamic checkout ("Buy it now") button. Its wrapper is in the
+      // theme's server markup (the form's payment_button filter), so it is in
+      // the DOM even though the button inside it renders later.
+      const paymentSelector = '.shopify-payment-button, [data-shopify="payment-button"]'
+
+      // The Buy now button that belongs to the same product as this Add to cart:
+      // look in its form, then a few ancestors up, so a featured-product section
+      // or quick-add card elsewhere in <main> can't capture the button.
+      function findPaymentButton(submit) {
+        const form = submit.form || submit.closest('form')
+        const inForm = form && form.querySelector(paymentSelector)
+        if (inForm) return inForm
+        let node = submit.parentElement
+        for (let depth = 0; node && depth < 3; depth++, node = node.parentElement) {
+          const match = node.querySelector(paymentSelector)
+          if (match) return match
+        }
+        return null
+      }
+
       // In the theme editor the page is re-rendered constantly and the root must
       // stay where Shopify put it, so float it instead of moving it into a form.
       const inEditor = Boolean(root.dataset && root.dataset.arTryonDesignMode)
@@ -49,12 +69,14 @@
           const submit = inEditor ? null : document.querySelector(submitSelector)
           if (submit) {
             root.classList.remove('ar-tryon--floating')
-            // In a flex row the full-width button would squeeze in beside Add to
-            // cart; go after the row instead so it gets its own line.
-            const parent = submit.parentElement
+            // Below Buy now when the theme shows one, otherwise below Add to cart.
+            const target = findPaymentButton(submit) || submit
+            // In a flex row the full-width button would squeeze in beside the
+            // buttons; go after the row instead so it gets its own line.
+            const parent = target.parentElement
             const parentDisplay =
               parent && typeof getComputedStyle === 'function' ? getComputedStyle(parent).display : ''
-            const anchor = /flex/.test(parentDisplay) ? parent : submit
+            const anchor = /flex/.test(parentDisplay) ? parent : target
             anchor.insertAdjacentElement('afterend', root)
           } else {
             root.classList.add('ar-tryon--floating')

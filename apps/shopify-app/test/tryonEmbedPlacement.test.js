@@ -16,10 +16,33 @@ function makeRoot({ designMode = false } = {}) {
   }
 }
 
-function makeSubmit(parentDisplay) {
+// `payment` puts a Buy now wrapper either inside the submit's form ('form') or
+// beside it under a shared ancestor ('ancestor'); `paymentParentDisplay` is the
+// display of the wrapper's parent row.
+function makeSubmit(parentDisplay, { payment, paymentParentDisplay = 'block' } = {}) {
   const calls = []
-  const parent = { display: parentDisplay, calls, insertAdjacentElement: (where, el) => calls.push(['parent', where, el]) }
-  return { calls, parent, parentElement: parent, insertAdjacentElement: (where, el) => calls.push(['submit', where, el]) }
+  const paymentRow = { display: paymentParentDisplay, insertAdjacentElement: (where, el) => calls.push(['paymentRow', where, el]) }
+  const paymentButton = payment
+    ? { parentElement: paymentRow, insertAdjacentElement: (where, el) => calls.push(['payment', where, el]) }
+    : null
+  const find = (sel) => (sel.includes('shopify-payment-button') ? paymentButton : null)
+  const grandparent = { querySelector: payment === 'ancestor' ? find : () => null, parentElement: null }
+  const parent = {
+    display: parentDisplay,
+    calls,
+    parentElement: grandparent,
+    querySelector: () => null,
+    insertAdjacentElement: (where, el) => calls.push(['parent', where, el]),
+  }
+  const form = { querySelector: payment === 'form' ? find : () => null }
+  return {
+    calls,
+    parent,
+    parentElement: parent,
+    form,
+    closest: () => form,
+    insertAdjacentElement: (where, el) => calls.push(['submit', where, el]),
+  }
 }
 
 // `state.submit` is read at call time so a test can swap in a re-rendered form.
@@ -48,7 +71,7 @@ describe('embed placement', () => {
     expect(scriptBody).not.toMatch(/\{%|\{\{/)
   })
 
-  it('puts the button right after Add to cart', () => {
+  it('puts the button right after Add to cart when there is no Buy now', () => {
     const root = makeRoot()
     const submit = makeSubmit('block')
     run({ root, submit })
@@ -61,6 +84,27 @@ describe('embed placement', () => {
     const submit = makeSubmit('flex')
     run({ root, submit }, { getComputedStyle: (el) => ({ display: el.display }) })
     expect(submit.calls).toEqual([['parent', 'afterend', root]])
+  })
+
+  it('puts the button below Buy now when the form has one', () => {
+    const root = makeRoot()
+    const submit = makeSubmit('block', { payment: 'form' })
+    run({ root, submit })
+    expect(submit.calls).toEqual([['payment', 'afterend', root]])
+  })
+
+  it('goes after the row when Add to cart and Buy now sit side by side', () => {
+    const root = makeRoot()
+    const submit = makeSubmit('block', { payment: 'form', paymentParentDisplay: 'flex' })
+    run({ root, submit }, { getComputedStyle: (el) => ({ display: el.display }) })
+    expect(submit.calls).toEqual([['paymentRow', 'afterend', root]])
+  })
+
+  it('finds a Buy now that sits outside the form but near Add to cart', () => {
+    const root = makeRoot()
+    const submit = makeSubmit('block', { payment: 'ancestor' })
+    run({ root, submit })
+    expect(submit.calls).toEqual([['payment', 'afterend', root]])
   })
 
   it('falls back to the submit button when getComputedStyle is unavailable', () => {
