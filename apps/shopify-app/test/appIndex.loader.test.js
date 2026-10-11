@@ -68,7 +68,9 @@ describe('app._index workspace loader', () => {
     expect(result.themeUrl).toContain('addAppBlockId')
   })
 
-  it('returns the exact product theme URL for contextual recovery', async () => {
+  // Every product's theme link is the store-wide app embed deep link: one
+  // switch in the theme editor turns try-on on for all mapped products.
+  it('returns the store-wide app embed link as every product theme URL', async () => {
     const asset = await prisma.modelAsset.create({ data: { shop, storageRef: `${tag}/theme.glb`, fitMetadata: {} } })
     const productId = `gid://shopify/Product/${tag}-theme`
     await prisma.productMapping.create({ data: { shop, productId, modelAssetId: asset.id } })
@@ -76,7 +78,7 @@ describe('app._index workspace loader', () => {
 
     const result = await loader({ request: new Request('https://x/app') })
     expect(result.mappings[0].themeUrl).toBe(
-      `https://${shop}/admin/themes/current/editor?previewPath=%2Fproducts%2Flumen&addAppBlockId=be1db9d64c7c617dcd67f6add58f4824%2Ftryon_button&target=mainSection`,
+      `https://${shop}/admin/themes/current/editor?context=apps&activateAppId=be1db9d64c7c617dcd67f6add58f4824%2Ftryon_embed`,
     )
   })
 

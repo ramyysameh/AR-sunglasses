@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { themeEditorUrl } from '../app/adminLinks.server.js'
+import { embedActivationUrl } from '../app/adminLinks.server.js'
 
 const tag = randomUUID().slice(0, 8)
 const shop = `resilience-${tag}.myshopify.com`
@@ -88,7 +88,7 @@ describe('app.products loader resilience (fallback and error handling)', () => {
     expect(mapping.product).toBeNull()
   })
 
-  it('keeps the exact persisted product theme URL when Shopify enrichment fails', async () => {
+  it('keeps the theme URL when Shopify enrichment fails', async () => {
     state.throwOnProducts = true
     const asset = await prisma.modelAsset.create({
       data: { shop, storageRef: `${tag}/exact.glb`, fitMetadata: { version: 'eyewear-v1' }, status: 'ready' },
@@ -106,6 +106,6 @@ describe('app.products loader resilience (fallback and error handling)', () => {
     const mapping = result.mappings.find((candidate) => candidate.productId === productGid)
 
     expect(mapping.product).toBeNull()
-    expect(mapping.themeUrl).toBe(themeEditorUrl(shop, 'exact-aviator'))
+    expect(mapping.themeUrl).toBe(embedActivationUrl(shop))
   })
 })

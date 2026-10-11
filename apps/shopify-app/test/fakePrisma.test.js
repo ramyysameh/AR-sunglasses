@@ -40,7 +40,7 @@ describe('fakePrisma', () => {
     await expect(modelGeneration.findMany({ orderBy: { createdAt: 'desc' } })).resolves.toHaveLength(1)
   })
 
-  it('has a seedable modelAsset delegate that only supports findUnique by id', async () => {
+  it('has a seedable modelAsset delegate with findUnique by id and findMany', async () => {
     const prisma = createFakePrisma()
     expect(await prisma.modelAsset.findUnique({ where: { id: 'a1' } })).toBeNull()
     prisma.modelAsset.assets.set('a1', { id: 'a1', shop: BASE.shop })
@@ -49,7 +49,12 @@ describe('fakePrisma', () => {
     found.shop = 'changed'
     expect(prisma.modelAsset.assets.get('a1').shop).toBe(BASE.shop)
     await expect(prisma.modelAsset.findUnique({ where: { id: 'a1', shop: BASE.shop } })).rejects.toThrow('fakePrisma: unsupported')
-    expect(Object.keys(prisma.modelAsset).sort()).toEqual(['assets', 'findUnique'])
+    prisma.modelAsset.assets.set('a2', { id: 'a2', shop: 'other.myshopify.com' })
+    const listed = await prisma.modelAsset.findMany({ where: { shop: BASE.shop } })
+    expect(listed).toEqual([{ id: 'a1', shop: BASE.shop }])
+    listed[0].shop = 'changed'
+    expect(prisma.modelAsset.assets.get('a1').shop).toBe(BASE.shop)
+    expect(Object.keys(prisma.modelAsset).sort()).toEqual(['assets', 'findMany', 'findUnique'])
   })
 
   it('throws on operator objects in update data but accepts arrays and the calibration JSON', async () => {
