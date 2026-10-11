@@ -20,7 +20,7 @@ export const TUTORIAL_STEPS = [
     image: { src: '/tutorial/review.png', alt: 'A generated model ready to review', width: 1280, height: 544 },
     marks: [
       { n: 1, kind: 'circle', x: 55.16, y: 30.5, w: 10.94, h: 9.93, caption: 'Expand for a large view: drag to rotate, scroll or pinch to zoom.' },
-      { n: 2, kind: 'box', x: 14.38, y: 86.76, w: 7.97, h: 7.35, caption: 'Save model. Free models left are shown at the top of the Models page.' },
+      { n: 2, kind: 'box', x: 14.38, y: 86.76, w: 7.97, h: 7.35, caption: 'Save model. Free models left are shown in the plan box at the top of Workspace.' },
       { n: 3, kind: 'arrow', x: 46.9, y: 79, toX: 35.2, toY: 89.7, caption: 'Not right? Try again (3 free retries) or Discard.' },
     ],
   },

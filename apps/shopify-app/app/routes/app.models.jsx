@@ -20,11 +20,8 @@ import { publishMappings, unpublishMappings } from '../tryonMetafield.server'
 // needing review on Products but not on Models (or vice versa).
 import { needsFitReview } from '../tryonStatus.server'
 import ModelViewer from '../components/ModelViewer'
-import AiModelFlow from '../components/AiModelFlow'
-import AiModelUsage from '../components/AiModelUsage'
-import PlanUsage from '../components/PlanUsage'
 import workspaceStyles from '../styles/workspace.css?url'
-import { aiGenerationEnabled, getAllowance } from '../generations.server'
+import { aiGenerationEnabled } from '../generations.server'
 import ModelFitReview from '../components/ModelFitReview'
 import { useMarkFitReviewed } from '../components/useMarkFitReviewed'
 import TopLevelAdminAction from '../components/TopLevelAdminAction'
@@ -63,25 +60,22 @@ export const loader = async ({ request }) => {
   // (App Store rejection Ref 127328).
   const activePlan = await getActivePlanName(admin, session.shop)
   if (!activePlan) {
-    return { assets: [], themeUrl, usage: null, atLimit: false, pricingUrl: null }
+    return { assets: [], themeUrl, atLimit: false, pricingUrl: null, aiEnabled: false }
   }
-  const aiEnabled = aiGenerationEnabled(session.shop)
-  const [assets, used, allowance] = await Promise.all([
+  const [assets, used] = await Promise.all([
     prisma.modelAsset.findMany({
       where: { shop: session.shop },
       orderBy: { createdAt: 'desc' },
       include: { _count: { select: { mappings: true } } },
     }),
     prisma.productMapping.count({ where: { shop: session.shop } }),
-    aiEnabled ? getAllowance(prisma, session.shop, activePlan) : null,
   ])
   // Same limit the Workspace enforces: at the limit, "Add try-on" here would
   // open a flow whose publish can only fail, so the page offers the upgrade.
+  // The plan meter itself is shown on the Workspace only.
   const usage = planUsage({ planName: activePlan, used, shop: session.shop })
-  const ai = aiEnabled ? { allowance } : null
   return {
-    ai,
-    usage,
+    aiEnabled: aiGenerationEnabled(session.shop),
     atLimit: usage.atLimit,
     pricingUrl: usage.pricingUrl,
     assets: assets.map(({ _count, ...a }) => ({
@@ -400,7 +394,7 @@ function ReviewFitModal({ asset, themeUrl, session, onDismiss }) {
 }
 
 export default function Models() {
-  const { assets, themeUrl, usage = null, atLimit = false, pricingUrl = null, ai = null } = useLoaderData()
+  const { assets, themeUrl, atLimit = false, pricingUrl = null, aiEnabled = false } = useLoaderData()
   const shopify = useAppBridge()
   const [renameModal, dispatchRenameModal] = useReducer(modalSessionReducer, {
     modelId: null,
@@ -427,11 +421,11 @@ export default function Models() {
 
   return (
     <s-page heading="Models">
-      {/* Models are uploaded inside Add try-on (Models is a library, not an
-          upload surface). The ?add=1 deep link opens that flow, whose first step
-          offers an upload, so this page always has a way forward. Create with AI
-          (when enabled for the shop) is the one exception: it produces a model
-          from photos, so it lives with the library. */}
+      {/* Models is the library only: the plan meter, AI allowance and the
+          Create with AI panel all live on the Workspace, so the two pages don't
+          open with the same blocks. Models are uploaded inside Add try-on; the
+          ?add=1 deep link opens that flow, whose first step offers an upload,
+          so this page always has a way forward. */}
       {atLimit ? (
         <TopLevelAdminAction slot="primary-action" href={pricingUrl} accessibilityLabel="Upgrade plan to add try-on to more products">
           Upgrade plan
@@ -441,13 +435,11 @@ export default function Models() {
           Add try-on
         </s-button>
       )}
-      {ai && (
-        <s-section heading="Free AI models">
-          <AiModelUsage allowance={ai.allowance} />
-        </s-section>
+      {aiEnabled && (
+        <s-button slot="secondary-actions" href="/app">
+          Create with AI
+        </s-button>
       )}
-      <PlanUsage usage={usage} />
-      {ai && <AiModelFlow initialAllowance={ai.allowance} showBalance={false} />}
       <s-section heading="Model library">
         {assets.length === 0 ? (
           <s-stack direction="block" gap="base">

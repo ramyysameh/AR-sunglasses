@@ -334,6 +334,18 @@ describe('ModelPicker (assets shaped like the Models route loader)', () => {
     expect(empty).toContain('<s-button variant="primary" href="/app?add=1">Upload a model</s-button>')
   })
 
+  it('is the library only: no plan meter or Create with AI panel, which live on the Workspace', () => {
+    routeState.loaderData = { ...routeState.loaderData, aiEnabled: true }
+    const html = renderToStaticMarkup(React.createElement(Models))
+
+    expect(html).not.toContain('heading="Create with AI"')
+    expect(html).not.toContain('Free AI models')
+    expect(html).toContain('<s-button slot="secondary-actions" href="/app">Create with AI</s-button>')
+
+    routeState.loaderData = { ...routeState.loaderData, aiEnabled: false }
+    expect(renderToStaticMarkup(React.createElement(Models))).not.toContain('Create with AI')
+  })
+
   it('names a model that needs review as a state, with Review fit as the action', () => {
     const html = renderToStaticMarkup(React.createElement(Models))
     expect(html).toContain('<s-badge tone="warning">Needs fit review</s-badge>')
