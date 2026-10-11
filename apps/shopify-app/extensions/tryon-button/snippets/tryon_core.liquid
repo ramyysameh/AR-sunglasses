@@ -104,6 +104,20 @@
         if (trigger.classList.contains('ar-tryon__close')) dialog.close()
         else if (!dialog.open) dialog.showModal()
       })
+
+      // Closing the dialog only hides it. The engine iframe stayed loaded, so
+      // its camera stream kept running and the shopper's camera light stayed on
+      // after they had closed the try-on. Swapping in a fresh copy of the iframe
+      // unloads the old document, which ends its camera tracks. The copy is lazy
+      // and sits in a closed dialog, so it loads (and asks for the camera) only
+      // when the try-on is opened again. Covers the close button, Esc, and any
+      // theme script calling close(). `close` does not bubble, hence capture.
+      document.addEventListener('close', (event) => {
+        const dialog = event.target
+        if (!(dialog instanceof HTMLDialogElement) || !dialog.classList.contains('ar-tryon__dialog')) return
+        const frame = dialog.querySelector('.ar-tryon__frame')
+        if (frame) frame.replaceWith(frame.cloneNode(false))
+      }, true)
     }
 
     // Null when this script was inserted after parsing, e.g. by a theme that
