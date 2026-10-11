@@ -307,8 +307,12 @@
     margin: 0;
   }
 
-  .ar-tryon[data-ar-tryon-placement="embed"] {
-    margin-top: 10px;
+  /* Breathing room above and below so the button doesn't butt up against Add to
+     cart or whatever block the merchant put next to it. Vertical only: the
+     button is full-width to line up with the theme's own buttons, and side
+     margins would inset it out of that column. */
+  .ar-tryon {
+    margin: 14px 0;
   }
   .ar-tryon.ar-tryon--floating {
     position: fixed;
