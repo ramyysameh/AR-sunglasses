@@ -82,8 +82,7 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
     this.landmarkProcessor = new LandmarkProcessor()
 
     this._setLoading('Bringing your look to life…')
-    // In mock mode the "face" is a static image, so the head-turn calibration
-    // can never complete — relax the scanner to lock on from the front view only.
+    // In mock mode the "face" is a static image — lock on after fewer front samples.
     const mockParam = new URLSearchParams(window.location.search).get('mock')
     const mockMode = Boolean(mockParam)
     const localFaceScanner = mockMode
@@ -327,11 +326,9 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
 
     const draw = () => {
       let idx = HOLD_FRAME
-      // Hold front during init warm-up AND while the calibration overlay is
-      // visible; only start oscillating once the scan has actually locked, so it
-      // never starts turning before calibration completes.
-      const scanOverlay = document.getElementById('scan-overlay')
-      const calibrating = scanOverlay ? scanOverlay.hidden === false : false
+      // Hold front during init warm-up AND until the face scan locks; only start
+      // oscillating once it has, so it never turns before calibration completes.
+      const calibrating = !this._scanLocked
       const warmup = performance.now() - start < 2500
       // A pin still waits for calibration: the scan will not lock off-frontal, so
       // pinning a turned frame before it completes means the glasses never appear.
@@ -446,8 +443,9 @@ export class MediaPipeThreeProvider extends TryOnEventEmitter {
   }
 
   _updateScanMessage(scanState) {
-    // The animated scan overlay (driven by this 'scan' event) communicates the
-    // stage and progress, so the text pill stays clear during scanning.
+    // The face scan runs silently -- no overlay -- so the text pill stays clear
+    // and the glasses simply appear once it locks.
+    this._scanLocked = Boolean(scanState?.isReady)
     this.emit('scan', scanState)
     this._setLoading('')
   }

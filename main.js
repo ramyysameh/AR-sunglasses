@@ -9,9 +9,6 @@ const video = document.getElementById('camera-feed')
 const canvas = document.getElementById('overlay-canvas')
 const loadingEl = document.getElementById('loading')
 const container = document.getElementById('ar-container')
-const scanOverlay = document.getElementById('scan-overlay')
-const scanCaptionText = scanOverlay?.querySelector('.scan-caption-text')
-const scanBar = /** @type {SVGElement | null | undefined} */ (scanOverlay?.querySelector('.scan-progress-bar'))
 const params = new URLSearchParams(window.location.search)
 const debugEnabled = params.get('debug') === '1'
 const provider = params.get('provider') || undefined
@@ -185,55 +182,6 @@ function setLoading(message, { isError = false, onRetry = null } = {}) {
   }
 }
 
-const SCAN_COPY = {
-  front: 'Hold still and face the camera',
-  yawLeft: 'Slowly turn your head left',
-  yawRight: 'Slowly turn your head right',
-  neutralReturn: 'Return to center',
-}
-const SCAN_RING_CIRCUM = 2 * Math.PI * 80
-let scanDoneTimer = null
-
-/**
- * Drives the animated face-scan overlay from the engine's scan state.
- * @param {{ isReady?: boolean, activeStage?: string, quality?: number } | null} [scanState]
- */
-function updateScan(scanState) {
-  if (!scanOverlay) {
-    return
-  }
-
-  if (!scanState) {
-    scanOverlay.hidden = true
-    return
-  }
-
-  if (scanState.isReady) {
-    // Brief success flash on the ring, then dismiss.
-    scanOverlay.hidden = false
-    scanOverlay.dataset.stage = 'done'
-    if (scanBar) scanBar.style.strokeDashoffset = '0'
-    clearTimeout(scanDoneTimer)
-    scanDoneTimer = setTimeout(() => {
-      scanOverlay.hidden = true
-      scanOverlay.dataset.stage = ''
-    }, 750)
-    return
-  }
-
-  clearTimeout(scanDoneTimer)
-  scanOverlay.hidden = false
-  const stage = scanState.activeStage ?? 'front'
-  scanOverlay.dataset.stage = stage
-  if (scanCaptionText) {
-    scanCaptionText.textContent = SCAN_COPY[stage] ?? 'Scanning your face…'
-  }
-  const quality = Math.max(0, Math.min(1, scanState.quality ?? 0))
-  if (scanBar) {
-    scanBar.style.strokeDashoffset = String(SCAN_RING_CIRCUM * (1 - quality))
-  }
-}
-
 async function resolveSkuKey() {
   const remoteSkuKey = (await resolveLocalFitKey())
     ?? (await resolveBlockModelKey())
@@ -266,7 +214,6 @@ async function startEngine() {
   tryOnEngine.on('ready', ({ provider: activeProvider }) => {
     container.dataset.provider = activeProvider
   })
-  tryOnEngine.on('scan', updateScan)
 
   await tryOnEngine.init(container, runtimeConfig)
   await tryOnEngine.start()

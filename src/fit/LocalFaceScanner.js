@@ -1,10 +1,13 @@
 import * as THREE from 'three'
 
+// Front view only: shoppers aren't asked to turn their head. Nothing downstream
+// reads the yaw-stage poses, so they only delayed the glasses appearing. The
+// stages stay available via `options.stageTargets`.
 const DEFAULT_STAGE_TARGETS = {
   front: 12,
-  yawLeft: 6,
-  yawRight: 6,
-  neutralReturn: 6,
+  yawLeft: 0,
+  yawRight: 0,
+  neutralReturn: 0,
 }
 
 const DEFAULT_MIN_POSE_QUALITY = 0.64
@@ -187,7 +190,9 @@ export class LocalFaceScanner {
   }
 
   _stageProgress(stage) {
-    return Math.min(1, this.samples[stage].length / this.stageTargets[stage])
+    const target = this.stageTargets[stage]
+    if (!target) return 1
+    return Math.min(1, this.samples[stage].length / target)
   }
 
   _buildProfile() {
@@ -243,26 +248,24 @@ export class LocalFaceScanner {
   }
 
   getState() {
+    const sampleCount = this.samples.front.length +
+      this.samples.yawLeft.length +
+      this.samples.yawRight.length +
+      this.samples.neutralReturn.length
+    const targetSamples = this.stageTargets.front +
+      this.stageTargets.yawLeft +
+      this.stageTargets.yawRight +
+      this.stageTargets.neutralReturn
+    // Weighted by sample count, so stages with a 0 target don't count.
     const progress = this.profile
       ? 1
-      : (
-          this._stageProgress('front') +
-          this._stageProgress('yawLeft') +
-          this._stageProgress('yawRight') +
-          this._stageProgress('neutralReturn')
-        ) / 4
+      : Math.min(1, sampleCount / Math.max(1, targetSamples))
 
     return {
       isReady: Boolean(this.profile),
       quality: progress,
-      sampleCount: this.samples.front.length +
-        this.samples.yawLeft.length +
-        this.samples.yawRight.length +
-        this.samples.neutralReturn.length,
-      targetSamples: this.stageTargets.front +
-        this.stageTargets.yawLeft +
-        this.stageTargets.yawRight +
-        this.stageTargets.neutralReturn,
+      sampleCount,
+      targetSamples,
       stageProgress: {
         front: this._stageProgress('front'),
         yawLeft: this._stageProgress('yawLeft'),
