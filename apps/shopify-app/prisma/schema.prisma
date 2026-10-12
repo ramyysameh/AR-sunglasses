@@ -57,6 +57,10 @@ model ModelAsset {
   // Set when the merchant reviewed a flagged fit and accepted it; clears
   // "Needs fit review" (tryonStatus.server.js's needsFitReview).
   fitReviewedAt DateTime?
+  // The merchant's size for this model on shoppers' faces, set with the slider
+  // on its Models card (app/modelSize.js). Multiplies the theme block's Glasses
+  // size; 1 leaves the automatic fit as it is.
+  sizeMultiplier Float    @default(1)
   createdAt   DateTime @default(now())
   mappings    ProductMapping[]
 

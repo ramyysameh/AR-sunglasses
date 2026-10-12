@@ -389,4 +389,18 @@ describe('ModelPicker (assets shaped like the Models route loader)', () => {
     const modal = html.slice(html.indexOf('<s-modal id="review-model-fit"'))
     expect(modal).toMatch(/<s-button slot="primary-action" variant="primary"[^>]*>Mark as reviewed<\/s-button>/)
   })
+
+  it('gives every card a Size on face slider that starts at the saved size', () => {
+    routeState.loaderData.assets[0].sizeMultiplier = 1.25
+    const html = renderToStaticMarkup(React.createElement(Models))
+
+    expect(html).toMatch(
+      /<input class="model-size-slider" type="range" min="0.5" max="2.5" step="0.05" aria-label="Size on face for Pelmo black" aria-valuetext="1.25×" value="1.25"\/>/,
+    )
+    // A row with no size of its own reads as the automatic fit.
+    expect(html).toContain('aria-label="Size on face for aviator.glb" aria-valuetext="1×" value="1"/>')
+    // Reset only where there is something to reset.
+    expect(html).toContain('accessibilityLabel="Reset size for Pelmo black"')
+    expect(html).not.toContain('accessibilityLabel="Reset size for aviator.glb"')
+  })
 })

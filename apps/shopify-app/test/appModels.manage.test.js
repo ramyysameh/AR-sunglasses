@@ -107,6 +107,40 @@ describe('models delete', () => {
   })
 })
 
+describe('models size', () => {
+  const sizeOf = async (id) => (await prisma.modelAsset.findUnique({ where: { id } })).sizeMultiplier
+
+  it('starts every model at the automatic fit', async () => {
+    expect(await sizeOf(assetId)).toBe(1)
+  })
+
+  it('stores the size the merchant chose, snapped to the slider step', async () => {
+    expect(await post({ intent: 'set-size', modelAssetId: assetId, sizeMultiplier: '1.32' }))
+      .toEqual({ sizeSaved: true, sizeMultiplier: 1.3 })
+    expect(await sizeOf(assetId)).toBe(1.3)
+    // The loader hands it to the card.
+    expect((await loader({ request: new Request('https://x/app/models') })).assets[0].sizeMultiplier).toBe(1.3)
+  })
+
+  it('refuses a size outside the slider and leaves the model as it was', async () => {
+    for (const sizeMultiplier of ['0', '3', 'abc', '']) {
+      expect((await post({ intent: 'set-size', modelAssetId: assetId, sizeMultiplier })).error)
+        .toBe('Size must be between 0.5× and 2.5×.')
+    }
+    expect(await sizeOf(assetId)).toBe(1)
+  })
+
+  it('refuses a model from another shop', async () => {
+    const other = await prisma.modelAsset.create({
+      data: { shop: `other-${tag}.myshopify.com`, storageRef: `${tag}/s.glb`, fitMetadata: {} },
+    })
+    expect(await post({ intent: 'set-size', modelAssetId: other.id, sizeMultiplier: '2' }))
+      .toEqual({ error: 'That model no longer exists.' })
+    expect(await sizeOf(other.id)).toBe(1)
+    await prisma.modelAsset.delete({ where: { id: other.id } })
+  })
+})
+
 describe('models mark fit reviewed', () => {
   it('clears Needs fit review for the model', async () => {
     await prisma.modelAsset.update({ where: { id: assetId }, data: { status: 'needs_manual' } })

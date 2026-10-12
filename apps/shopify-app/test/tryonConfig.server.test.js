@@ -21,6 +21,12 @@ describe('getTryonConfig', () => {
     const cfg = await getTryonConfig(prisma, shop, productId)
     expect(cfg.modelUrl).toBe(`/models/${assetId}.glb`)
     expect(cfg.fitMetadata.version).toBe('eyewear-v1')
+    expect(cfg.sizeMultiplier).toBe(1)
+  })
+  it("carries the model's size from its Models card to the engine", async () => {
+    await prisma.modelAsset.update({ where: { id: assetId }, data: { sizeMultiplier: 1.4 } })
+    expect((await getTryonConfig(prisma, shop, productId)).sizeMultiplier).toBe(1.4)
+    await prisma.modelAsset.update({ where: { id: assetId }, data: { sizeMultiplier: 1 } })
   })
   it('returns null for an unmapped product', async () => {
     expect(await getTryonConfig(prisma, shop, 'gid://shopify/Product/999')).toBeNull()

@@ -59,3 +59,13 @@
 .workspace-plan-fill.is-full {
   background: #b98900;
 }
+
+/* Size on face (ModelSizeSlider): a native range input, since Polaris has no
+   slider. Tinted with the admin's primary fill so it reads as a control; the
+   browser draws its focus ring. */
+.model-size-slider {
+  width: 100%;
+  margin: 0;
+  accent-color: #303030;
+  cursor: pointer;
+}

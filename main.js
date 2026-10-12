@@ -42,7 +42,7 @@ async function resolveRemoteSkuKey() {
       throw new Error(`tryon-config request failed with status ${response.status}`)
     }
 
-    const { fitMetadata, modelUrl } = await response.json()
+    const { fitMetadata, modelUrl, sizeMultiplier } = await response.json()
 
     const isValidPayload = Boolean(modelUrl) &&
       fitMetadata &&
@@ -56,7 +56,7 @@ async function resolveRemoteSkuKey() {
       throw new Error('invalid tryon-config payload')
     }
 
-    const engineModelConfig = toEngineModelConfig(fitMetadata, modelUrl)
+    const engineModelConfig = toEngineModelConfig(fitMetadata, modelUrl, { sizeMultiplier })
     return registerRuntimeGlassesConfig(REMOTE_SKU_KEY, engineModelConfig)
   } catch (error) {
     console.warn('Falling back to default frame — could not load remote try-on config:', error)
@@ -82,7 +82,7 @@ async function resolveBlockModelKey() {
       throw new Error(`register-model request failed with status ${response.status}`)
     }
 
-    const { fitMetadata, modelUrl: servedUrl } = await response.json()
+    const { fitMetadata, modelUrl: servedUrl, sizeMultiplier } = await response.json()
     const isValidPayload = Boolean(servedUrl) &&
       fitMetadata &&
       typeof fitMetadata === 'object' &&
@@ -95,7 +95,7 @@ async function resolveBlockModelKey() {
       throw new Error('invalid register-model payload')
     }
 
-    const engineModelConfig = toEngineModelConfig(fitMetadata, servedUrl)
+    const engineModelConfig = toEngineModelConfig(fitMetadata, servedUrl, { sizeMultiplier })
     return registerRuntimeGlassesConfig(REMOTE_SKU_KEY, engineModelConfig)
   } catch (error) {
     console.warn('Falling back — could not register block model:', error)

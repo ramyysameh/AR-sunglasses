@@ -44,7 +44,7 @@ function bridgePivotFor(fitMetadata) {
   }
 }
 
-export function toEngineModelConfig(fitMetadata, modelUrl) {
+export function toEngineModelConfig(fitMetadata, modelUrl, { sizeMultiplier } = {}) {
   return {
     modelUrl,
     frameWidthMeters: fitMetadata.frameWidthMeters,
@@ -60,5 +60,9 @@ export function toEngineModelConfig(fitMetadata, modelUrl) {
     // rescale was baked into the stored file instead -- GlassesModelLoader
     // treats the resulting undefined as a no-op so those are not shrunk twice.
     modelScale: fitMetadata.modelScale ?? 1,
+    // The merchant's per-model size from the Models page. Not calibration
+    // output, so it travels beside fitMetadata rather than inside it. Anything
+    // that is not a positive number (an older server, a bad value) means 1.
+    sizeMultiplier: Number.isFinite(sizeMultiplier) && sizeMultiplier > 0 ? sizeMultiplier : 1,
   }
 }

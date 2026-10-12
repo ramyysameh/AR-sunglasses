@@ -25,6 +25,8 @@ import { aiGenerationEnabled } from '../generations.server'
 import ModelFitReview from '../components/ModelFitReview'
 import { useMarkFitReviewed } from '../components/useMarkFitReviewed'
 import TopLevelAdminAction from '../components/TopLevelAdminAction'
+import ModelSizeSlider from '../components/ModelSizeSlider'
+import { formatModelSize, MODEL_SIZE_MAX, MODEL_SIZE_MIN, parseModelSize } from '../modelSize'
 import {
   attachDropRejectedListener,
   createUploadCancellationCoordinator,
@@ -107,6 +109,22 @@ export const action = async ({ request }) => {
     })
     if (count === 0) return { error: 'That model no longer exists.' }
     return { renamed: true }
+  }
+
+  if (intent === 'set-size') {
+    const id = form.get('modelAssetId')?.toString()
+    if (!id) return { error: 'Missing model.' }
+    const sizeMultiplier = parseModelSize(form.get('sizeMultiplier'))
+    if (sizeMultiplier === null) {
+      return { error: `Size must be between ${formatModelSize(MODEL_SIZE_MIN)} and ${formatModelSize(MODEL_SIZE_MAX)}.` }
+    }
+    // Scoped to the shop, like rename.
+    const { count } = await prisma.modelAsset.updateMany({
+      where: { id, shop: session.shop },
+      data: { sizeMultiplier },
+    })
+    if (count === 0) return { error: 'That model no longer exists.' }
+    return { sizeSaved: true, sizeMultiplier }
   }
 
   if (intent === 'mark-fit-reviewed') {
@@ -494,6 +512,11 @@ export default function Models() {
                     ) : (
                       <s-text color="subdued">Not used by any products</s-text>
                     )}
+                    <ModelSizeSlider
+                      modelAssetId={asset.id}
+                      modelName={displayName}
+                      saved={asset.sizeMultiplier ?? 1}
+                    />
                     <s-stack direction="inline" gap="small-500">
                       {asset.needsReview ? (
                         <s-button

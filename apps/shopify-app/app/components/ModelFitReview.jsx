@@ -35,9 +35,9 @@ export default function ModelFitReview({ modelAssetId, themeUrl = null }) {
         alt="Your glasses model"
       />
       <s-paragraph color="subdued">
-        If the frames look too small or too large here, adjust Glasses size in the
-        block settings in your theme editor. If the fit looks right, mark it as
-        reviewed.
+        If the frames look too small or too large on a face, adjust Size on face on
+        the model&apos;s card in Models, or Glasses size in your theme editor to resize
+        every model. If the fit looks right, mark it as reviewed.
       </s-paragraph>
       {themeUrl && (
         <TopLevelAdminAction

@@ -1,5 +1,7 @@
 // Pure lookup: resolve a (shop, productId) to the try-on config the engine needs.
-// Returns { modelUrl, fitMetadata } for a mapped product, or null when unmapped.
+// Returns { modelUrl, fitMetadata, sizeMultiplier } for a mapped product, or
+// null when unmapped. sizeMultiplier is the merchant's per-model size from the
+// Models page; the engine multiplies it into the fitted scale.
 export async function getTryonConfig(prisma, shop, productId) {
   const mapping = await prisma.productMapping.findUnique({
     where: { shop_productId: { shop, productId } },
@@ -9,6 +11,7 @@ export async function getTryonConfig(prisma, shop, productId) {
   return {
     modelUrl: `/models/${mapping.modelAsset.id}.glb`,
     fitMetadata: mapping.modelAsset.fitMetadata,
+    sizeMultiplier: mapping.modelAsset.sizeMultiplier,
   }
 }
 

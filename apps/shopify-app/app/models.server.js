@@ -158,7 +158,11 @@ export async function registerModelByUrl(prisma, url, shop) {
 
   const existing = await prisma.modelAsset.findFirst({ where: { shop, sourceUrl: url } })
   if (existing) {
-    return { modelUrl: `/models/${existing.id}.glb`, fitMetadata: existing.fitMetadata }
+    return {
+      modelUrl: `/models/${existing.id}.glb`,
+      fitMetadata: existing.fitMetadata,
+      sizeMultiplier: existing.sizeMultiplier,
+    }
   }
 
   // After dedupe: a merchant at the limit must still resolve models they have
@@ -192,5 +196,9 @@ export async function registerModelByUrl(prisma, url, shop) {
     },
   })
 
-  return { modelUrl: `/models/${asset.id}.glb`, fitMetadata: asset.fitMetadata }
+  return {
+    modelUrl: `/models/${asset.id}.glb`,
+    fitMetadata: asset.fitMetadata,
+    sizeMultiplier: asset.sizeMultiplier,
+  }
 }

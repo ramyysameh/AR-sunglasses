@@ -37,6 +37,19 @@ describe('modelScale passthrough', () => {
   })
 })
 
+describe('sizeMultiplier passthrough', () => {
+  it("carries the merchant's per-model size from tryon-config", () => {
+    expect(toEngineModelConfig(fit, '/models/abc.glb', { sizeMultiplier: 1.4 }).sizeMultiplier).toBe(1.4)
+  })
+
+  it('defaults to 1 when the server sent none or a bad value', () => {
+    expect(toEngineModelConfig(fit, '/models/abc.glb').sizeMultiplier).toBe(1)
+    expect(toEngineModelConfig(fit, '/models/abc.glb', { sizeMultiplier: undefined }).sizeMultiplier).toBe(1)
+    expect(toEngineModelConfig(fit, '/models/abc.glb', { sizeMultiplier: 0 }).sizeMultiplier).toBe(1)
+    expect(toEngineModelConfig(fit, '/models/abc.glb', { sizeMultiplier: 'big' }).sizeMultiplier).toBe(1)
+  })
+})
+
 describe('bridgePivot frame', () => {
   const base = {
     ...fit,

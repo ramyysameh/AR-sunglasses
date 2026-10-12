@@ -11,7 +11,7 @@ import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
 import { FaceFitSolver } from '../fit/FaceFitSolver.js'
 import { coverNDC } from '../fit/coverMap.js'
-import { resolveGlassesScaleMultiplier } from './glassesScale.js'
+import { resolveGlassesScaleMultiplier, resolveModelSizeMultiplier } from './glassesScale.js'
 import { createLensEnvironment } from './lensEnvironment.js'
 import { resolveLensReflectionConfig, resolveEnvironmentName} from './lensReflection.js'
 import { resolveFrameReflectionConfig } from './frameReflection.js'
@@ -823,7 +823,9 @@ export class RenderLoop {
       this._urlVerticalOffset = Number.isFinite(v) ? v : null
     }
     const verticalOffset = this._urlVerticalOffset ?? this.modelConfig?.verticalOffset ?? 0
-    const scale = transform.scale * this._glassesScaleMultiplier
+    // Applied after the fit solver's scaleLimits clamp, like ?gscale, so the
+    // merchant's per-model size is never silently swallowed by it.
+    const scale = transform.scale * this._glassesScaleMultiplier * resolveModelSizeMultiplier(this.modelConfig)
 
     this.glassesRoot.visible = true
     this.glassesRoot.position.copy(transform.position)

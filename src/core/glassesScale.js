@@ -13,3 +13,11 @@ export function resolveGlassesScaleMultiplier(search) {
   const override = parseFloat(new URLSearchParams(search).get('gscale'))
   return Number.isFinite(override) && override > 0 ? override : 1
 }
+
+// Per-model size the merchant sets on the model's card in the admin, served by
+// /api/tryon-config. Stacks with ?gscale (the theme block's store-wide Glasses
+// size) rather than replacing it, so 1 leaves a model exactly as it was.
+export function resolveModelSizeMultiplier(modelConfig) {
+  const size = modelConfig?.sizeMultiplier
+  return Number.isFinite(size) && size > 0 ? size : 1
+}
