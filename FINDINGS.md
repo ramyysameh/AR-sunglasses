@@ -346,3 +346,50 @@ ranking (replaces the tail of §4):
 | E | Probe-reel regression gate: run `probe-landscape.y4m` through the harness and compare solved yaw/pitch/position against `truth.csv` per frame | turns "looks off at ¾" into a number CI can hold | S–M |
 | F | Screen-space lens refraction / in-scene video (was #7; Fittingbox does refraction) | lens realism | L |
 | G | Frame removal (inpaint the user's own glasses), Fittingbox's differentiator | hard: needs segmentation plus inpainting; propose an open model | L |
+
+---
+
+## 8. Pose gate, PnP head pose and the profile guard (branch feat/pnp-head-pose)
+
+### The gate (item E)
+`node scripts/pose-gate.mjs` pushes every reel frame through the real engine
+(`harness/posegate.html`, virtual 30 fps clock, so runs are reproducible) and scores
+it against `truth.csv` per segment: yaw/pitch/roll error, and the frame's nose
+contact against the bust's true nasion in mm (truth carried by the same rig code
+as the renderer, `harness/probeGeometry.js`; mm scaled by the bust's own IPD).
+`--check` enforces `harness/pose-gate.limits.json`. The default frame is a
+Create-with-AI model (dev store Classic Aviator, production fit), because that is
+what shoppers wear. `--reel real-turn-hf-fb640` runs the real-face reel
+(frames extracted from the y4m) for frame-matched before/after sheets.
+
+### Baseline (CG reel, true 30° FOV, MediaPipe matrix), drawn frame
+| segment | yaw° | pitch° | roll° | drift mm mean / p95 |
+|---|---|---|---|---|
+| yaw ±45 | 2.0 | 1.0 | 0.5 | 3.3 / 5.0 |
+| pitch ±25 | 0.4 | 1.2 | 0.2 | 1.9 / 5.6 |
+| shake | 5.2 | 0.7 | 0.6 | 5.2 / 8.2 |
+
+On a clean face up to 45°, MediaPipe's matrix is already accurate.
+
+### PnP (item A), `?pose=pnp`: built, NOT better, left opt-in
+Own Levenberg-Marquardt solver over 29 rigid landmarks (bone and stiff cartilage;
+silhouette, lips, lids, brows excluded, see `scripts/extract-rigid-face-model.mjs`),
+Huber loss, facing-camera weights, and a per-wearer model built in the silent
+frontal scan. On the CG reel it is worse than MediaPipe (yaw segment 2.4° yaw /
+4.4° pitch vs 2.0 / 1.0): a frontal scan cannot see the face's depth, and depth
+error couples into pitch during turns.
+
+### Why the frame floats off at ¾ on a real face
+Near profile, MediaPipe's 2D landmarks collapse: on the real reel a face visibly
+turned ~65° solves to ~30° with MediaPipe AND with PnP. The input is wrong, so no
+pose solver fixes it. Same on all three AI models.
+
+### Profile guard, `?profileguard=1`: opt-in
+Fades the frame out when the landmark layout says it is guessing (far/near eye
+width ratio, rigid-fit reprojection error). Real reel, all three AI models:
+frames drawn while floating 42 → 3 (all mid-fade), seated frames unchanged
+(275/338). But on the CG bust the same thresholds hide 55% of an ordinary ±45°
+turn: a collapsed near-profile face is self-consistent, and per frame looks like
+an honest ~32° face. The gate fails it (`--check`: yaw tracked 44.6%). A default-on
+guard needs evidence beyond the landmark layout (image silhouette, or motion over
+time), measured on a CG reel extended to ±75° yaw.
