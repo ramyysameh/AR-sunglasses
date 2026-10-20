@@ -2,7 +2,7 @@
  * Main AR render loop that fuses face tracking, pose filtering, occlusion, and Three.js rendering.
  */
 import * as THREE from 'three'
-import { NEAR_ARM_YAW_DEG, TEMPLE_BEHIND_EAR_KEEP_M, TEMPLE_CURL_RAD, TEMPLE_CUT_BEHIND_EAR_M, applyCurl, applyNearArmClip, applyOffset, applySplay, buildHinges, solveSplay } from '../models/templeHinge.js'
+import { TEMPLE_BEHIND_EAR_KEEP_M, TEMPLE_CURL_RAD, TEMPLE_CUT_BEHIND_EAR_M, applyCurl, applyNearArmClip, applyOffset, applySplay, nearArmSide, buildHinges, solveSplay } from '../models/templeHinge.js'
 import { EAR_LANDMARKS, EYE_LANDMARKS, NOSE_LANDMARK, headFrame } from '../occlusion/headFrame.js'
 import { halfWidthAt, toWorldPositions } from '../occlusion/headWidth.js'
 import { SHELL_INDEX_START } from '../occlusion/FaceOccluder.js'
@@ -23,6 +23,9 @@ import { ProfileGuard, resolveProfileGuardEnabled } from '../tracking/profileGua
 import { intrinsicsFromFov } from '../tracking/headPoseSolver.js'
 
 const TRACK_LOSS_RESET_MS = 180
+// How long a detection miss keeps the last drawn pose (~4 frames at 30 fps).
+// Under TRACK_LOSS_RESET_MS, so a real loss still hides and then resets.
+const TRACK_DROPOUT_HOLD_MS = 140
 // Room-light sampling: a 32x18 thumbnail of the camera image, four times a
 // second. The estimate is smoothed over ~1.2 s anyway, so sampling every frame
 // would only spend readback time on numbers the smoother throws away.
@@ -540,6 +543,17 @@ export class RenderLoop {
   }
 
   _hideTrackedObjects(timestamp) {
+    // A miss of a frame or two keeps the last drawn pose instead of blinking
+    // the glasses off and on. As the face reaches the edge of the picture the
+    // detector can miss every other frame, which blinked them at full opacity
+    // (real-turn-hf-portrait 240-244) before the profile guard faded them out.
+    if (
+      this.glassesRoot?.visible &&
+      this.lastTrackingTimestamp !== null &&
+      timestamp - this.lastTrackingTimestamp <= TRACK_DROPOUT_HOLD_MS
+    ) {
+      return
+    }
     if (this.glassesRoot) {
       this.glassesRoot.visible = false
     }
@@ -1086,6 +1100,7 @@ export class RenderLoop {
     if (!this.faceOccluder.occluderMesh.visible || position.count <= Math.max(...EAR_LANDMARKS)) {
       this.faceOccluder.aimTempleFloor?.(null)
       applyNearArmClip(this._hinges, 0, null, null)
+      this._nearArmSide = 0
       return
     }
 
@@ -1093,7 +1108,8 @@ export class RenderLoop {
       ? new THREE.Euler().setFromQuaternion(transform.quaternion, 'YXZ').y
       : this.headYaw
     const yaw = THREE.MathUtils.radToDeg(displayedYaw ?? 0)
-    const nearSide = Math.abs(yaw) < NEAR_ARM_YAW_DEG ? 0 : (yaw >= 0 ? -1 : 1)
+    const nearSide = nearArmSide(yaw, this._nearArmSide ?? 0)
+    this._nearArmSide = nearSide
     if (nearSide === 0) {
       this.faceOccluder.aimTempleFloor?.(null)
       applyNearArmClip(this._hinges, 0, null, null)
