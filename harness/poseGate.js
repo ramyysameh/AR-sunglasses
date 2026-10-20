@@ -259,6 +259,8 @@ async function buildEngine(W, H, fovDeg) {
       : null
     return {
       tracked: Boolean(shown),
+      // On screen, fresh fit or not: a detection miss holds the last pose.
+      visible: Boolean(glassesRoot.visible),
       source: taps.pose?.poseSource ?? (taps.pose ? 'mediapipe' : null),
       raw: taps.pose ? eulerDeg(taps.pose.quaternion) : null,
       shown: shown ? eulerDeg(glassesRoot.quaternion) : null,
@@ -351,6 +353,7 @@ async function run({ from = 0, to = Infinity, shotsAt = [], shotPrefix = 'gate',
       seg: truth?.seg ?? 'reel',
       truth: truth ? { yaw: truth.yaw, pitch: truth.pitch, roll: truth.roll, dist: truth.dist } : null,
       tracked: reading.tracked,
+      visible: reading.visible,
       source: reading.source,
       raw: reading.raw,
       shown: reading.shown,

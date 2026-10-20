@@ -602,6 +602,24 @@ function nearArmRemainder(mesh) {
 export const NEAR_ARM_YAW_DEG = 8
 
 /**
+ * Once lifted, the near arm stays lifted until the head is back inside this.
+ * One threshold made a turn that peaked near 8 degrees lift the arm for a
+ * single frame (-8.2 then -7.8 on real-turn-kling), a visible pop.
+ */
+export const NEAR_ARM_RELEASE_DEG = 5
+
+/**
+ * Which arm is nearer the camera (-1, 1, or 0 for neither), with hysteresis.
+ * @param {number} yawDeg displayed head yaw
+ * @param {number} prevSide the previous frame's answer
+ */
+export function nearArmSide(yawDeg, prevSide = 0) {
+  const side = yawDeg >= 0 ? -1 : 1
+  const limit = prevSide === side ? NEAR_ARM_RELEASE_DEG : NEAR_ARM_YAW_DEG
+  return Math.abs(yawDeg) < limit ? 0 : side
+}
+
+/**
  * How far BEHIND the tragion the near arm is cut, metres.
  *
  * The tragion is the front of the ear, so cutting exactly there leaves the cut

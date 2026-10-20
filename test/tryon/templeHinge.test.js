@@ -4,11 +4,13 @@ import {
   MAX_CURL_RAD,
   TEMPLE_ON_TOP_ORDER,
   MAX_SPLAY_RAD,
+  NEAR_ARM_RELEASE_DEG,
   TEMPLE_CURL_RAD,
   TEMPLE_CUT_RATIO,
   TEMPLE_SHELL_CLEARANCE,
   applyCurl,
   applyNearArmClip,
+  nearArmSide,
   solveSplay,
   applySplay,
   buildHinges,
@@ -159,6 +161,25 @@ describe('applyNearArmClip', () => {
     applyNearArmClip(h, -1, FRONT, BACK)
     expect(h[0].meshes[0].material).toBe(cloned)
     expect(h[0].meshes[0].userData.templeBehind).toBe(sibling)
+  })
+})
+
+describe('nearArmSide', () => {
+  it('lifts the near arm past NEAR_ARM_YAW_DEG', () => {
+    expect(nearArmSide(-8.2, 0)).toBe(1)
+    expect(nearArmSide(8.2, 0)).toBe(-1)
+    expect(nearArmSide(7, 0)).toBe(0)
+  })
+
+  it('keeps it lifted until the head is back inside the release angle', () => {
+    // real-turn-kling 196-197: -8.2 then -7.8 popped the arm on for one frame.
+    expect(nearArmSide(-7.8, 1)).toBe(1)
+    expect(nearArmSide(-NEAR_ARM_RELEASE_DEG - 0.1, 1)).toBe(1)
+    expect(nearArmSide(-NEAR_ARM_RELEASE_DEG + 0.1, 1)).toBe(0)
+  })
+
+  it('switches straight across when the head swings to the other side', () => {
+    expect(nearArmSide(9, 1)).toBe(-1)
   })
 })
 

@@ -187,8 +187,11 @@ function smoothstep(edge0, edge1, x) {
 export const PROFILE_GUARD_DEFAULTS = Object.freeze({
   yawShow: 44,
   yawHide: 52,
-  overrunShow: 0.05,
-  overrunHide: 0.12,
+  // An honest 3/4 face against a warm background read up to 0.087
+  // (real-turn-kling), and 0.05 faded it to 63% and back; a face half out of
+  // the picture reads 0.13-0.21 (real-turn-hf-portrait).
+  overrunShow: 0.09,
+  overrunHide: 0.14,
   // Only read pixels once the face is visibly turned (eye ratio below this);
   // head-on, the nose side is ambiguous and nothing is out of frame.
   sampleBelowEyeRatio: 0.9,

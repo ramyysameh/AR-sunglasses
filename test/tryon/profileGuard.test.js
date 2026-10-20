@@ -212,6 +212,43 @@ describe('ProfileGuard', () => {
   })
 })
 
+describe('overrun thresholds on real faces', () => {
+  it('keeps an honest 3/4 face whose nose side reads up to 0.087', () => {
+    // real-turn-kling, face well inside the picture against a warm sunset:
+    // 0.05-0.087 there faded the frame to 63% and back, a visible pulse.
+    expect(landmarkTrust({ yawDeg: 40, overrun: 0.087 })).toBe(1)
+  })
+
+  it('still hides a face half out of the picture (0.14 and up)', () => {
+    // real-turn-hf-portrait 98-102 and 245-254 read 0.13-0.21.
+    expect(landmarkTrust({ yawDeg: 45, overrun: 0.14 })).toBe(0)
+  })
+})
+
+describe('RenderLoop detection dropouts', () => {
+  const loopWithGlasses = () => {
+    const loop = new RenderLoop({ profileGuard: null })
+    loop.glassesRoot = new THREE.Group()
+    loop.glassesRoot.visible = true
+    loop.lastTrackingTimestamp = 1000
+    return loop
+  }
+
+  it('holds the glasses through a detection miss of a frame or two', () => {
+    // Alternate-frame misses as the face reaches the edge of the picture made
+    // the glasses blink on and off at full opacity (real-turn-hf-portrait 240-244).
+    const loop = loopWithGlasses()
+    loop._hideTrackedObjects(1000 + 2 * FRAME_MS)
+    expect(loop.glassesRoot.visible).toBe(true)
+  })
+
+  it('hides them once the face has really gone', () => {
+    const loop = loopWithGlasses()
+    loop._hideTrackedObjects(1000 + 200)
+    expect(loop.glassesRoot.visible).toBe(false)
+  })
+})
+
 describe('RenderLoop guard opacity', () => {
   it('scales authored opacity, hides near zero, and restores exactly', () => {
     const loop = new RenderLoop({ profileGuard: null })
