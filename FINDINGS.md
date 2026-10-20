@@ -1,4 +1,4 @@
-# FINDINGS — meta.com virtual try-on vs. AR Try-On
+# FINDINGS — meta.com and Fittingbox virtual try-ons vs. AR Try-On
 
 Date: 2026-10-20 · Branch: `feat/meta-informed-render` (off `origin/main` 9509c3a)
 
@@ -8,6 +8,10 @@ Meta source, shaders, models, weights, meshes, HDRIs or textures were copied int
 this repo, and none were saved to disk (an attempt to save the downloaded assets
 locally was blocked by the session's permission policy and was not retried; all
 inspection below was done in-page, returning only metadata).
+
+Sections 1–4 are the meta.com teardown; **section 5 adds Fittingbox** (same
+clean-room rules), **section 6 the fake-camera probe reels** used to read all
+three engines, and **section 7 the three-way readings and the revised plan**.
 
 Labels: **[confirmed]** = directly observed in the downloaded bytes / config values;
 **[hypothesis]** = inferred, not proven by what was observed.
@@ -215,3 +219,130 @@ per-session estimate) plus a new `src/fit/pupillaryDistance.js`; 5 touches
 `src/tracking/FaceTracker.js` and `src/core/RenderLoop.js`; 6 touches
 `GlassesModelLoader.applyTempleFade`; 7 touches `RenderLoop`, `coverMap`, the
 provider's capture path and the storefront embed CSS.
+
+---
+
+## 5. Fittingbox (demo.fittingbox.com, "vto-advanced")
+
+Observed the same way as Meta: temp Chrome profile, synthetic fake camera, one
+session. The demo's privacy consent was accepted in that throwaway profile with the
+owner's approval. Inspection was metadata-only and in-frame; nothing was saved.
+Evidence: REA scenario `ev_780ffd56…edef63`. Frame assets are delivered as an
+encrypted `data4` format with a per-request key and were **not inspected**
+(protected content).
+
+### Architecture [confirmed]
+- The try-on is an iframe app (`vto-advanced.fittingbox.com`, integration API
+  1.10) around a **proprietary C++ engine compiled to WASM**: `FBxLive` 11.4.0
+  (`FBxLive.wasm` 11.0 MB, `FBxLive.data` 1.4 MB Emscripten package,
+  `fbx-streamgrabber.js` for the camera). It has its own GLES renderer (shader
+  cross-compiler strings) on WebGL2. No MediaPipe, no three.js.
+- **Recognition is server-side first.** The client POSTs one ~28 KB 640×480 JPEG
+  to `vto-customer-application-detectionservice-v11.fittingbox.com/detection/<apiKey>`.
+  The response carries `cameraFocal` 595.2 px at 640×480 (≈ 44° assumed vertical
+  FOV), principal point at centre, 2 eye points, **68** face points (dlib-style
+  layout), ear points, face region, `faceReconstructionConfidence` and
+  `glassesDetectionResult`. Confidence rose 0 → 0.33 → 0.66 over successive
+  submissions of a moving head, which reads as a **multi-view face reconstruction
+  that accumulates views** (values confirmed; the mechanism is a hypothesis). Local
+  tracking only starts after that (`live:success`), with `live:recovery`
+  re-detections when it loses the face.
+- Packaged engine data (names and sizes only): `DENSE_5_PERCENT/dataMM.bin` (a
+  dense face **morphable model**, 5 % subsample), `GLASSES_MODES_20/dataMM.bin` (a
+  20-mode statistical model of **glasses** shape, probably for detecting and
+  removing the user's own frames [hypothesis]), per-frame-type rule files
+  (`BinocularRim`, `RimLess`, `SplitRim`, `OneLens`, clip-ons), `GGX-DFG-LUT.ktx`,
+  two env maps (`pixar_campus_legacy` and a **desaturated** `schadowplatz`),
+  `zorro.png` (eye-region mask) and `zoneActivationInfo` (tracking zones).
+- Lens colours are separate packs (`Sample_Brown`, `…Gradient`, `…bicolor`,
+  `MirrorPurple`, `PhotochromaticBrown/Green` .zip) applied to any frame.
+
+### Rendering techniques named in the engine [confirmed by pass/class names]
+- **Split-sum PBR IBL** (GGX DFG LUT, irradiance map, env transform, IBL exposure,
+  tone mapping), with spatially varying materials via `roughnessGradient`,
+  `metallicGradient`, `clearcoatRoughnessGradient` and `SpecularColorMetalGradient`.
+- **Lenses: two-layer depth peeling** (`DepthPeel1/2`, `MetalRoughTransparentPeel1/2`
+  with separate *Reflection* and *Transmission* passes) plus
+  **`ScreenSpaceRefraction`** into a `refractionBuffer`. The camera image behind
+  the lens is refracted, not just alpha-blended.
+- **Shadows on the face**: `ShadowMap`, `ShadowOcclusion`, `ShadowBlending` and
+  `shadowColor`, blended through a **`FaceMaskGradient`** (soft fall-off at the
+  face edge). Same idea as our new contact shadow's facing fade.
+- **Frame removal**: `BackgroundInpainter`, `PatchInpainter`, a temporal
+  `CopyPasteInpainter` (with history), `InpaintableAreaGradient`, `BackgroundMask`.
+- **PD measurement with a credit card** (`waitingForCardAndMeasurementPoseReady`,
+  `Protocol_CardPoseNotOk`, `humanPupilCount`), offered as a separate demo
+  (`pd-measurement-demo.fittingbox.com`).
+
+### Observed live behaviour (probe reel `real-turn-hf-fb640`, see §6) [confirmed]
+- It would not start on our CG bust, or on a feed where the face sat small or low
+  in its 4:3 framing box. It started once the face filled ~70 % of frame height,
+  centred.
+- It tracks through **near-profile (~80°)**, with the temples ending correctly in
+  the hair and ear. It lost the face once at full profile and re-acquired in
+  0.4–4.5 s.
+- The lens shows a strong, view-dependent env reflection (a window/sky panel) at
+  turned poses; the tint lets the eyes show through; the metal frame picks up env
+  highlights.
+- Contact shadow: not visible at the captured resolution [hypothesis: subtle].
+
+---
+
+## 6. Better fake camera: probe reels (new tooling in this branch)
+
+The old fake camera (`face.y4m`, a near-static selfie) gave no known pose and no
+lighting change. New:
+
+- **`harness/probereel.html`** (served at `/probe/` by the harness) renders the
+  mock bust through a scripted 40 s timeline: hold, yaw ±45°, pitch ±25°, roll
+  ±20°, distance 0.75–1.3×, light normal/dim/warm/bright, a dead-still hold, and a
+  1.5 Hz shake. It renders at any size (`?w=1280&h=720` or `?w=720&h=1280`), burns
+  the frame number and pose into the corner, and writes **`truth.csv`** (per-frame
+  yaw, pitch, roll, distance, light) beside the frames.
+- **`scripts/build-probe-reel.mjs`** turns frames into a `.y4m` for
+  `--use-file-for-fake-video-capture` (plus an `.mp4` preview). `--from-video <clip>`
+  turns any footage into real-face reels (as-is → dimmed/warm → frozen still, with
+  the frame counter burned in), in portrait and 1280×720 landscape (padded so a 4:3
+  centre crop keeps the whole head).
+- The assets live outside the repo, in `test-mock-head/`:
+  - `probe-landscape.y4m` and `probe-portrait.y4m` (CG, with truth).
+  - `real-turn-hf.mp4`: a 15 s Higgsfield (Seedance 2.5) **no-glasses** selfie
+    turning left and right to profile and nodding, generated from
+    `marketing/assets/ai/cut_hero_noglasses.png` (105 credits).
+  - Its reels `real-turn-hf-{portrait,landscape,fb640}.y4m`. `fb640` is native
+    640×480 with the face framed for Fittingbox's box.
+- Lessons:
+  - A CG bust is fine for MediaPipe engines (ours, Meta), but proprietary trackers
+    may refuse it.
+  - A getUserMedia 640×480 request makes Chrome centre-crop a 16:9 file to 4:3.
+  - 1.6 GB y4m files work.
+
+---
+
+## 7. Three-way readings and revised plan
+
+The same feed (`real-turn-hf-fb640.y4m`) went through all three, with screenshots
+every 2.5 s (sheets in `test-shots/vto-compare-2026-10-20/`):
+
+| Moment | meta.com | Fittingbox | Ours (dev harness, Gripz Pelmo) |
+|---|---|---|---|
+| Frontal | seated on the nose bridge | seated | seated; frame reads small for the face |
+| ¾ yaw (~45°) | holds | holds | **frame slides off the face sideways** |
+| Chin up (pitch) | holds on the eyes | holds | **frame rides up onto the forehead** |
+| Profile (~80–90°) | hides glasses, shows a "good lighting / eye level" hint | **keeps tracking** | drops (MediaPipe limit) |
+| Re-acquire | fast | 0.4–4.5 s (server round trip) | fast |
+
+The biggest gap is **pose accuracy under yaw and pitch on a realistic face**, not
+rendering. Meta's answer is OpenCV `solvePnP` on a rigid landmark subset with
+FOV-derived intrinsics; Fittingbox fits a per-user reconstructed 3D face. Revised
+ranking (replaces the tail of §4):
+
+| # | Improvement | Why now | Effort |
+|---|---|---|---|
+| A | **Rigid-landmark PnP head pose**: our own solver, ~30 stable landmarks against the canonical face, intrinsics from the real video FOV, MediaPipe matrix as fallback | fixes the ¾-yaw slide and chin-up drift seen above; measurable with `truth.csv` | M |
+| B | Per-user PD from iris diameter (was #4) | true-to-scale sizing; both Meta and Fittingbox measure it | M |
+| C | `requestVideoFrameCallback`-driven detection (was #5) | frame budget and stable timestamps | S |
+| D | Dithered temple fade (was #6) | sort-free | S |
+| E | Probe-reel regression gate: run `probe-landscape.y4m` through the harness and compare solved yaw/pitch/position against `truth.csv` per frame | turns "looks off at ¾" into a number CI can hold | S–M |
+| F | Screen-space lens refraction / in-scene video (was #7; Fittingbox does refraction) | lens realism | L |
+| G | Frame removal (inpaint the user's own glasses), Fittingbox's differentiator | hard: needs segmentation plus inpainting; propose an open model | L |
