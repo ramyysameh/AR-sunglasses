@@ -156,17 +156,24 @@ a single person in daylight, so lighting-adaptation behaviour could not be stres
 
 ### Plans and files touched
 
-**1. Contact shadows** (implemented)
-- `src/core/contactShadow.js` (new): config resolver plus a shadow-only receiver
-  material and light rig.
-- `src/occlusion/FaceOccluder.js`: expose the face-surface geometry (front 468
-  landmarks) so a second, shadow-receiving mesh can share it.
-- `src/core/RenderLoop.js`: enable `renderer.shadowMap` (PCFSoft), add a
-  zero-intensity-contribution directional light from above-front that only casts
-  (glasses meshes `castShadow`), a `ShadowMaterial` receiver on the face surface,
-  and per-frame light re-targeting to the head. URL tuning: `?shadow=0`,
-  `?shadowopacity=`, `?shadowsize=`.
-- `src/models/GlassesModelLoader.js`: opaque frame meshes cast; lenses don't.
+**1. Contact shadows** (implemented, commit "feat(render): soft contact shadow…")
+- `src/core/contactShadow.js` (new): `ContactShadow` = zero-intensity
+  directional light that only owns a `PCFShadowMap` (256², radius 4 → ~4 mm
+  penumbra), a `ShadowMaterial` receiver whose geometry **shares the occluder's
+  position buffer** but indexes only the 468-landmark face tessellation, and a
+  grazing-angle fade (|N·V| 0.15→0.45) so mesh overhang past the silhouette at
+  yaw never shadows the background. Lenses don't cast. Light is world-fixed
+  20° above the camera axis.
+- `src/core/RenderLoop.js`: replaces the disabled flat disc; one `_render()`
+  path re-aims the shadow each frame and shows it only while frame and face
+  surface are both visible. `light.castShadow` never toggles (avoids shader
+  recompiles on track loss).
+- No loader or occluder changes were needed. Off under `?probe=1` so the
+  occlusion probe's pixel counts are unaffected.
+- Tuning: `?shadow=0`, `?shadowopacity=` (0.24), `?shadowel=` (20),
+  `?shadowaz=`, `?shadowmap=`, `?shadowsoft=`.
+- Measured: +0.2 ms per render on desktop; no repeatable fps change under
+  mobile emulation (emulation runs on the desktop GPU: real-phone cost unverified).
 
 **2. Light estimation** (implemented)
 - `src/core/cameraLightEstimate.js` (new, pure): downsampled RGBA → luminance and

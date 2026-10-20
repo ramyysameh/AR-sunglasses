@@ -15,6 +15,7 @@ import { resolveGlassesScaleMultiplier, resolveModelSizeMultiplier } from './gla
 import { createLensEnvironment } from './lensEnvironment.js'
 import { resolveLensReflectionConfig, resolveEnvironmentName} from './lensReflection.js'
 import { resolveFrameReflectionConfig } from './frameReflection.js'
+import { ContactShadow, resolveContactShadowConfig } from './contactShadow.js'
 import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
 import { PoseInterpolator } from '../tracking/PoseInterpolator.js'
 
@@ -104,9 +105,13 @@ export class RenderLoop {
     this.lastPredictionTimestamp = null
     this.poseInterpolator = new PoseInterpolator()
     this.occlusionEnabled = true
-    // The flat CircleGeometry "contact shadow" reads as a grey disc on the nose,
-    // so keep it off. Revisit with a proper soft/blurred shadow later if desired.
-    this.contactShadowEnabled = false
+    // A real shadow map of the frame on the face mesh now (contactShadow.js);
+    // the old flat disc read as a grey blob on the nose. ?shadow=0 turns it off,
+    // and the debug HUD toggle flips this at runtime.
+    this.contactShadowConfig = resolveContactShadowConfig(
+      typeof window !== 'undefined' ? window.location.search : '',
+    )
+    this.contactShadowEnabled = this.contactShadowConfig.enabled
     this.filterMode = 'still'
     this.motionLevel = 0
     this.lastScanStateKey = ''
@@ -182,19 +187,6 @@ export class RenderLoop {
     rim.position.set(0, 0.2, -1)
 
     this.scene.add(ambient, key, fill, rim)
-    this.contactShadow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.035, 32),
-      new THREE.MeshBasicMaterial({
-        color: 0x000000,
-        transparent: true,
-        opacity: 0.16,
-        depthWrite: false,
-        depthTest: true,
-      })
-    )
-    this.contactShadow.renderOrder = 1
-    this.contactShadow.visible = false
-    this.scene.add(this.contactShadow)
 
     this._syncSize()
     this._installProbe()
@@ -228,6 +220,7 @@ export class RenderLoop {
     if (this.glassesRoot && this.scene) {
       this.scene.add(this.glassesRoot)
     }
+    this.contactShadow?.setCasters(this.glassesRoot)
 
     // The probe needs both the glasses and the occluder; they are set by
     // different callers in either order, so try from both.
@@ -833,16 +826,6 @@ export class RenderLoop {
     this.glassesRoot.quaternion.copy(transform.quaternion)
     this.glassesRoot.scale.setScalar(scale)
 
-    if (this.contactShadow) {
-      this.contactShadow.visible = true
-      this.contactShadow.visible = this.contactShadowEnabled
-      this.contactShadow.position.copy(transform.surfaceSolution?.bridgeWorld ?? transform.position)
-      this.contactShadow.position.y -= 0.012 * scale
-      this.contactShadow.position.z += 0.006 * scale
-      this.contactShadow.quaternion.copy(transform.quaternion)
-      this.contactShadow.scale.setScalar(scale)
-    }
-
     if (!this.occlusionEnabled) {
       this.faceOccluder?.hide?.()
     } else if (transform.occlusionMesh?.faceWorldPoints) {
@@ -1154,6 +1137,42 @@ export class RenderLoop {
     }))
   }
 
+  /**
+   * Builds the contact shadow once the pieces it needs exist. Lazy because the
+   * renderer comes from init() while the occluder (whose face surface receives
+   * the shadow) is handed over separately, in either order.
+   */
+  _ensureContactShadow() {
+    if (this.contactShadow || !this.contactShadowConfig?.enabled) return
+    const occluderGeometry = this.faceOccluder?.occluderMesh?.geometry
+    if (!this.renderer || !this.scene || !occluderGeometry) return
+    this.contactShadow = new ContactShadow({
+      scene: this.scene,
+      renderer: this.renderer,
+      faceGeometry: occluderGeometry,
+      faceIndexCount: SHELL_INDEX_START,
+      config: this.contactShadowConfig,
+    })
+    this.contactShadow.setCasters(this.glassesRoot)
+  }
+
+  /**
+   * The one place a frame is drawn. The shadow is re-aimed here rather than in
+   * _applyTransform so every hide path (track loss, scan not ready, occlusion
+   * toggled off) is covered by the same visibility rule: the shadow shows only
+   * while the frame AND the face surface it falls on are both on screen.
+   */
+  _render() {
+    if (!this.renderer) return
+    this._ensureContactShadow()
+    this.contactShadow?.update(
+      this.contactShadowEnabled &&
+        Boolean(this.glassesRoot?.visible) &&
+        Boolean(this.faceOccluder?.occluderMesh?.visible),
+    )
+    this.renderer.render(this.scene, this.camera)
+  }
+
   stop() {
     this.running = false
 
@@ -1165,6 +1184,8 @@ export class RenderLoop {
 
   dispose() {
     this.stop()
+    this.contactShadow?.dispose()
+    this.contactShadow = null
     this.lensEnvironment?.dispose?.()
     this.lensEnvironment = null
     this.lensEnvMap = null
@@ -1234,14 +1255,14 @@ export class RenderLoop {
 
       if (!result?.facialTransformationMatrixes?.length) {
         this._hideTrackedObjects(timestamp)
-        this.renderer?.render(this.scene, this.camera)
+        this._render()
         return
       }
 
       const landmarks = result.faceLandmarks?.[0]
       if (!landmarks?.length) {
         this._hideTrackedObjects(timestamp)
-        this.renderer?.render(this.scene, this.camera)
+        this._render()
         return
       }
 
@@ -1265,7 +1286,7 @@ export class RenderLoop {
 
       if (!pose) {
         this._hideTrackedObjects(timestamp)
-        this.renderer?.render(this.scene, this.camera)
+        this._render()
         return
       }
 
@@ -1297,7 +1318,7 @@ export class RenderLoop {
           headPosition: pose.rawPose?.position,
           predictionDelta: this.predictionDelta ?? 0,
         })
-        this.renderer?.render(this.scene, this.camera)
+        this._render()
         return
       }
 
@@ -1317,7 +1338,7 @@ export class RenderLoop {
 
       if (!fitSolution) {
         this._hideTrackedObjects(timestamp)
-        this.renderer?.render(this.scene, this.camera)
+        this._render()
         return
       }
 
@@ -1464,7 +1485,7 @@ export class RenderLoop {
       this.lastFitScale = fitScale
       this.lastTempleSpan = pose.metrics?.templeSpan ?? 0
 
-      this.renderer?.render(this.scene, this.camera)
+      this._render()
     } catch (error) {
       console.error('Render loop error:', error)
     }
