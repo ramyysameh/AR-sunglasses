@@ -1,0 +1,278 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Probe reel renderer</title>
+<style>
+  body{margin:0;background:#333;font:13px system-ui;color:#fff}
+  #out{padding:6px 10px;background:#0008;white-space:pre}
+  canvas{max-width:640px;display:block;margin:6px}
+</style>
+<div id="out">loading…</div>
+<script type="importmap">
+{"imports":{"three":"/node_modules/three/build/three.module.js","three/addons/":"/node_modules/three/examples/jsm/"}}
+</script>
+<script type="module">
+/**
+ * Fake-camera "probe reel": one continuous video of the mock head moving through
+ * a scripted timeline, for feeding ANY try-on (ours, meta.com, fittingbox) through
+ * Chrome's --use-file-for-fake-video-capture and reading the result at known
+ * poses.
+ *
+ * Why not the turn sweeps: those are a handful of stills, so a try-on sees a
+ * slideshow -- fine for occlusion at fixed angles, useless for lag, jitter,
+ * overshoot, lighting response or depth. And the existing face.y4m is a nearly
+ * static selfie, so nothing it shows has a known pose. Here every frame's yaw,
+ * pitch, roll, distance and light are KNOWN (logged to truth.csv beside the
+ * frames) and burned into the corner, so a screenshot of a third-party try-on can
+ * be matched to the exact pose and lighting it was given.
+ *
+ * Segments (seconds at 30 fps; see TIMELINE):
+ *   hold    frontal, still        lets scans/calibrations lock (all of them need it)
+ *   yaw     0 -> -45 -> +45 -> 0   temple occlusion, ear handling (the neck rig shears past ~50)
+ *   pitch   0 -> -25 -> +25 -> 0   nose seating, pivot errors
+ *   roll    0 -> -20 -> +20 -> 0
+ *   dist    1 -> 0.75 -> 1.3 -> 1  scale/depth stability (closer, farther)
+ *   light   dim, warm, bright      light estimation (head held at 15 deg yaw)
+ *   still   frontal, dead still    jitter floor: ANY motion on screen here is noise
+ *   shake   +/-25 deg at 1.5 Hz    lag and overshoot
+ *
+ * Params: ?w=1280&h=720 (default; ?w=720&h=1280 for a phone), ?fps=30,
+ * ?dist=1.15&heady=0.34 (webcam-like framing; 1.8 matches the harness sweeps), ?label=0 to omit the
+ * burned-in readout, ?save=1&dir=probe-landscape to write frames + truth.csv via
+ * the harness sink. Then build the y4m with scripts/build-probe-reel.mjs.
+ */
+import * as THREE from 'three'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+
+const q = new URLSearchParams(location.search)
+const W = parseInt(q.get('w') ?? '1280', 10)
+const H = parseInt(q.get('h') ?? '720', 10)
+const FPS = parseInt(q.get('fps') ?? '30', 10)
+// 1.15, not the sweeps' 1.8: a webcam selfie fills far more of the frame, and
+// meta.com's calibration refuses a face below ~60% of its target oval.
+const DIST = parseFloat(q.get('dist') ?? '1.15')
+const HEAD_Y = parseFloat(q.get('heady') ?? '0.34')
+const LABEL = q.get('label') !== '0'
+const out = document.getElementById('out')
+
+// ---- timeline -------------------------------------------------------------
+const ease = (t) => 0.5 - 0.5 * Math.cos(Math.PI * t)          // 0..1, zero slope at ends
+const there = (t, a) => a * Math.sin(2 * Math.PI * t)          // 0 -> +a -> 0 -> -a -> 0
+const NEUTRAL_LIGHT = { k: 1, warm: 0 }
+const TIMELINE = [
+  { name: 'hold', dur: 4, at: () => ({}) },
+  { name: 'yaw', dur: 8, at: (t) => ({ yaw: -there(t, 45) }) },
+  { name: 'pitch', dur: 5, at: (t) => ({ pitch: there(t, 25) }) },
+  { name: 'roll', dur: 3, at: (t) => ({ roll: there(t, 20) }) },
+  {
+    name: 'dist', dur: 4, at: (t) => {
+      // 1 -> 0.75 -> 1.3 -> 1, smooth
+      const k = t < 0.25 ? 1 - 0.25 * ease(t / 0.25)
+        : t < 0.75 ? 0.75 + 0.55 * ease((t - 0.25) / 0.5)
+          : 1.3 - 0.3 * ease((t - 0.75) / 0.25)
+      return { dist: k }
+    },
+  },
+  {
+    name: 'light', dur: 8, at: (t) => {
+      // 1s turn to 15 deg, then normal -> dim -> warm -> bright -> normal, 1.4s each
+      const yaw = 15 * ease(Math.min(t * 8, 1))
+      const phases = [
+        { k: 1, warm: 0, tag: 'normal' }, { k: 0.35, warm: 0, tag: 'dim' },
+        { k: 0.8, warm: 1, tag: 'warm' }, { k: 1.7, warm: 0, tag: 'bright' }, { k: 1, warm: 0, tag: 'normal' },
+      ]
+      const u = Math.max(0, t * 8 - 1) / 7 * phases.length
+      const i = Math.min(phases.length - 1, Math.floor(u))
+      const j = Math.min(phases.length - 1, i + 1)
+      const f = ease(Math.min(1, Math.max(0, (u - i - 0.7) / 0.3)))  // hold 70%, blend 30%
+      const a = phases[i], b = phases[j]
+      return { yaw, light: { k: a.k + (b.k - a.k) * f, warm: a.warm + (b.warm - a.warm) * f }, lightTag: f < 0.5 ? a.tag : b.tag }
+    },
+  },
+  { name: 'still', dur: 4, at: () => ({}) },
+  { name: 'shake', dur: 4, at: (t) => ({ yaw: 25 * Math.sin(2 * Math.PI * 1.5 * 4 * t) * Math.min(1, t * 8, (1 - t) * 8) }) },
+]
+
+function poseAt(frame) {
+  let t = frame / FPS
+  for (const seg of TIMELINE) {
+    if (t < seg.dur) {
+      const p = seg.at(t / seg.dur)
+      return {
+        seg: seg.name, yaw: p.yaw ?? 0, pitch: p.pitch ?? 0, roll: p.roll ?? 0, dist: p.dist ?? 1,
+        light: p.light ?? NEUTRAL_LIGHT, lightTag: p.lightTag ?? 'normal',
+      }
+    }
+    t -= seg.dur
+  }
+  return null
+}
+const TOTAL = Math.round(TIMELINE.reduce((s, x) => s + x.dur, 0) * FPS)
+
+// ---- scene (same bust, camera FOV and lighting as headrender.html) ---------
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
+renderer.setPixelRatio(1)
+renderer.setSize(W, H)
+renderer.outputColorSpace = THREE.SRGBColorSpace
+document.body.appendChild(renderer.domElement)
+
+const scene = new THREE.Scene()
+const BG = new THREE.Color(0x9a9a9a)
+const ambient = new THREE.AmbientLight(0xffffff, 2.4)
+const key = new THREE.DirectionalLight(0xffffff, 1.2); key.position.set(0.4, 0.6, 1.6)
+const fill = new THREE.DirectionalLight(0xffffff, 0.9); fill.position.set(-1.4, 0.3, 1.0)
+const rim = new THREE.DirectionalLight(0xffffff, 0.5); rim.position.set(1.4, 0.3, -0.6)
+scene.add(ambient, key, fill, rim)
+const BASE = { ambient: 2.4, key: 1.2, fill: 0.9, rim: 0.5 }
+// ~2700 K tungsten against neutral, in linear RGB.
+const WARM = new THREE.Color(1.0, 0.72, 0.42)
+const WHITE = new THREE.Color(1, 1, 1)
+
+const camera = new THREE.PerspectiveCamera(30, W / H, 0.01, 100)
+const gltf = await new GLTFLoader().loadAsync(q.get('glb') || '/mockhead/head.glb')
+const model = gltf.scene
+scene.add(model)
+
+const box = new THREE.Box3().setFromObject(model)
+const size = box.getSize(new THREE.Vector3())
+const center = box.getCenter(new THREE.Vector3())
+const headCenter = new THREE.Vector3(center.x, box.max.y - size.y * HEAD_Y, center.z)
+model.position.sub(headCenter)
+// Framing is sized to the frame HEIGHT, so landscape and portrait reels show the
+// head at the same apparent size against the vertical FOV.
+const baseCamZ = (size.y * 0.30 * DIST) / Math.tan(THREE.MathUtils.degToRad(15))
+
+/**
+ * Neck rig for the unrigged bust: full rotation above the skull base, none below
+ * the shoulders, smoothstep between. Same neck detection as headrender.html, but
+ * it takes a full orientation (yaw, pitch, roll at once) and blends it per vertex
+ * with slerp, so combined poses do not shear.
+ */
+function buildRig(root) {
+  const meshes = []
+  root.traverse((o) => { if (o.isMesh && o.geometry?.attributes?.position) meshes.push(o) })
+  let minY = Infinity, maxY = -Infinity
+  for (const m of meshes) {
+    const p = m.geometry.attributes.position
+    for (let i = 0; i < p.count; i += 1) { const y = p.getY(i); minY = Math.min(minY, y); maxY = Math.max(maxY, y) }
+  }
+  const Hh = maxY - minY
+  const BINS = 40
+  const width = new Array(BINS).fill(0)
+  for (const m of meshes) {
+    const p = m.geometry.attributes.position
+    for (let i = 0; i < p.count; i += 1) {
+      const b = Math.min(BINS - 1, Math.floor(((p.getY(i) - minY) / Hh) * BINS))
+      width[b] = Math.max(width[b], Math.abs(p.getX(i)))
+    }
+  }
+  let neckBin = -1, neckWidth = Infinity
+  for (let b = 0; b < BINS; b += 1) {
+    const fromTop = (BINS - 1 - b) / (BINS - 1)
+    if (fromTop < 0.35 || fromTop > 0.65) continue
+    if (width[b] < neckWidth) { neckWidth = width[b]; neckBin = b }
+  }
+  const neckY = minY + ((neckBin + 0.5) / BINS) * Hh
+  const top = neckY + 0.09 * Hh
+  const bottom = neckY - 0.06 * Hh
+  const pivot = new THREE.Vector3(0, top, center.z - headCenter.z)
+  const parts = meshes.map((m) => {
+    const p = m.geometry.attributes.position
+    const n = m.geometry.attributes.normal
+    const w = new Float32Array(p.count)
+    for (let i = 0; i < p.count; i += 1) {
+      const c = Math.max(0, Math.min(1, (p.getY(i) - bottom) / (top - bottom)))
+      w[i] = c * c * (3 - 2 * c)
+    }
+    return { p, n, w, p0: Float32Array.from(p.array), n0: n ? Float32Array.from(n.array) : null }
+  })
+  const I = new THREE.Quaternion()
+  const qv = new THREE.Quaternion()
+  const v = new THREE.Vector3()
+  return (target) => {
+    // Cache by weight: most vertices are at w = 0 or 1, and slerp per vertex at
+    // 23k vertices x 1000 frames is the one slow part of a render.
+    const cache = new Map()
+    for (const { p, n, w, p0, n0 } of parts) {
+      for (let i = 0; i < p.count; i += 1) {
+        const key = Math.round(w[i] * 256)
+        let rq = cache.get(key)
+        if (!rq) { rq = qv.copy(I).slerp(target, key / 256).clone(); cache.set(key, rq) }
+        const j = i * 3
+        v.set(p0[j] - pivot.x, p0[j + 1] - pivot.y, p0[j + 2] - pivot.z).applyQuaternion(rq).add(pivot)
+        p.array[j] = v.x; p.array[j + 1] = v.y; p.array[j + 2] = v.z
+        if (n0) { v.set(n0[j], n0[j + 1], n0[j + 2]).applyQuaternion(rq); n.array[j] = v.x; n.array[j + 1] = v.y; n.array[j + 2] = v.z }
+      }
+      p.needsUpdate = true
+      if (n) n.needsUpdate = true
+    }
+  }
+}
+const rig = buildRig(model)
+const euler = new THREE.Euler()
+const orient = new THREE.Quaternion()
+
+// ---- label overlay --------------------------------------------------------
+const comp = document.createElement('canvas')
+comp.width = W; comp.height = H
+const ctx = comp.getContext('2d')
+const fontPx = Math.round(Math.min(W, H) / 40)
+
+const frames = []
+const truth = ['frame,t,segment,yaw,pitch,roll,dist,light_k,light_warm,light_tag']
+const BATCH = 60
+async function flush(final = false) {
+  if (q.get('save') !== '1' || (!final && frames.length < BATCH)) return
+  // The final call always posts, even with no frames left, because it carries
+  // params.json and truth.csv.
+  const start = frames.length ? parseInt(frames[0].i, 10) : TOTAL
+  const r = await fetch(`/__save-frames?dir=${encodeURIComponent(q.get('dir') ?? 'probe')}&start=${start}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      frames: frames.map((f) => f.data),
+      params: final ? { kind: 'probe-reel', w: W, h: H, fps: FPS, dist: DIST, heady: HEAD_Y, label: LABEL, frames: TOTAL, timeline: TIMELINE.map((s) => [s.name, s.dur]) } : undefined,
+      truth: final ? truth.join('\n') + '\n' : undefined,
+    }),
+  })
+  if (!r.ok) throw new Error(`save failed: ${await r.text()}`)
+  frames.length = 0
+}
+
+for (let i = 0; i < TOTAL; i += 1) {
+  const p = poseAt(i)
+  // Yaw positive = head turns to ITS left = toward camera-right in a raw (unmirrored) feed.
+  euler.set(THREE.MathUtils.degToRad(p.pitch), THREE.MathUtils.degToRad(p.yaw), THREE.MathUtils.degToRad(p.roll), 'YXZ')
+  rig(orient.setFromEuler(euler))
+  camera.position.set(0, 0, baseCamZ * p.dist)
+  camera.lookAt(0, 0, 0)
+
+  const tint = WHITE.clone().lerp(WARM, p.light.warm)
+  ambient.intensity = BASE.ambient * p.light.k
+  key.intensity = BASE.key * p.light.k
+  fill.intensity = BASE.fill * p.light.k
+  rim.intensity = BASE.rim * p.light.k
+  for (const l of [ambient, key, fill, rim]) l.color.copy(tint)
+  // The room dims and warms with the light, not just the face -- an estimator
+  // that reads the background should see the same change.
+  renderer.setClearColor(BG.clone().multiply(tint).multiplyScalar(Math.min(p.light.k, 1.6)))
+  renderer.render(scene, camera)
+
+  ctx.drawImage(renderer.domElement, 0, 0)
+  if (LABEL) {
+    const text = `#${String(i).padStart(4, '0')} ${(i / FPS).toFixed(2)}s ${p.seg.padEnd(5)} Y${p.yaw.toFixed(0)} P${p.pitch.toFixed(0)} R${p.roll.toFixed(0)} D${p.dist.toFixed(2)} ${p.lightTag}`
+    ctx.font = `${fontPx}px Consolas, monospace`
+    const tw = ctx.measureText(text).width
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'
+    ctx.fillRect(0, H - fontPx * 1.6, tw + fontPx, fontPx * 1.6)
+    ctx.fillStyle = '#fff'
+    ctx.fillText(text, fontPx * 0.5, H - fontPx * 0.45)
+  }
+  frames.push({ i: String(i), data: comp.toDataURL('image/jpeg', 0.92) })
+  truth.push([i, (i / FPS).toFixed(4), p.seg, p.yaw.toFixed(3), p.pitch.toFixed(3), p.roll.toFixed(3), p.dist.toFixed(4), p.light.k.toFixed(3), p.light.warm.toFixed(3), p.lightTag].join(','))
+  await flush()
+  if (i % 30 === 0) out.textContent = `rendering ${i}/${TOTAL}  ${p.seg}`
+}
+await flush(true)
+window.__probeDone = { frames: TOTAL, w: W, h: H, fps: FPS }
+out.textContent = `done: ${TOTAL} frames ${W}x${H}@${FPS}${q.get('save') === '1' ? ` -> ${q.get('dir') ?? 'probe'}` : ' (not saved; add ?save=1)'}`
+</script>
