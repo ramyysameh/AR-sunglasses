@@ -19,6 +19,8 @@ import { ContactShadow, resolveContactShadowConfig } from './contactShadow.js'
 import { LightEstimateSmoother, estimateCameraLight, resolveLightEstimateEnabled } from './cameraLightEstimate.js'
 import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
 import { PoseInterpolator } from '../tracking/PoseInterpolator.js'
+import { ProfileGuard, resolveProfileGuardEnabled } from '../tracking/profileGuard.js'
+import { intrinsicsFromFov } from '../tracking/headPoseSolver.js'
 
 const TRACK_LOSS_RESET_MS = 180
 // Room-light sampling: a 32x18 thumbnail of the camera image, four times a
@@ -111,6 +113,13 @@ export class RenderLoop {
     this._frontalScaleCount = 0
     this.lastPredictionTimestamp = null
     this.poseInterpolator = new PoseInterpolator()
+    // Fades the glasses out near profile, where the landmarks stop being
+    // trustworthy and any pose drawn from them floats off the face. Opt-in with
+    // ?profileguard=1 until it has a face-independent signal (profileGuard.js).
+    this.profileGuard = options.profileGuard ?? (
+      resolveProfileGuardEnabled(typeof window !== 'undefined' ? window.location.search : '') ? new ProfileGuard() : null
+    )
+    this.guardOpacity = 1
     this.occlusionEnabled = true
     // A real shadow map of the frame on the face mesh now (contactShadow.js);
     // the old flat disc read as a grey blob on the nose. ?shadow=0 turns it off,
@@ -254,6 +263,19 @@ export class RenderLoop {
       }
     })
     if (this.lightEstimate) this._applyLightEstimate(this.lightEstimate)
+
+    // Authored opacity per material, so the profile guard's fade scales FROM it
+    // and can restore it exactly.
+    const baseOpacity = (this._baseOpacity ??= new Map())
+    baseOpacity.clear()
+    this.glassesRoot?.traverse((child) => {
+      if (!child.isMesh) return
+      const materials = Array.isArray(child.material) ? child.material : [child.material]
+      for (const m of materials) {
+        if (m && !baseOpacity.has(m)) baseOpacity.set(m, { opacity: m.opacity, transparent: m.transparent })
+      }
+    })
+    this._appliedGuardOpacity = 1
 
     // The probe needs both the glasses and the occluder; they are set by
     // different callers in either order, so try from both.
@@ -537,6 +559,8 @@ export class RenderLoop {
       this.predictionDelta = 0
       this.fitCalibrator?.reset?.()
       this.localFaceScanner?.reset?.()
+      this.profileGuard?.reset?.()
+      this.guardOpacity = 1
     }
 
     this.hud?.update({
@@ -853,7 +877,7 @@ export class RenderLoop {
     // merchant's per-model size is never silently swallowed by it.
     const scale = transform.scale * this._glassesScaleMultiplier * resolveModelSizeMultiplier(this.modelConfig)
 
-    this.glassesRoot.visible = true
+    this.glassesRoot.visible = this._applyGuardOpacity(this.guardOpacity ?? 1)
     this.glassesRoot.position.copy(transform.position)
     this.glassesRoot.position.y += verticalOffset
     this.glassesRoot.quaternion.copy(transform.quaternion)
@@ -886,6 +910,24 @@ export class RenderLoop {
 
     this._openTemples(transform)
     this._clipNearArm(transform)
+  }
+
+  /**
+   * Scales every glasses material's authored opacity by the profile guard's
+   * fade. Returns whether the glasses should be drawn at all: below a sliver of
+   * opacity they are simply hidden. (The shadow follows in _render.)
+   */
+  _applyGuardOpacity(opacity) {
+    const o = Math.min(1, Math.max(0, opacity))
+    if (o === this._appliedGuardOpacity) return o > 0.02
+    this._appliedGuardOpacity = o
+    for (const [material, base] of this._baseOpacity ?? []) {
+      const transparent = o < 1 ? true : base.transparent
+      if (material.transparent !== transparent) material.needsUpdate = true
+      material.transparent = transparent
+      material.opacity = base.opacity * o
+    }
+    return o > 0.02
   }
 
   /**
@@ -1202,6 +1244,8 @@ export class RenderLoop {
     this.contactShadow?.update(
       this.contactShadowEnabled &&
         Boolean(this.glassesRoot?.visible) &&
+        // A half-faded frame casting a full-strength shadow reads as a stain.
+        (this._appliedGuardOpacity ?? 1) >= 0.5 &&
         Boolean(this.faceOccluder?.occluderMesh?.visible),
     )
     this.renderer.render(this.scene, this.camera)
@@ -1360,13 +1404,26 @@ export class RenderLoop {
       const pose = this.landmarkProcessor?.processLandmarks(
         result,
         this.modelConfig,
-        glassesModel.userData.naturalWidth
+        glassesModel.userData.naturalWidth,
+        this.camera,
       )
 
       if (!pose) {
         this._hideTrackedObjects(timestamp)
         this._render()
         return
+      }
+
+      // On fresh detections only: the guard's fade is time-based, and a repeated
+      // camera frame carries no new evidence about the landmarks.
+      if (this.profileGuard && this.faceTracker?.lastDetectionWasFresh !== false &&
+        this.camera?._videoW > 0 && this.camera?._videoH > 0) {
+        this.guardOpacity = this.profileGuard.update(
+          landmarks,
+          intrinsicsFromFov(this.camera._videoW, this.camera._videoH, this.camera.fov),
+          result.facialTransformationMatrixes[0]?.data,
+          timestamp,
+        )
       }
 
       const scanState = this.localFaceScanner.update(pose)
