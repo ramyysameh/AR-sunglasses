@@ -102,6 +102,16 @@ const harnessPlugin = {
       res.end(fs.readFileSync(path.join(ROOT, 'harness', 'headrender.html')))
     })
 
+    // Fake-camera probe reel: the same bust driven through a scripted timeline
+    // (yaw, pitch, roll, distance, lighting, a dead-still hold, a fast shake) for
+    // feeding a try-on through Chrome's fake capture device. See probereel.html.
+    server.middlewares.use('/probe', (req, res, next) => {
+      if ((req.url ?? '').split('?')[0] !== '/') return next()
+      res.setHeader('Content-Type', 'text/html')
+      res.setHeader('Cache-Control', 'no-store')
+      res.end(fs.readFileSync(path.join(ROOT, 'harness', 'probereel.html')))
+    })
+
     // The mock-head assets (head.glb) live outside the repo.
     // Serving it here is what lets a sweep be RE-RENDERED rather than treated as
     // a fixed asset -- the pitch set below did not exist until the fit work
@@ -122,17 +132,24 @@ const harnessPlugin = {
       try {
         const chunks = []
         for await (const chunk of req) chunks.push(chunk)
-        const { frames, params } = JSON.parse(Buffer.concat(chunks).toString())
-        const dir = (new URL(req.url ?? '', 'http://localhost').searchParams.get('dir') ?? 'turn')
-          .replace(/[^a-zA-Z0-9_-]/g, '')
+        const { frames, params, truth } = JSON.parse(Buffer.concat(chunks).toString())
+        const search = new URL(req.url ?? '', 'http://localhost').searchParams
+        const dir = (search.get('dir') ?? 'turn').replace(/[^a-zA-Z0-9_-]/g, '')
+        // ?start=<n> lets a long render post in batches (the probe reel is ~1000
+        // frames; one POST of all of them is hundreds of MB of base64).
+        const start = Math.max(0, parseInt(search.get('start') ?? '0', 10) || 0)
         const target = path.join(MOCK_HEAD_DIR, dir || 'turn')
         fs.mkdirSync(target, { recursive: true })
         frames.forEach((dataUrl, i) => {
+          const ext = dataUrl.startsWith('data:image/jpeg') ? 'jpg' : 'png'
           fs.writeFileSync(
-            path.join(target, `frame-${i}.png`),
+            path.join(target, `frame-${start + i}.${ext}`),
             Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'),
           )
         })
+        // Per-frame ground truth (pose + lighting), so a capture of a third-party
+        // try-on can be read against what it was actually shown.
+        if (typeof truth === 'string') fs.writeFileSync(path.join(target, 'truth.csv'), truth)
         // Record what rendered this sweep. Two sweeps are only comparable if
         // their CAMERA matches: apparent face size drives the IPD depth
         // estimate, and a pitch set re-rendered at the default `dist` measured

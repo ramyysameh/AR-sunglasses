@@ -6,6 +6,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { getGlassesConfig } from '../config/arConfig.js'
 import { applyLensReflection } from '../core/lensReflection.js'
+import { applyLensShading, resolveLensShadingConfig } from '../core/lensShading.js'
 import { applyFrameReflection } from '../core/frameReflection.js'
 import { fetchBytes } from '../support/fetchBytes.js'
 
@@ -132,6 +133,12 @@ export class GlassesModelLoader {
     const model = gltf.scene ?? gltf.scenes?.[0]
     const modelConfig = getGlassesConfig(configKey)
     const materialProfile = modelConfig.materialProfile ?? {}
+    // Fresnel coverage + optional gradient for the lenses (lensShading.js). URL
+    // overrides win over the SKU's materialProfile.lensGradient.
+    const lensShading = resolveLensShadingConfig(
+      typeof window !== 'undefined' ? window.location.search : '',
+      materialProfile,
+    )
     const templeFade = modelConfig.templeFade ?? { start: -0.08, end: -0.12 }
 
     if (!model) {
@@ -200,6 +207,7 @@ export class GlassesModelLoader {
               : Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : 0.18
             material.depthWrite = false
             applyLensReflection(material, this.lensEnvMap, this.lensReflection)
+            applyLensShading(material, child, lensShading)
           } else {
             applyFrameReflection(material, this.lensEnvMap, this.frameReflection)
           }
@@ -239,6 +247,7 @@ export class GlassesModelLoader {
           }
 
           applyLensReflection(material, this.lensEnvMap, this.lensReflection)
+          applyLensShading(material, child, lensShading)
         } else {
           // Same reasoning as the preserveMaterials branch: whether the frame
           // reflects the environment is a property of the renderer, not of which

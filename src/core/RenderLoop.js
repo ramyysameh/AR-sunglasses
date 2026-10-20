@@ -15,10 +15,18 @@ import { resolveGlassesScaleMultiplier, resolveModelSizeMultiplier } from './gla
 import { createLensEnvironment } from './lensEnvironment.js'
 import { resolveLensReflectionConfig, resolveEnvironmentName} from './lensReflection.js'
 import { resolveFrameReflectionConfig } from './frameReflection.js'
+import { ContactShadow, resolveContactShadowConfig } from './contactShadow.js'
+import { LightEstimateSmoother, estimateCameraLight, resolveLightEstimateEnabled } from './cameraLightEstimate.js'
 import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
 import { PoseInterpolator } from '../tracking/PoseInterpolator.js'
 
 const TRACK_LOSS_RESET_MS = 180
+// Room-light sampling: a 32x18 thumbnail of the camera image, four times a
+// second. The estimate is smoothed over ~1.2 s anyway, so sampling every frame
+// would only spend readback time on numbers the smoother throws away.
+const LIGHT_SAMPLE_W = 32
+const LIGHT_SAMPLE_H = 18
+const LIGHT_SAMPLE_INTERVAL_MS = 250
 // Bounded translation lead to compensate camera + detector + filter latency.
 // Time-based rather than "frames ahead" so behavior is stable across 30/60 Hz.
 const POSITION_LEAD_MS = 60
@@ -104,9 +112,22 @@ export class RenderLoop {
     this.lastPredictionTimestamp = null
     this.poseInterpolator = new PoseInterpolator()
     this.occlusionEnabled = true
-    // The flat CircleGeometry "contact shadow" reads as a grey disc on the nose,
-    // so keep it off. Revisit with a proper soft/blurred shadow later if desired.
-    this.contactShadowEnabled = false
+    // A real shadow map of the frame on the face mesh now (contactShadow.js);
+    // the old flat disc read as a grey blob on the nose. ?shadow=0 turns it off,
+    // and the debug HUD toggle flips this at runtime.
+    this.contactShadowConfig = resolveContactShadowConfig(
+      typeof window !== 'undefined' ? window.location.search : '',
+    )
+    this.contactShadowEnabled = this.contactShadowConfig.enabled
+    this.lightEstimateEnabled = resolveLightEstimateEnabled(
+      typeof window !== 'undefined' ? window.location.search : '',
+    )
+    this.lightSmoother = new LightEstimateSmoother()
+    this.lastLightSampleTime = -Infinity
+    this.ambientLight = null
+    this.lightEstimate = null
+    /** @type {Map<import('three').Material, number>} authored env intensity per glasses material */
+    this._baseEnvIntensity = new Map()
     this.filterMode = 'still'
     this.motionLevel = 0
     this.lastScanStateKey = ''
@@ -174,6 +195,7 @@ export class RenderLoop {
     // reflection is broad and prefiltered, so it reads as sheen along the bevels
     // rather than a single travelling hotspot.
     const ambient = new THREE.AmbientLight(0xffffff, 1.0)
+    this.ambientLight = ambient
     const key = new THREE.DirectionalLight(0xffffff, 0)
     key.position.set(0.45, 1.1, 1.8)
     const fill = new THREE.DirectionalLight(0xffffff, 0)
@@ -182,19 +204,6 @@ export class RenderLoop {
     rim.position.set(0, 0.2, -1)
 
     this.scene.add(ambient, key, fill, rim)
-    this.contactShadow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.035, 32),
-      new THREE.MeshBasicMaterial({
-        color: 0x000000,
-        transparent: true,
-        opacity: 0.16,
-        depthWrite: false,
-        depthTest: true,
-      })
-    )
-    this.contactShadow.renderOrder = 1
-    this.contactShadow.visible = false
-    this.scene.add(this.contactShadow)
 
     this._syncSize()
     this._installProbe()
@@ -228,6 +237,23 @@ export class RenderLoop {
     if (this.glassesRoot && this.scene) {
       this.scene.add(this.glassesRoot)
     }
+    this.contactShadow?.setCasters(this.glassesRoot)
+
+    // The env intensities the loader tuned (lens 0.15, frame 0.25, ...) are the
+    // neutral-room values; the light estimate scales FROM them, so they must be
+    // captured before it touches anything.
+    const baseEnv = (this._baseEnvIntensity ??= new Map())
+    baseEnv.clear()
+    this.glassesRoot?.traverse((child) => {
+      if (!child.isMesh) return
+      const materials = Array.isArray(child.material) ? child.material : [child.material]
+      for (const m of materials) {
+        if (m && 'envMapIntensity' in m && !baseEnv.has(m)) {
+          baseEnv.set(m, m.envMapIntensity)
+        }
+      }
+    })
+    if (this.lightEstimate) this._applyLightEstimate(this.lightEstimate)
 
     // The probe needs both the glasses and the occluder; they are set by
     // different callers in either order, so try from both.
@@ -833,16 +859,6 @@ export class RenderLoop {
     this.glassesRoot.quaternion.copy(transform.quaternion)
     this.glassesRoot.scale.setScalar(scale)
 
-    if (this.contactShadow) {
-      this.contactShadow.visible = true
-      this.contactShadow.visible = this.contactShadowEnabled
-      this.contactShadow.position.copy(transform.surfaceSolution?.bridgeWorld ?? transform.position)
-      this.contactShadow.position.y -= 0.012 * scale
-      this.contactShadow.position.z += 0.006 * scale
-      this.contactShadow.quaternion.copy(transform.quaternion)
-      this.contactShadow.scale.setScalar(scale)
-    }
-
     if (!this.occlusionEnabled) {
       this.faceOccluder?.hide?.()
     } else if (transform.occlusionMesh?.faceWorldPoints) {
@@ -1154,6 +1170,88 @@ export class RenderLoop {
     }))
   }
 
+  /**
+   * Builds the contact shadow once the pieces it needs exist. Lazy because the
+   * renderer comes from init() while the occluder (whose face surface receives
+   * the shadow) is handed over separately, in either order.
+   */
+  _ensureContactShadow() {
+    if (this.contactShadow || !this.contactShadowConfig?.enabled) return
+    const occluderGeometry = this.faceOccluder?.occluderMesh?.geometry
+    if (!this.renderer || !this.scene || !occluderGeometry) return
+    this.contactShadow = new ContactShadow({
+      scene: this.scene,
+      renderer: this.renderer,
+      faceGeometry: occluderGeometry,
+      faceIndexCount: SHELL_INDEX_START,
+      config: this.contactShadowConfig,
+    })
+    this.contactShadow.setCasters(this.glassesRoot)
+  }
+
+  /**
+   * The one place a frame is drawn. The shadow is re-aimed here rather than in
+   * _applyTransform so every hide path (track loss, scan not ready, occlusion
+   * toggled off) is covered by the same visibility rule: the shadow shows only
+   * while the frame AND the face surface it falls on are both on screen.
+   */
+  _render() {
+    if (!this.renderer) return
+    this._sampleRoomLight(performance.now())
+    this._ensureContactShadow()
+    this.contactShadow?.update(
+      this.contactShadowEnabled &&
+        Boolean(this.glassesRoot?.visible) &&
+        Boolean(this.faceOccluder?.occluderMesh?.visible),
+    )
+    this.renderer.render(this.scene, this.camera)
+  }
+
+  /**
+   * Reads a thumbnail of the camera frame and nudges the frame's lighting toward
+   * the room's. See cameraLightEstimate.js for what is and is not estimated.
+   */
+  _sampleRoomLight(now) {
+    if (!this.lightEstimateEnabled || now - this.lastLightSampleTime < LIGHT_SAMPLE_INTERVAL_MS) return
+    this.lastLightSampleTime = now
+    const video = this.video
+    if (!video || video.readyState < 2 || !video.videoWidth) return
+    try {
+      if (!this._lightCtx) {
+        const canvas = typeof OffscreenCanvas !== 'undefined'
+          ? new OffscreenCanvas(LIGHT_SAMPLE_W, LIGHT_SAMPLE_H)
+          : Object.assign(document.createElement('canvas'), { width: LIGHT_SAMPLE_W, height: LIGHT_SAMPLE_H })
+        this._lightCtx = canvas.getContext('2d', { willReadFrequently: true })
+      }
+      const ctx = this._lightCtx
+      ctx.drawImage(video, 0, 0, LIGHT_SAMPLE_W, LIGHT_SAMPLE_H)
+      const { data } = ctx.getImageData(0, 0, LIGHT_SAMPLE_W, LIGHT_SAMPLE_H)
+      const estimate = this.lightSmoother.push(estimateCameraLight(data, LIGHT_SAMPLE_W, LIGHT_SAMPLE_H), now)
+      if (estimate) {
+        this.lightEstimate = estimate
+        this._applyLightEstimate(estimate)
+      }
+    } catch (error) {
+      // A readback that throws once (tainted or detached source) will keep
+      // throwing; fall back to the fixed studio look rather than retrying 4x/s.
+      console.warn('Room light estimate disabled:', error)
+      this.lightEstimateEnabled = false
+    }
+  }
+
+  /** @param {{ intensity: number, color: { r: number, g: number, b: number } }} estimate */
+  _applyLightEstimate(estimate) {
+    if (this.ambientLight) {
+      this.ambientLight.color.setRGB(estimate.color.r, estimate.color.g, estimate.color.b)
+      this.ambientLight.intensity = estimate.intensity
+    }
+    // Reflections follow the same intensity: a frame in a dim room that still
+    // mirrors a bright studio reads as lit from nowhere.
+    for (const [material, base] of this._baseEnvIntensity) {
+      material.envMapIntensity = base * estimate.intensity
+    }
+  }
+
   stop() {
     this.running = false
 
@@ -1165,6 +1263,8 @@ export class RenderLoop {
 
   dispose() {
     this.stop()
+    this.contactShadow?.dispose()
+    this.contactShadow = null
     this.lensEnvironment?.dispose?.()
     this.lensEnvironment = null
     this.lensEnvMap = null
@@ -1234,14 +1334,14 @@ export class RenderLoop {
 
       if (!result?.facialTransformationMatrixes?.length) {
         this._hideTrackedObjects(timestamp)
-        this.renderer?.render(this.scene, this.camera)
+        this._render()
         return
       }
 
       const landmarks = result.faceLandmarks?.[0]
       if (!landmarks?.length) {
         this._hideTrackedObjects(timestamp)
-        this.renderer?.render(this.scene, this.camera)
+        this._render()
         return
       }
 
@@ -1265,7 +1365,7 @@ export class RenderLoop {
 
       if (!pose) {
         this._hideTrackedObjects(timestamp)
-        this.renderer?.render(this.scene, this.camera)
+        this._render()
         return
       }
 
@@ -1297,7 +1397,7 @@ export class RenderLoop {
           headPosition: pose.rawPose?.position,
           predictionDelta: this.predictionDelta ?? 0,
         })
-        this.renderer?.render(this.scene, this.camera)
+        this._render()
         return
       }
 
@@ -1317,7 +1417,7 @@ export class RenderLoop {
 
       if (!fitSolution) {
         this._hideTrackedObjects(timestamp)
-        this.renderer?.render(this.scene, this.camera)
+        this._render()
         return
       }
 
@@ -1464,7 +1564,7 @@ export class RenderLoop {
       this.lastFitScale = fitScale
       this.lastTempleSpan = pose.metrics?.templeSpan ?? 0
 
-      this.renderer?.render(this.scene, this.camera)
+      this._render()
     } catch (error) {
       console.error('Render loop error:', error)
     }
