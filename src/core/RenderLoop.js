@@ -16,10 +16,17 @@ import { createLensEnvironment } from './lensEnvironment.js'
 import { resolveLensReflectionConfig, resolveEnvironmentName} from './lensReflection.js'
 import { resolveFrameReflectionConfig } from './frameReflection.js'
 import { ContactShadow, resolveContactShadowConfig } from './contactShadow.js'
+import { LightEstimateSmoother, estimateCameraLight, resolveLightEstimateEnabled } from './cameraLightEstimate.js'
 import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
 import { PoseInterpolator } from '../tracking/PoseInterpolator.js'
 
 const TRACK_LOSS_RESET_MS = 180
+// Room-light sampling: a 32x18 thumbnail of the camera image, four times a
+// second. The estimate is smoothed over ~1.2 s anyway, so sampling every frame
+// would only spend readback time on numbers the smoother throws away.
+const LIGHT_SAMPLE_W = 32
+const LIGHT_SAMPLE_H = 18
+const LIGHT_SAMPLE_INTERVAL_MS = 250
 // Bounded translation lead to compensate camera + detector + filter latency.
 // Time-based rather than "frames ahead" so behavior is stable across 30/60 Hz.
 const POSITION_LEAD_MS = 60
@@ -112,6 +119,15 @@ export class RenderLoop {
       typeof window !== 'undefined' ? window.location.search : '',
     )
     this.contactShadowEnabled = this.contactShadowConfig.enabled
+    this.lightEstimateEnabled = resolveLightEstimateEnabled(
+      typeof window !== 'undefined' ? window.location.search : '',
+    )
+    this.lightSmoother = new LightEstimateSmoother()
+    this.lastLightSampleTime = -Infinity
+    this.ambientLight = null
+    this.lightEstimate = null
+    /** @type {Map<import('three').Material, number>} authored env intensity per glasses material */
+    this._baseEnvIntensity = new Map()
     this.filterMode = 'still'
     this.motionLevel = 0
     this.lastScanStateKey = ''
@@ -179,6 +195,7 @@ export class RenderLoop {
     // reflection is broad and prefiltered, so it reads as sheen along the bevels
     // rather than a single travelling hotspot.
     const ambient = new THREE.AmbientLight(0xffffff, 1.0)
+    this.ambientLight = ambient
     const key = new THREE.DirectionalLight(0xffffff, 0)
     key.position.set(0.45, 1.1, 1.8)
     const fill = new THREE.DirectionalLight(0xffffff, 0)
@@ -221,6 +238,22 @@ export class RenderLoop {
       this.scene.add(this.glassesRoot)
     }
     this.contactShadow?.setCasters(this.glassesRoot)
+
+    // The env intensities the loader tuned (lens 0.15, frame 0.25, ...) are the
+    // neutral-room values; the light estimate scales FROM them, so they must be
+    // captured before it touches anything.
+    const baseEnv = (this._baseEnvIntensity ??= new Map())
+    baseEnv.clear()
+    this.glassesRoot?.traverse((child) => {
+      if (!child.isMesh) return
+      const materials = Array.isArray(child.material) ? child.material : [child.material]
+      for (const m of materials) {
+        if (m && 'envMapIntensity' in m && !baseEnv.has(m)) {
+          baseEnv.set(m, m.envMapIntensity)
+        }
+      }
+    })
+    if (this.lightEstimate) this._applyLightEstimate(this.lightEstimate)
 
     // The probe needs both the glasses and the occluder; they are set by
     // different callers in either order, so try from both.
@@ -1164,6 +1197,7 @@ export class RenderLoop {
    */
   _render() {
     if (!this.renderer) return
+    this._sampleRoomLight(performance.now())
     this._ensureContactShadow()
     this.contactShadow?.update(
       this.contactShadowEnabled &&
@@ -1171,6 +1205,51 @@ export class RenderLoop {
         Boolean(this.faceOccluder?.occluderMesh?.visible),
     )
     this.renderer.render(this.scene, this.camera)
+  }
+
+  /**
+   * Reads a thumbnail of the camera frame and nudges the frame's lighting toward
+   * the room's. See cameraLightEstimate.js for what is and is not estimated.
+   */
+  _sampleRoomLight(now) {
+    if (!this.lightEstimateEnabled || now - this.lastLightSampleTime < LIGHT_SAMPLE_INTERVAL_MS) return
+    this.lastLightSampleTime = now
+    const video = this.video
+    if (!video || video.readyState < 2 || !video.videoWidth) return
+    try {
+      if (!this._lightCtx) {
+        const canvas = typeof OffscreenCanvas !== 'undefined'
+          ? new OffscreenCanvas(LIGHT_SAMPLE_W, LIGHT_SAMPLE_H)
+          : Object.assign(document.createElement('canvas'), { width: LIGHT_SAMPLE_W, height: LIGHT_SAMPLE_H })
+        this._lightCtx = canvas.getContext('2d', { willReadFrequently: true })
+      }
+      const ctx = this._lightCtx
+      ctx.drawImage(video, 0, 0, LIGHT_SAMPLE_W, LIGHT_SAMPLE_H)
+      const { data } = ctx.getImageData(0, 0, LIGHT_SAMPLE_W, LIGHT_SAMPLE_H)
+      const estimate = this.lightSmoother.push(estimateCameraLight(data, LIGHT_SAMPLE_W, LIGHT_SAMPLE_H), now)
+      if (estimate) {
+        this.lightEstimate = estimate
+        this._applyLightEstimate(estimate)
+      }
+    } catch (error) {
+      // A readback that throws once (tainted or detached source) will keep
+      // throwing; fall back to the fixed studio look rather than retrying 4x/s.
+      console.warn('Room light estimate disabled:', error)
+      this.lightEstimateEnabled = false
+    }
+  }
+
+  /** @param {{ intensity: number, color: { r: number, g: number, b: number } }} estimate */
+  _applyLightEstimate(estimate) {
+    if (this.ambientLight) {
+      this.ambientLight.color.setRGB(estimate.color.r, estimate.color.g, estimate.color.b)
+      this.ambientLight.intensity = estimate.intensity
+    }
+    // Reflections follow the same intensity: a frame in a dim room that still
+    // mirrors a bright studio reads as lit from nowhere.
+    for (const [material, base] of this._baseEnvIntensity) {
+      material.envMapIntensity = base * estimate.intensity
+    }
   }
 
   stop() {

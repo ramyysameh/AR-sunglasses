@@ -175,14 +175,20 @@ a single person in daylight, so lighting-adaptation behaviour could not be stres
 - Measured: +0.2 ms per render on desktop; no repeatable fps change under
   mobile emulation (emulation runs on the desktop GPU: real-phone cost unverified).
 
-**2. Light estimation** (implemented)
-- `src/core/cameraLightEstimate.js` (new, pure): downsampled RGBA → luminance and
-  chromaticity of the background ring (face down-weighted) → clamped,
-  neutral-blended ambient colour/intensity and env-intensity multiplier.
-- `src/core/RenderLoop.js`: sample the video into a 32×18 2D canvas every ~250 ms,
-  temporally EMA the estimate, apply it to the ambient light and to each
-  material's `envMapIntensity` relative to its base. `?lightest=0` disables.
-- Never touches directional lights (2e12c0f's streak).
+**2. Light estimation** (implemented, commit "feat(render): match the frame's exposure…")
+- `src/core/cameraLightEstimate.js` (new, pure): 32×18 RGBA → linear luminance
+  with the centre (face) down-weighted to 0.35 → intensity =
+  clamp((L/0.18)^0.4, 0.6, 1.15); colour = per-channel chromaticity, capped at
+  ±12 % and half-applied (≤ ±6 %). `LightEstimateSmoother` is a time-based EMA
+  (τ = 1.2 s) so auto-exposure hunting can't flicker the frame.
+- `src/core/RenderLoop.js`: samples the video 4×/s into an OffscreenCanvas,
+  applies the estimate to the ambient light's colour and intensity and scales
+  every glasses material's `envMapIntensity` from its loader-tuned base
+  (captured per model in `setGlassesRoot`). Readback failure disables it once
+  and falls back to the fixed look. `?lightest=0` disables.
+- Never adds a directional light (2e12c0f's streak).
+- Measured on the mock head with a simulated dim tungsten room
+  (brightness 0.42, sepia 0.45): intensity 0.82, colour (1.06, 0.99, 0.94).
 
 **3. Lens upgrade** (implemented)
 - `src/core/lensShading.js` (new): `onBeforeCompile` patch on lens materials:
