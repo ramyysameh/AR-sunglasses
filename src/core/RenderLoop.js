@@ -113,9 +113,9 @@ export class RenderLoop {
     this._frontalScaleCount = 0
     this.lastPredictionTimestamp = null
     this.poseInterpolator = new PoseInterpolator()
-    // Fades the glasses out near profile, where the landmarks stop being
-    // trustworthy and any pose drawn from them floats off the face. Opt-in with
-    // ?profileguard=1 until it has a face-independent signal (profileGuard.js).
+    // Fades the glasses out near profile and as the face leaves the frame, where
+    // the landmarks stop being trustworthy and any pose drawn from them floats
+    // off the face (profileGuard.js). On by default; ?profileguard=0 turns it off.
     this.profileGuard = options.profileGuard ?? (
       resolveProfileGuardEnabled(typeof window !== 'undefined' ? window.location.search : '') ? new ProfileGuard() : null
     )
@@ -1423,6 +1423,7 @@ export class RenderLoop {
           intrinsicsFromFov(this.camera._videoW, this.camera._videoH, this.camera.fov),
           result.facialTransformationMatrixes[0]?.data,
           timestamp,
+          this.video,
         )
       }
 

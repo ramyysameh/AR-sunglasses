@@ -18,7 +18,9 @@
  *         ?fit=<json under public/> (default /calibrated/ai-classic-aviator.json,
  *         a Create-with-AI model with its production fit), or ?model=<glb under
  *         public/> to calibrate a GLB through the register-model path
- *         (?model= with no value: the built-in default SKU).
+ *         (?model= with no value: the built-in default SKU), ?lms=1 to put every
+ *         landmark in the rows (raw-image px) for tuning signals offline,
+ *         ?profileguard=0 to run without the profile guard (on by default).
  */
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
@@ -31,7 +33,7 @@ import { GlassesModelLoader } from '/src/models/GlassesModelLoader.js'
 import { RenderLoop } from '/src/core/RenderLoop.js'
 import { getGlassesConfig, getGlassesModelUrl, defaultGlassesKey, registerRuntimeGlassesConfig } from '/src/config/arConfig.js'
 import { toEngineModelConfig } from '/src/tryon/fitMetadataAdapter.js'
-import { profileSignals } from '/src/tracking/profileGuard.js'
+import { FrameSampler, profileSignals } from '/src/tracking/profileGuard.js'
 import { intrinsicsFromFov } from '/src/tracking/headPoseSolver.js'
 import { PROBE_FOV_DEG, frameBust, neckRig, probeCamera, rigPoint, truthQuaternion } from '/harness/probeGeometry.js'
 
@@ -45,6 +47,7 @@ const MODEL = q.get('model')
 // nothing is re-calibrated locally. Takes precedence over ?model=. The default
 // is a Create-with-AI model, because that is what merchants' shoppers wear.
 const FIT = q.has('fit') || q.has('model') ? q.get('fit') : '/calibrated/ai-classic-aviator.json'
+const DUMP_LANDMARKS = q.get('lms') === '1'
 const statusEl = document.getElementById('status')
 const status = (text) => { statusEl.textContent = text }
 
@@ -87,7 +90,8 @@ async function loadBust(params) {
   model.updateMatrixWorld(true)
   const meshes = []
   model.traverse((o) => { if (o.isMesh && o.geometry?.attributes?.position) meshes.push(o) })
-  const rig = neckRig(meshes, center, headCenter)
+  // The band the reel was rendered with (params.json); older reels have none.
+  const rig = neckRig(meshes, center, headCenter, params.rig)
   return { model, meshes, rig, baseCamZ, size }
 }
 
@@ -171,6 +175,7 @@ async function buildEngine(W, H, fovDeg) {
     currentTime: { get: () => frameIndex / FPS },
   })
   const videoCtx = video.getContext('2d')
+  const sampler = new FrameSampler()
 
   const canvas = document.getElementById('view')
   canvas.style.width = `${W}px`
@@ -247,8 +252,10 @@ async function buildEngine(W, H, fovDeg) {
     const lms = tracker.lastResult?.faceLandmarks?.[0]
     const nasion = lms?.[168]
     // Candidate "landmarks are guessing" signals, recorded for tuning the guard.
+    // overrun is read on every frame here (the guard itself only reads pixels
+    // once the face is turned), so the rows show it head-on too.
     const signals = lms
-      ? profileSignals(lms, intrinsicsFromFov(W, H, camera.fov), tracker.lastResult.facialTransformationMatrixes?.[0]?.data)
+      ? profileSignals(lms, intrinsicsFromFov(W, H, camera.fov), tracker.lastResult.facialTransformationMatrixes?.[0]?.data, sampler.read(video))
       : null
     return {
       tracked: Boolean(shown),
@@ -258,6 +265,9 @@ async function buildEngine(W, H, fovDeg) {
       rawAnchor,
       shownAnchor,
       nasionPx: nasion ? { u: nasion.x * W, v: nasion.y * H } : null,
+      // ?lms=1: every landmark in raw-image pixels, for tuning signals offline
+      // against the reel's frames.
+      lms: DUMP_LANDMARKS && lms ? lms.map((p) => [Math.round(p.x * W * 10) / 10, Math.round(p.y * H * 10) / 10]) : undefined,
       signals,
       guardOpacity: loop.profileGuard ? loop._appliedGuardOpacity ?? 1 : null,
     }
@@ -350,6 +360,7 @@ async function run({ from = 0, to = Infinity, shotsAt = [], shotPrefix = 'gate',
       // MediaPipe's own nasion landmark: separates "the tracker lost the nose"
       // from "the fit put the frame somewhere else".
       nasionPx: reading.nasionPx,
+      lms: reading.lms,
       signals: reading.signals,
       guardOpacity: reading.guardOpacity,
       mmPerPx: truthAnchor?.mmPerPx ?? null,

@@ -3,11 +3,13 @@ import * as THREE from 'three'
 import {
   PROFILE_GUARD_DEFAULTS,
   ProfileGuard,
+  faceOverrun,
   landmarkTrust,
+  matrixYawDeg,
   profileSignals,
   resolveProfileGuardEnabled,
 } from '../../src/tracking/profileGuard.js'
-import { expRotation, intrinsicsFromFov } from '../../src/tracking/headPoseSolver.js'
+import { expRotation, intrinsicsFromFov, poseToFacialMatrix } from '../../src/tracking/headPoseSolver.js'
 import { RIGID_FACE_POINTS } from '../../src/tracking/rigidFaceModel.js'
 import { RenderLoop } from '../../src/core/RenderLoop.js'
 
@@ -42,40 +44,116 @@ describe('profileSignals', () => {
     expect(landmarkTrust(s)).toBe(1)
   })
 
-  it('sees the far eye foreshorten as the head turns toward profile', () => {
-    const quarter = profileSignals(synthFace(30), K)
+  it('records the eye ratio but does not hide on it', () => {
+    // A collapsed face's layout looks like an honest ~32 degree one, so the
+    // layout alone cannot tell them apart (FINDINGS.md section 9).
     const near = profileSignals(synthFace(65), K)
-    expect(quarter.eyeRatio).toBeGreaterThan(PROFILE_GUARD_DEFAULTS.eyeRatioShow)
-    expect(near.eyeRatio).toBeLessThan(PROFILE_GUARD_DEFAULTS.eyeRatioHide)
-    expect(landmarkTrust(near)).toBe(0)
+    expect(near.eyeRatio).toBeLessThan(0.55)
+    expect(landmarkTrust(near)).toBe(1)
   })
 
-  it('flags a landmark layout no rigid head can produce, even with level eyes', () => {
-    const s = profileSignals(synthFace(0, { scramble: true }), K)
-    expect(s.rigidRms).toBeGreaterThan(PROFILE_GUARD_DEFAULTS.rmsHide)
-    expect(landmarkTrust(s)).toBe(0)
+  it("reads MediaPipe's own yaw from its matrix, either way round", () => {
+    for (const yaw of [-60, -30, 0, 20, 45]) {
+      const matrix = poseToFacialMatrix({ rotation: expRotation([0, (yaw * Math.PI) / 180, 0]), translation: [0, 0, 0.5] })
+      expect(matrixYawDeg(matrix)).toBeCloseTo(Math.abs(yaw), 1)
+    }
+    const pitched = poseToFacialMatrix({ rotation: expRotation([(25 * Math.PI) / 180, 0, 0]), translation: [0, 0, 0.5] })
+    expect(matrixYawDeg(pitched)).toBeLessThan(0.5)
+  })
+})
+
+/**
+ * A 200 px frame with an elliptical face (oval landmarks on its outline, nose
+ * pointing to +x) and skin painted wherever the TRUE face is. extendRight
+ * widens the painted face past the landmark oval on the nose side, which is
+ * what collapsed landmarks look like against the image.
+ */
+function synthFrame({ extendRight = 0, background = [128, 128, 128], shiftX = 0 } = {}) {
+  const W = 200
+  const H = 200
+  const cx = 100 + shiftX
+  const OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377,
+    152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+  const lm = Array.from({ length: 478 }, () => ({ x: cx / W, y: 0.5 }))
+  OVAL.forEach((index, k) => {
+    const t = (2 * Math.PI * k) / OVAL.length
+    lm[index] = { x: (cx + 40 * Math.sin(t)) / W, y: (100 - 60 * Math.cos(t)) / H }
+  })
+  lm[234] = { x: (cx - 40) / W, y: 0.5 }
+  lm[454] = { x: (cx + 40) / W, y: 0.5 }
+  lm[1] = { x: (cx + 15) / W, y: 105 / H }
+  lm[168] = { x: (cx + 5) / W, y: 80 / H }
+  lm[5] = { x: (cx + 10) / W, y: 95 / H }
+  lm[0] = { x: (cx + 8) / W, y: 125 / H }
+  for (const i of [6, 197, 195]) lm[i] = { x: (cx + 2) / W, y: 88 / H }
+  const data = new Uint8ClampedArray(W * H * 4)
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      const rx = x >= cx ? 40 + extendRight : 40
+      const inside = ((x - cx) / rx) ** 2 + ((y - 100) / 60) ** 2 <= 1
+      const c = inside ? [200, 140, 110] : background
+      data.set([...c, 255], (y * W + x) * 4)
+    }
+  }
+  return { landmarks: lm, frame: { width: W, height: H, data } }
+}
+
+describe('faceOverrun', () => {
+  it('reads ~0 when the landmark hull ends at the silhouette', () => {
+    const { landmarks, frame } = synthFrame()
+    expect(faceOverrun(landmarks, frame)).toBeLessThan(PROFILE_GUARD_DEFAULTS.overrunShow)
+  })
+
+  it('reads the face carrying on past the hull, in face heights', () => {
+    const { landmarks, frame } = synthFrame({ extendRight: 24 }) // 24 px of a 120 px face
+    const v = faceOverrun(landmarks, frame)
+    expect(v).toBeGreaterThan(PROFILE_GUARD_DEFAULTS.overrunHide)
+    expect(v).toBeLessThan(0.3)
+    expect(landmarkTrust({ overrun: v })).toBe(0)
+  })
+
+  it('does not read a skin-coloured background as overrun', () => {
+    const { landmarks, frame } = synthFrame({ background: [205, 142, 112] })
+    expect(faceOverrun(landmarks, frame)).toBeNaN()
+  })
+
+  it('reads landmarks placed past the edge of the picture by how far past', () => {
+    const { landmarks, frame } = synthFrame({ shiftX: 85 }) // hull 26 px past the right edge at the cheek
+    const v = faceOverrun(landmarks, frame)
+    expect(v).toBeGreaterThan(PROFILE_GUARD_DEFAULTS.overrunHide)
+    expect(v).toBeLessThan(0.25)
+  })
+
+  it('does not hide a cheek that merely reaches the edge', () => {
+    for (const shiftX of [56, 58, 60, 62]) {
+      const { landmarks, frame } = synthFrame({ shiftX })
+      expect(landmarkTrust({ overrun: faceOverrun(landmarks, frame) })).toBe(1)
+    }
   })
 })
 
 describe('landmarkTrust', () => {
-  it('ramps between the hide and show thresholds and takes the weaker signal', () => {
-    expect(landmarkTrust({ eyeRatio: 0.9, rigidRms: 0.02 })).toBe(1)
-    expect(landmarkTrust({ eyeRatio: 0.5, rigidRms: 0.02 })).toBe(0)
-    expect(landmarkTrust({ eyeRatio: 0.9, rigidRms: 0.06 })).toBe(0)
-    const mid = landmarkTrust({ eyeRatio: 0.605, rigidRms: 0.02 })
+  it('lets an ordinary +/-45 degree turn through and hides past ~50', () => {
+    expect(landmarkTrust({ yawDeg: 41, overrun: 0.01, eyeRatio: 0.4 })).toBe(1)
+    expect(landmarkTrust({ yawDeg: 60, overrun: 0.01 })).toBe(0)
+    const mid = landmarkTrust({ yawDeg: 48 })
     expect(mid).toBeGreaterThan(0.2)
     expect(mid).toBeLessThan(0.8)
   })
 
+  it('takes the weaker signal', () => {
+    expect(landmarkTrust({ yawDeg: 20, overrun: 0.3 })).toBe(0)
+  })
+
   it('does not veto on missing signals', () => {
     expect(landmarkTrust(null)).toBe(1)
-    expect(landmarkTrust({ eyeRatio: NaN, rigidRms: NaN })).toBe(1)
+    expect(landmarkTrust({ yawDeg: NaN, overrun: NaN })).toBe(1)
   })
 })
 
 describe('ProfileGuard', () => {
-  const good = { eyeRatio: 0.95, rigidRms: 0.02 }
-  const bad = { eyeRatio: 0.4, rigidRms: 0.05 }
+  const good = { yawDeg: 20, overrun: 0.01 }
+  const bad = { yawDeg: 70, overrun: 0.3 }
 
   it('fades out within the fade-out time once the landmarks go bad', () => {
     const guard = new ProfileGuard()
@@ -111,10 +189,26 @@ describe('ProfileGuard', () => {
     expect(guard.opacity).toBeGreaterThan(0.6)
   })
 
-  it('is opt-in from the URL', () => {
-    expect(resolveProfileGuardEnabled('')).toBe(false)
-    expect(resolveProfileGuardEnabled('?profileguard=0')).toBe(false)
+  it('reads the frame only once the face is turned', () => {
+    const reads = []
+    const { landmarks, frame } = synthFrame({ extendRight: 24 })
+    const guard = new ProfileGuard({ sampler: { read: (source) => (reads.push(source), frame) } })
+    guard.update(synthFace(0), K, null, 0, 'video')
+    expect(reads).toHaveLength(0)
+    // Give the synthetic face a foreshortened far eye, as a turned face has.
+    landmarks[33] = { x: 0.40, y: 0.45 }
+    landmarks[133] = { x: 0.46, y: 0.45 }
+    landmarks[362] = { x: 0.54, y: 0.45 }
+    landmarks[263] = { x: 0.57, y: 0.45 }
+    guard.update(landmarks, K, null, FRAME_MS, 'video')
+    expect(reads).toEqual(['video'])
+    expect(guard.lastSignals.overrun).toBeGreaterThan(PROFILE_GUARD_DEFAULTS.overrunHide)
+  })
+
+  it('is on by default and off with ?profileguard=0', () => {
+    expect(resolveProfileGuardEnabled('')).toBe(true)
     expect(resolveProfileGuardEnabled('?profileguard=1')).toBe(true)
+    expect(resolveProfileGuardEnabled('?profileguard=0')).toBe(false)
   })
 })
 

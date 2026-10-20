@@ -1,5 +1,5 @@
 {
-  "_comment": "Probe-reel pose gate limits (scripts/pose-gate.mjs --check). Measured 2026-10-20 on probe-landscape at the reel's true 30 degree FOV with the default engine (MediaPipe matrix, profile guard off) wearing the dev store's Create-with-AI Classic Aviator, plus ~25% headroom. Drift is the frame's nose contact vs the bust's true nasion, mm at the face.",
+  "_comment": "Probe-reel pose gate limits (scripts/pose-gate.mjs --check). Measured 2026-10-20 on probe-landscape at the reel's true 30 degree FOV with the default engine (MediaPipe matrix; the limits still hold with the profile guard on, its default since 2026-10-20) wearing the dev store's Create-with-AI Classic Aviator, plus ~25% headroom. Drift is the frame's nose contact vs the bust's true nasion, mm at the face.",
   "mode": "mediapipe",
   "kind": "shown",
   "segments": {
