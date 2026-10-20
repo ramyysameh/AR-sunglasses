@@ -30,11 +30,22 @@ export function frameBust(model, { dist, headY }) {
 }
 
 /**
+ * The neck rig's blend band, as fractions of the bust's height above (top) and
+ * below (bottom) the narrowest slice of the neck. LEGACY_RIG is what every reel
+ * rendered before 2026-10-20 used, and what a params.json without a `rig` entry
+ * means: its top reaches into the jaw, so past ~50 degrees of yaw the chin lags
+ * the face and the jaw smears. WIDE_RIG twists the neck instead, as a real neck
+ * does, and keeps the face rigid out to profile.
+ */
+export const LEGACY_RIG = Object.freeze({ top: 0.09, bottom: 0.06 })
+export const WIDE_RIG = Object.freeze({ top: 0.02, bottom: 0.12 })
+
+/**
  * Neck rig geometry for the unrigged bust: full rotation above `top` (skull
  * base), none below `bottom` (shoulders), smoothstep between, all about `pivot`.
  * Works in mesh-local coordinates, as the rig does.
  */
-export function neckRig(meshes, center, headCenter) {
+export function neckRig(meshes, center, headCenter, band = LEGACY_RIG) {
   let minY = Infinity
   let maxY = -Infinity
   for (const m of meshes) {
@@ -66,8 +77,8 @@ export function neckRig(meshes, center, headCenter) {
     }
   }
   const neckY = minY + ((neckBin + 0.5) / BINS) * Hh
-  const top = neckY + 0.09 * Hh
-  const bottom = neckY - 0.06 * Hh
+  const top = neckY + (band?.top ?? LEGACY_RIG.top) * Hh
+  const bottom = neckY - (band?.bottom ?? LEGACY_RIG.bottom) * Hh
   const pivot = new THREE.Vector3(0, top, center.z - headCenter.z)
   return { pivot, top, bottom }
 }
