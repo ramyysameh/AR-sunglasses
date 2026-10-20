@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Model paths in arConfig are relative to the app root, not to /harness/. -->
+<base href="/">
+<title>Pose gate</title>
+<style>
+  body{margin:0;background:#222;font:13px system-ui;color:#eee}
+  #status{position:fixed;left:8px;top:8px;z-index:2;padding:6px 10px;background:#000a;white-space:pre}
+  #stage{position:relative}
+  #stage canvas{position:absolute;left:0;top:0}
+</style>
+<div id="status">loading…</div>
+<div id="stage"><canvas id="view"></canvas></div>
+<script type="module" src="/harness/poseGate.js"></script>

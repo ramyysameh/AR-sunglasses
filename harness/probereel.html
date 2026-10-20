@@ -42,6 +42,7 @@
  */
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { PROBE_FOV_DEG, frameBust, neckRig, rigWeight } from '/harness/probeGeometry.js'
 
 const q = new URLSearchParams(location.search)
 const W = parseInt(q.get('w') ?? '1280', 10)
@@ -127,19 +128,15 @@ const BASE = { ambient: 2.4, key: 1.2, fill: 0.9, rim: 0.5 }
 const WARM = new THREE.Color(1.0, 0.72, 0.42)
 const WHITE = new THREE.Color(1, 1, 1)
 
-const camera = new THREE.PerspectiveCamera(30, W / H, 0.01, 100)
+const camera = new THREE.PerspectiveCamera(PROBE_FOV_DEG, W / H, 0.01, 100)
 const gltf = await new GLTFLoader().loadAsync(q.get('glb') || '/mockhead/head.glb')
 const model = gltf.scene
 scene.add(model)
 
-const box = new THREE.Box3().setFromObject(model)
-const size = box.getSize(new THREE.Vector3())
-const center = box.getCenter(new THREE.Vector3())
-const headCenter = new THREE.Vector3(center.x, box.max.y - size.y * HEAD_Y, center.z)
+// Framing and the neck rig live in probeGeometry.js, shared with the pose gate:
+// the gate's ground truth is this exact geometry.
+const { center, headCenter, baseCamZ } = frameBust(model, { dist: DIST, headY: HEAD_Y })
 model.position.sub(headCenter)
-// Framing is sized to the frame HEIGHT, so landscape and portrait reels show the
-// head at the same apparent size against the vertical FOV.
-const baseCamZ = (size.y * 0.30 * DIST) / Math.tan(THREE.MathUtils.degToRad(15))
 
 /**
  * Neck rig for the unrigged bust: full rotation above the skull base, none below
@@ -150,39 +147,13 @@ const baseCamZ = (size.y * 0.30 * DIST) / Math.tan(THREE.MathUtils.degToRad(15))
 function buildRig(root) {
   const meshes = []
   root.traverse((o) => { if (o.isMesh && o.geometry?.attributes?.position) meshes.push(o) })
-  let minY = Infinity, maxY = -Infinity
-  for (const m of meshes) {
-    const p = m.geometry.attributes.position
-    for (let i = 0; i < p.count; i += 1) { const y = p.getY(i); minY = Math.min(minY, y); maxY = Math.max(maxY, y) }
-  }
-  const Hh = maxY - minY
-  const BINS = 40
-  const width = new Array(BINS).fill(0)
-  for (const m of meshes) {
-    const p = m.geometry.attributes.position
-    for (let i = 0; i < p.count; i += 1) {
-      const b = Math.min(BINS - 1, Math.floor(((p.getY(i) - minY) / Hh) * BINS))
-      width[b] = Math.max(width[b], Math.abs(p.getX(i)))
-    }
-  }
-  let neckBin = -1, neckWidth = Infinity
-  for (let b = 0; b < BINS; b += 1) {
-    const fromTop = (BINS - 1 - b) / (BINS - 1)
-    if (fromTop < 0.35 || fromTop > 0.65) continue
-    if (width[b] < neckWidth) { neckWidth = width[b]; neckBin = b }
-  }
-  const neckY = minY + ((neckBin + 0.5) / BINS) * Hh
-  const top = neckY + 0.09 * Hh
-  const bottom = neckY - 0.06 * Hh
-  const pivot = new THREE.Vector3(0, top, center.z - headCenter.z)
+  const rigGeometry = neckRig(meshes, center, headCenter)
+  const { pivot } = rigGeometry
   const parts = meshes.map((m) => {
     const p = m.geometry.attributes.position
     const n = m.geometry.attributes.normal
     const w = new Float32Array(p.count)
-    for (let i = 0; i < p.count; i += 1) {
-      const c = Math.max(0, Math.min(1, (p.getY(i) - bottom) / (top - bottom)))
-      w[i] = c * c * (3 - 2 * c)
-    }
+    for (let i = 0; i < p.count; i += 1) w[i] = rigWeight(p.getY(i), rigGeometry)
     return { p, n, w, p0: Float32Array.from(p.array), n0: n ? Float32Array.from(n.array) : null }
   })
   const I = new THREE.Quaternion()
@@ -230,7 +201,7 @@ async function flush(final = false) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       frames: frames.map((f) => f.data),
-      params: final ? { kind: 'probe-reel', w: W, h: H, fps: FPS, dist: DIST, heady: HEAD_Y, label: LABEL, frames: TOTAL, timeline: TIMELINE.map((s) => [s.name, s.dur]) } : undefined,
+      params: final ? { kind: 'probe-reel', w: W, h: H, fps: FPS, fov: PROBE_FOV_DEG, dist: DIST, heady: HEAD_Y, label: LABEL, frames: TOTAL, timeline: TIMELINE.map((s) => [s.name, s.dur]) } : undefined,
       truth: final ? truth.join('\n') + '\n' : undefined,
     }),
   })
