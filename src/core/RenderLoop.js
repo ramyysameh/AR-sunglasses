@@ -2,7 +2,7 @@
  * Main AR render loop that fuses face tracking, pose filtering, occlusion, and Three.js rendering.
  */
 import * as THREE from 'three'
-import { NEAR_ARM_YAW_DEG, TEMPLE_CURL_RAD, TEMPLE_CUT_BEHIND_EAR_M, applyCurl, applyNearArmClip, applyOffset, applySplay, buildHinges, solveSplay } from '../models/templeHinge.js'
+import { NEAR_ARM_YAW_DEG, TEMPLE_BEHIND_EAR_KEEP_M, TEMPLE_CURL_RAD, TEMPLE_CUT_BEHIND_EAR_M, applyCurl, applyNearArmClip, applyOffset, applySplay, buildHinges, solveSplay } from '../models/templeHinge.js'
 import { EAR_LANDMARKS, EYE_LANDMARKS, NOSE_LANDMARK, headFrame } from '../occlusion/headFrame.js'
 import { halfWidthAt, toWorldPositions } from '../occlusion/headWidth.js'
 import { SHELL_INDEX_START } from '../occlusion/FaceOccluder.js'
@@ -1131,6 +1131,18 @@ export class RenderLoop {
       (this._clipBack ??= new THREE.Vector3()).copy(frame.forward).negate(),
       cutAt,
     )
+    // ...and stop that stretch short of the curled tip, which hangs down behind
+    // the ear where the occluder (no outer ear) cannot hide it. ?templekeep=<mm>
+    // overrides the length kept, for tuning.
+    if (this._templeKeepM === undefined) {
+      const mm = parseFloat(new URLSearchParams(window.location.search).get('templekeep'))
+      this._templeKeepM = Number.isFinite(mm) ? mm / 1000 : TEMPLE_BEHIND_EAR_KEEP_M
+    }
+    const end = (this._clipEnd ??= new THREE.Plane())
+    end.setFromNormalAndCoplanarPoint(
+      frame.forward,
+      (this._clipEndAt ??= new THREE.Vector3()).copy(cutAt).addScaledVector(frame.forward, -this._templeKeepM),
+    )
     // The floor under the lifted arm. Aimed here because this is where the head
     // frame already exists, and only on the path that actually lifts something:
     // an inner shell left on while nothing is lifted is pure cost, and one left
@@ -1139,7 +1151,7 @@ export class RenderLoop {
       this.camera.getWorldDirection((this._floorView ??= new THREE.Vector3())),
     )
 
-    applyNearArmClip(this._hinges, nearSide, plane, behind)
+    applyNearArmClip(this._hinges, nearSide, plane, behind, end)
   }
 
   _isPositionInCameraView(position) {

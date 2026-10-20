@@ -111,6 +111,18 @@ describe('applyNearArmClip', () => {
     }
   })
 
+  it('ends the behind-ear stretch at the end plane, so the curled tip never draws over the ear', () => {
+    // The occluder has no outer ear: the tip hanging down behind it drew as a
+    // dark sliver across the earlobe (real-turn-kling frame 165).
+    const END = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0.01)
+    const h = hinges()
+    applyNearArmClip(h, -1, FRONT, BACK, END)
+    for (const m of h[0].meshes) {
+      expect(m.userData.templeBehind.material.clippingPlanes).toEqual([BACK, END])
+      expect(m.material.clippingPlanes).toEqual([FRONT])
+    }
+  })
+
   it('hides the behind-ear sibling on the far arm', () => {
     const h = hinges()
     applyNearArmClip(h, -1, FRONT, BACK)
