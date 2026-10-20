@@ -190,13 +190,25 @@ a single person in daylight, so lighting-adaptation behaviour could not be stres
 - Measured on the mock head with a simulated dim tungsten room
   (brightness 0.42, sepia 0.45): intensity 0.82, colour (1.06, 0.99, 0.94).
 
-**3. Lens upgrade** (implemented)
-- `src/core/lensShading.js` (new): `onBeforeCompile` patch on lens materials:
-  view-angle Fresnel (Schlick, F0 0.04) raises opacity at grazing angles; optional
-  vertical gradient (top darker → bottom lighter) in lens-local Y; tint kept.
-- `src/core/lensReflection.js`: `?lensgrad=`, `?lensfresnel=` overrides.
-- `src/models/GlassesModelLoader.js`: apply after the existing opacity/reflection.
-- Per-SKU values read from the existing optional `materialProfile` (no GLB change).
+**3. Lens upgrade** (implemented, commit "feat(render): Fresnel lens coverage…")
+- `src/core/lensShading.js` (new): `onBeforeCompile` patch on lens materials,
+  applied just before three writes `gl_FragColor`: Schlick Fresnel (F0 0.04,
+  60 % strength) raises coverage toward grazing angles (0.18 → ~0.48 at
+  cosθ = 0.1, +2 % face-on); optional vertical gradient across the lens mesh's
+  own bounding-box height. Tint colour untouched; chains any existing
+  `onBeforeCompile`.
+- `src/models/GlassesModelLoader.js`: applied after the existing opacity and
+  reflection in both lens branches.
+- Overrides `?lensfresnel=`, `?lensgrad=`; per-SKU gradient from an optional
+  `materialProfile.lensGradient` (additive runtime-config field, **not** a GLB or
+  calibration-format change; merchant models simply don't set it → no gradient).
+
+**Combined cost** (desktop, mock head): render 0.2 → 0.6 ms. In the live loop
+one `_step` already takes ~27 ms, dominated by synchronous MediaPipe detection on
+the main thread, so the extra ~0.4 ms sometimes misses a 33 ms vsync (≈ −2 fps
+measured here; light estimate and lens shading measured as free, shadow is the
+whole delta). The real fix for frame budget is item 5 below plus moving
+detection off the render path; see "next".
 
 **4–9:** see table; 4 touches `src/fit/FaceFitSolver.js` (`realIPD_m` becomes a
 per-session estimate) plus a new `src/fit/pupillaryDistance.js`; 5 touches
