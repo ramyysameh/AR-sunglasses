@@ -530,8 +530,11 @@ export const TEMPLE_ON_TOP_ORDER = -2
  * @param {Array} hinges
  * @param {number} nearSide -1, 1, or 0 for "too frontal to say"
  * @param {THREE.Plane|null} earPlane world-space, normal pointing out of the face
+ * @param {THREE.Plane|null} behindPlane the same cut, facing back
+ * @param {THREE.Plane|null} [endPlane] where the behind-ear stretch stops
+ *   (TEMPLE_BEHIND_EAR_KEEP_M behind the cut), facing forward
  */
-export function applyNearArmClip(hinges, nearSide, earPlane, behindPlane) {
+export function applyNearArmClip(hinges, nearSide, earPlane, behindPlane, endPlane = null) {
   for (const hinge of hinges) {
     const near = nearSide !== 0 && hinge.side === nearSide && earPlane
     for (const mesh of hinge.meshes) {
@@ -554,7 +557,11 @@ export function applyNearArmClip(hinges, nearSide, earPlane, behindPlane) {
       // Cleared, not just hidden. A plane left on an invisible piece is the
       // LAST head pose's, so the first frame that makes the piece visible again
       // without re-clipping draws it cut at where the ear used to be.
-      setClip(behind.material, behind.visible ? [behindPlane] : null)
+      // The END plane stops it short of the curled tip: the occluder is the
+      // skull with no outer ear, so the tip hanging down behind the ear was
+      // hidden by nothing and drew across the earlobe.
+      const planes = endPlane ? [behindPlane, endPlane] : [behindPlane]
+      setClip(behind.material, behind.visible ? planes : null)
     }
   }
 }
@@ -604,3 +611,13 @@ export const NEAR_ARM_YAW_DEG = 8
  * ear's own outline, where the ear covers it.
  */
 export const TEMPLE_CUT_BEHIND_EAR_M = 0.012
+
+/**
+ * How much of the near arm is kept BEHIND the cut, metres.
+ *
+ * Enough for the arm to run on into the head instead of ending at the cut (the
+ * cut edge shows at +/-25 degrees of pitch otherwise), short of the curled tip.
+ * The occluder has no outer ear, so the tip, which hangs down behind the ear,
+ * is hidden by nothing and drew as a dark sliver across the earlobe.
+ */
+export const TEMPLE_BEHIND_EAR_KEEP_M = 0.01
