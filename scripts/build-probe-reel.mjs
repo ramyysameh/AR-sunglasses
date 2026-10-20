@@ -42,15 +42,25 @@ function ffmpeg(argv) {
  *   3. its last frame frozen for 4 s      (jitter floor: any motion is noise)
  * with the frame number and segment burned into the corner. Written as
  * <clip>-portrait.y4m (source framing) and <clip>-landscape.y4m (1280x720, the
- * clip centred on a blurred copy of itself, sized so a 4:3 centre crop -- which
- * is what a 640x480 getUserMedia request gets from Chrome -- still holds the
- * whole head).
+ * clip centred on a flat dark backdrop, sized so a 4:3 centre crop -- which is
+ * what a 640x480 getUserMedia request gets from Chrome -- still holds the whole
+ * head).
+ *
+ * --pad blur pads with a blurred copy of the clip instead (the old default). Do
+ * not use it for tracking reels: when the face runs off the clip's edge,
+ * MediaPipe puts landmarks out on the blurred skin, which no camera produces
+ * (FINDINGS §9). A flat pad leaves the clip edge as a plain edge.
  */
 const fromIdx = args.indexOf('--from-video')
 if (fromIdx >= 0) {
   const src = path.resolve(args[fromIdx + 1])
   const base = src.replace(/\.[^.]+$/, '')
   const font = process.platform === 'win32' ? "fontfile='C\\:/Windows/Fonts/consola.ttf':" : ''
+  const padIdx = args.indexOf('--pad')
+  const pad = padIdx >= 0 ? args[padIdx + 1] : 'flat'
+  if (pad !== 'flat' && pad !== 'blur') throw new Error(`--pad must be flat or blur, got ${pad}`)
+  // Keeps the clip's timing; flat fills it with a dark backdrop like the clip's.
+  const padFilter = pad === 'blur' ? 'boxblur=20:2,eq=brightness=-0.1' : 'drawbox=c=0x101010:t=fill'
   const label = (tag) => `drawtext=${font}text='#%{frame_num} ${tag}':x=8:y=h-th-8:fontsize=h/45:fontcolor=white:box=1:boxcolor=black@0.6:boxborderw=6`
   const graph = [
     `[0:v]fps=${fps},format=yuv420p,split=3[a][b][c]`,
@@ -61,7 +71,7 @@ if (fromIdx >= 0) {
     '[A][B][C]concat=n=3:v=1:a=0[reel]',
     '[reel]split=2[p][l]',
     `[l]split=2[lbg][lfg]`,
-    `[lbg]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,boxblur=20:2,eq=brightness=-0.1[bg]`,
+    `[lbg]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,${padFilter}[bg]`,
     `[lfg]scale=-2:720[fg]`,
     '[bg][fg]overlay=(W-w)/2:0,format=yuv420p[land]',
   ].join(';')

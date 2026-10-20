@@ -27,21 +27,29 @@
  *
  * Segments (seconds at 30 fps; see TIMELINE):
  *   hold    frontal, still        lets scans/calibrations lock (all of them need it)
- *   yaw     0 -> -45 -> +45 -> 0   temple occlusion, ear handling (the neck rig shears past ~50)
+ *   yaw     0 -> -45 -> +45 -> 0   temple occlusion, ear handling
  *   pitch   0 -> -25 -> +25 -> 0   nose seating, pivot errors
  *   roll    0 -> -20 -> +20 -> 0
  *   dist    1 -> 0.75 -> 1.3 -> 1  scale/depth stability (closer, farther)
  *   light   dim, warm, bright      light estimation (head held at 15 deg yaw)
  *   still   frontal, dead still    jitter floor: ANY motion on screen here is noise
  *   shake   +/-25 deg at 1.5 Hz    lag and overshoot
+ *   wide    0 -> -75 -> 0 -> +75 -> 0, 1 s held at each end
+ *                                  near profile, where real landmarks collapse
+ *
+ * The neck rig twists the neck, not the jaw (?rig=wide, the default; reels
+ * rendered before the wide segment existed used ?rig=legacy, which smears the
+ * chin past ~50 degrees). The band is written to params.json for the pose gate.
  *
  * Params: ?w=1280&h=720 (default; ?w=720&h=1280 for a phone), ?fps=30,
  * ?dist=1.15&heady=0.34 (webcam-like framing; 1.8 matches the harness sweeps), ?label=0 to omit the
- * burned-in readout, ?save=1&dir=probe-landscape to write frames + truth.csv via
+ * burned-in readout, ?frames=a,b to preview single frames (window.__peek),
+ * ?save=1&dir=probe-landscape to write frames + truth.csv via
  * the harness sink. Then build the y4m with scripts/build-probe-reel.mjs.
  */
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { LEGACY_RIG, PROBE_FOV_DEG, WIDE_RIG, frameBust, neckRig, rigWeight } from '/harness/probeGeometry.js'
 
 const q = new URLSearchParams(location.search)
 const W = parseInt(q.get('w') ?? '1280', 10)
@@ -52,6 +60,17 @@ const FPS = parseInt(q.get('fps') ?? '30', 10)
 const DIST = parseFloat(q.get('dist') ?? '1.15')
 const HEAD_Y = parseFloat(q.get('heady') ?? '0.34')
 const LABEL = q.get('label') !== '0'
+// ?rig=wide (default) | legacy | <top>,<bottom>: the neck rig's blend band (see
+// probeGeometry.js). Recorded in params.json, which is where the pose gate reads it.
+const RIG = (() => {
+  const v = q.get('rig') ?? 'wide'
+  if (v === 'legacy') return LEGACY_RIG
+  if (v === 'wide') return WIDE_RIG
+  const [top, bottom] = v.split(',').map(Number)
+  return { top, bottom }
+})()
+// ?frames=a,b,c renders only those frames, unsaved, into window.__peek (data URLs).
+const PEEK = q.get('frames')?.split(',').map(Number).filter(Number.isFinite) ?? null
 const out = document.getElementById('out')
 
 // ---- timeline -------------------------------------------------------------
@@ -90,6 +109,20 @@ const TIMELINE = [
   },
   { name: 'still', dur: 4, at: () => ({}) },
   { name: 'shake', dur: 4, at: (t) => ({ yaw: 25 * Math.sin(2 * Math.PI * 1.5 * 4 * t) * Math.min(1, t * 8, (1 - t) * 8) }) },
+  {
+    // Past the yaw segment's 45, out to near profile, where a real face's
+    // landmarks collapse. A held second at each end, because a shopper looking
+    // at their profile holds it -- a guard that only reacts to motion would
+    // fade back in there. Appended last so every earlier frame keeps its index.
+    name: 'wide', dur: 14, at: (t) => {
+      const s = t * 14
+      const keys = [[0, 0], [3, -75], [4, -75], [7, 0], [10, 75], [11, 75], [14, 0]]
+      const k = keys.findIndex(([at], i) => i > 0 && s <= at)
+      const [s0, y0] = keys[k - 1]
+      const [s1, y1] = keys[k]
+      return { yaw: y0 + (y1 - y0) * ease((s - s0) / (s1 - s0)) }
+    },
+  },
 ]
 
 function poseAt(frame) {
@@ -127,19 +160,15 @@ const BASE = { ambient: 2.4, key: 1.2, fill: 0.9, rim: 0.5 }
 const WARM = new THREE.Color(1.0, 0.72, 0.42)
 const WHITE = new THREE.Color(1, 1, 1)
 
-const camera = new THREE.PerspectiveCamera(30, W / H, 0.01, 100)
+const camera = new THREE.PerspectiveCamera(PROBE_FOV_DEG, W / H, 0.01, 100)
 const gltf = await new GLTFLoader().loadAsync(q.get('glb') || '/mockhead/head.glb')
 const model = gltf.scene
 scene.add(model)
 
-const box = new THREE.Box3().setFromObject(model)
-const size = box.getSize(new THREE.Vector3())
-const center = box.getCenter(new THREE.Vector3())
-const headCenter = new THREE.Vector3(center.x, box.max.y - size.y * HEAD_Y, center.z)
+// Framing and the neck rig live in probeGeometry.js, shared with the pose gate:
+// the gate's ground truth is this exact geometry.
+const { center, headCenter, baseCamZ } = frameBust(model, { dist: DIST, headY: HEAD_Y })
 model.position.sub(headCenter)
-// Framing is sized to the frame HEIGHT, so landscape and portrait reels show the
-// head at the same apparent size against the vertical FOV.
-const baseCamZ = (size.y * 0.30 * DIST) / Math.tan(THREE.MathUtils.degToRad(15))
 
 /**
  * Neck rig for the unrigged bust: full rotation above the skull base, none below
@@ -150,39 +179,13 @@ const baseCamZ = (size.y * 0.30 * DIST) / Math.tan(THREE.MathUtils.degToRad(15))
 function buildRig(root) {
   const meshes = []
   root.traverse((o) => { if (o.isMesh && o.geometry?.attributes?.position) meshes.push(o) })
-  let minY = Infinity, maxY = -Infinity
-  for (const m of meshes) {
-    const p = m.geometry.attributes.position
-    for (let i = 0; i < p.count; i += 1) { const y = p.getY(i); minY = Math.min(minY, y); maxY = Math.max(maxY, y) }
-  }
-  const Hh = maxY - minY
-  const BINS = 40
-  const width = new Array(BINS).fill(0)
-  for (const m of meshes) {
-    const p = m.geometry.attributes.position
-    for (let i = 0; i < p.count; i += 1) {
-      const b = Math.min(BINS - 1, Math.floor(((p.getY(i) - minY) / Hh) * BINS))
-      width[b] = Math.max(width[b], Math.abs(p.getX(i)))
-    }
-  }
-  let neckBin = -1, neckWidth = Infinity
-  for (let b = 0; b < BINS; b += 1) {
-    const fromTop = (BINS - 1 - b) / (BINS - 1)
-    if (fromTop < 0.35 || fromTop > 0.65) continue
-    if (width[b] < neckWidth) { neckWidth = width[b]; neckBin = b }
-  }
-  const neckY = minY + ((neckBin + 0.5) / BINS) * Hh
-  const top = neckY + 0.09 * Hh
-  const bottom = neckY - 0.06 * Hh
-  const pivot = new THREE.Vector3(0, top, center.z - headCenter.z)
+  const rigGeometry = neckRig(meshes, center, headCenter, RIG)
+  const { pivot } = rigGeometry
   const parts = meshes.map((m) => {
     const p = m.geometry.attributes.position
     const n = m.geometry.attributes.normal
     const w = new Float32Array(p.count)
-    for (let i = 0; i < p.count; i += 1) {
-      const c = Math.max(0, Math.min(1, (p.getY(i) - bottom) / (top - bottom)))
-      w[i] = c * c * (3 - 2 * c)
-    }
+    for (let i = 0; i < p.count; i += 1) w[i] = rigWeight(p.getY(i), rigGeometry)
     return { p, n, w, p0: Float32Array.from(p.array), n0: n ? Float32Array.from(n.array) : null }
   })
   const I = new THREE.Quaternion()
@@ -221,7 +224,7 @@ const frames = []
 const truth = ['frame,t,segment,yaw,pitch,roll,dist,light_k,light_warm,light_tag']
 const BATCH = 60
 async function flush(final = false) {
-  if (q.get('save') !== '1' || (!final && frames.length < BATCH)) return
+  if (PEEK || q.get('save') !== '1' || (!final && frames.length < BATCH)) return
   // The final call always posts, even with no frames left, because it carries
   // params.json and truth.csv.
   const start = frames.length ? parseInt(frames[0].i, 10) : TOTAL
@@ -230,7 +233,7 @@ async function flush(final = false) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       frames: frames.map((f) => f.data),
-      params: final ? { kind: 'probe-reel', w: W, h: H, fps: FPS, dist: DIST, heady: HEAD_Y, label: LABEL, frames: TOTAL, timeline: TIMELINE.map((s) => [s.name, s.dur]) } : undefined,
+      params: final ? { kind: 'probe-reel', w: W, h: H, fps: FPS, fov: PROBE_FOV_DEG, dist: DIST, heady: HEAD_Y, label: LABEL, rig: RIG, frames: TOTAL, timeline: TIMELINE.map((s) => [s.name, s.dur]) } : undefined,
       truth: final ? truth.join('\n') + '\n' : undefined,
     }),
   })
@@ -238,7 +241,7 @@ async function flush(final = false) {
   frames.length = 0
 }
 
-for (let i = 0; i < TOTAL; i += 1) {
+for (const i of PEEK ?? Array.from({ length: TOTAL }, (_, k) => k)) {
   const p = poseAt(i)
   // Yaw positive = head turns to ITS left = toward camera-right in a raw (unmirrored) feed.
   euler.set(THREE.MathUtils.degToRad(p.pitch), THREE.MathUtils.degToRad(p.yaw), THREE.MathUtils.degToRad(p.roll), 'YXZ')
@@ -272,7 +275,8 @@ for (let i = 0; i < TOTAL; i += 1) {
   await flush()
   if (i % 30 === 0) out.textContent = `rendering ${i}/${TOTAL}  ${p.seg}`
 }
-await flush(true)
+if (PEEK) window.__peek = frames.map((f) => f.data)
+else await flush(true)
 window.__probeDone = { frames: TOTAL, w: W, h: H, fps: FPS }
 out.textContent = `done: ${TOTAL} frames ${W}x${H}@${FPS}${q.get('save') === '1' ? ` -> ${q.get('dir') ?? 'probe'}` : ' (not saved; add ?save=1)'}`
 </script>

@@ -120,7 +120,10 @@ const harnessPlugin = {
       const rel = (req.url ?? '').split('?')[0].replace(/^\//, '')
       const file = path.resolve(MOCK_HEAD_DIR, rel)
       if (!file.startsWith(path.resolve(MOCK_HEAD_DIR)) || !fs.existsSync(file)) return next()
-      const type = { '.html': 'text/html', '.glb': 'model/gltf-binary', '.png': 'image/png' }[path.extname(file)]
+      const type = {
+        '.html': 'text/html', '.glb': 'model/gltf-binary', '.png': 'image/png', '.jpg': 'image/jpeg',
+        '.csv': 'text/csv', '.json': 'application/json',
+      }[path.extname(file)]
       if (type) res.setHeader('Content-Type', type)
       res.setHeader('Cache-Control', 'no-store')
       res.end(fs.readFileSync(file))
@@ -175,7 +178,8 @@ const harnessPlugin = {
         const { name, dataUrl } = JSON.parse(Buffer.concat(chunks).toString())
         const safe = String(name ?? 'shot').replace(/[^a-zA-Z0-9._-]/g, '_')
         fs.mkdirSync(SHOT_DIR, { recursive: true })
-        const file = path.join(SHOT_DIR, `${safe}.png`)
+        const ext = String(dataUrl).startsWith('data:image/jpeg') ? 'jpg' : 'png'
+        const file = path.join(SHOT_DIR, `${safe}.${ext}`)
         fs.writeFileSync(file, Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'))
         res.setHeader('Content-Type', 'application/json')
         res.end(JSON.stringify({ file }))

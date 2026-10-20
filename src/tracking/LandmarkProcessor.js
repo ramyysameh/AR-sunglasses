@@ -7,12 +7,26 @@
  * - This module MUST NOT perform any manual conversion from normalized
  *   landmark coordinates to world coordinates. The matrix is the single
  *   authoritative source of 3D head pose.
+ * - With ?pose=pnp that matrix is replaced by one the PnP solver produces in
+ *   the SAME convention (headPoseSolver.poseToFacialMatrix), so everything
+ *   below is unchanged; MediaPipe's own matrix stays the per-frame fallback.
  */
 import * as THREE from 'three'
 import { canonicalOffset } from '../config/poseConfig.js'
+import { HeadPoseSolver, intrinsicsFromFov } from './headPoseSolver.js'
 
 const IDENTITY_OFFSET = new THREE.Vector3()
 const IDENTITY_ROTATION = new THREE.Euler()
+
+/**
+ * Where the head pose comes from. 'mediapipe' (default) reads the network's
+ * facialTransformationMatrixes; 'pnp' solves it from the 2D landmarks against a
+ * rigid face model (headPoseSolver.js), falling back to MediaPipe's matrix on a
+ * frame it cannot fit. ?pose=pnp switches.
+ */
+export function resolvePoseMode(search = typeof window !== 'undefined' ? window.location.search : '') {
+  return new URLSearchParams(search).get('pose') === 'pnp' ? 'pnp' : 'mediapipe'
+}
 
 function landmarkDistance(landmarks, aIndex, bIndex) {
   const a = landmarks?.[aIndex]
@@ -102,7 +116,23 @@ function computePoseQuality(faceMetrics, matrixScale, quaternion) {
 }
 
 export class LandmarkProcessor {
-  processLandmarks(result, modelConfig = {}, naturalWidth = 1) {
+  constructor(options = {}) {
+    this.poseMode = options.poseMode ?? resolvePoseMode()
+    // ?pnpdepth=canonical|landmark picks the wearer model's depth source (tuning).
+    const depth = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('pnpdepth') : null
+    const pnp = { ...options.pnp, ...(depth ? { userModel: { depth } } : {}) }
+    this.headPoseSolver = this.poseMode === 'pnp' ? new HeadPoseSolver(pnp) : null
+  }
+
+  /**
+   * @param {object} result FaceLandmarker result
+   * @param {object} [modelConfig]
+   * @param {number} [naturalWidth]
+   * @param {{ fov?: number, _videoW?: number, _videoH?: number }} [camera]
+   *   The render camera: its vertical FOV and the video's intrinsic size are the
+   *   PnP solver's intrinsics. Unused in 'mediapipe' mode.
+   */
+  processLandmarks(result, modelConfig = {}, naturalWidth = 1, camera = null) {
     if (!result?.facialTransformationMatrixes?.length) {
       return null
     }
@@ -112,10 +142,18 @@ export class LandmarkProcessor {
       return null
     }
 
-    const matrixData = result.facialTransformationMatrixes[0].data
+    let matrixData = result.facialTransformationMatrixes[0].data
+    let poseSource = 'mediapipe'
 
     if (!matrixData || matrixData.length < 16) {
       return null
+    }
+
+    if (this.headPoseSolver && camera?.fov > 0 && camera._videoW > 0 && camera._videoH > 0) {
+      const K = intrinsicsFromFov(camera._videoW, camera._videoH, camera.fov)
+      const solved = this.headPoseSolver.solve(landmarks, K, matrixData)
+      matrixData = solved.matrix
+      poseSource = solved.source
     }
 
     const mediaPipeMatrix = new THREE.Matrix4().fromArray(matrixData)
@@ -186,6 +224,7 @@ export class LandmarkProcessor {
       },
       anchorPoints,
       poseQuality,
+      poseSource,
       faceMetrics: metrics,
       metrics: {
         ...metrics,

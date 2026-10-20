@@ -346,3 +346,163 @@ ranking (replaces the tail of §4):
 | E | Probe-reel regression gate: run `probe-landscape.y4m` through the harness and compare solved yaw/pitch/position against `truth.csv` per frame | turns "looks off at ¾" into a number CI can hold | S–M |
 | F | Screen-space lens refraction / in-scene video (was #7; Fittingbox does refraction) | lens realism | L |
 | G | Frame removal (inpaint the user's own glasses), Fittingbox's differentiator | hard: needs segmentation plus inpainting; propose an open model | L |
+
+---
+
+## 8. Pose gate, PnP head pose and the profile guard (branch feat/pnp-head-pose)
+
+### The gate (item E)
+`node scripts/pose-gate.mjs` pushes every reel frame through the real engine
+(`harness/posegate.html`, virtual 30 fps clock, so runs are reproducible) and scores
+it against `truth.csv` per segment: yaw/pitch/roll error, and the frame's nose
+contact against the bust's true nasion in mm (truth carried by the same rig code
+as the renderer, `harness/probeGeometry.js`; mm scaled by the bust's own IPD).
+`--check` enforces `harness/pose-gate.limits.json`. The default frame is a
+Create-with-AI model (dev store Classic Aviator, production fit), because that is
+what shoppers wear. `--reel real-turn-hf-fb640` runs the real-face reel
+(frames extracted from the y4m) for frame-matched before/after sheets.
+
+### Baseline (CG reel, true 30° FOV, MediaPipe matrix), drawn frame
+| segment | yaw° | pitch° | roll° | drift mm mean / p95 |
+|---|---|---|---|---|
+| yaw ±45 | 2.0 | 1.0 | 0.5 | 3.3 / 5.0 |
+| pitch ±25 | 0.4 | 1.2 | 0.2 | 1.9 / 5.6 |
+| shake | 5.2 | 0.7 | 0.6 | 5.2 / 8.2 |
+
+On a clean face up to 45°, MediaPipe's matrix is already accurate.
+
+### PnP (item A), `?pose=pnp`: built, NOT better, left opt-in
+Own Levenberg-Marquardt solver over 29 rigid landmarks (bone and stiff cartilage;
+silhouette, lips, lids, brows excluded, see `scripts/extract-rigid-face-model.mjs`),
+Huber loss, facing-camera weights, and a per-wearer model built in the silent
+frontal scan. On the CG reel it is worse than MediaPipe (yaw segment 2.4° yaw /
+4.4° pitch vs 2.0 / 1.0): a frontal scan cannot see the face's depth, and depth
+error couples into pitch during turns.
+
+### Why the frame floats off at ¾ on a real face
+Near profile, MediaPipe's 2D landmarks collapse: on the real reel a face visibly
+turned ~65° solves to ~30° with MediaPipe AND with PnP. The input is wrong, so no
+pose solver fixes it. Same on all three AI models.
+
+### Profile guard, `?profileguard=1`: opt-in
+Fades the frame out when the landmark layout says it is guessing (far/near eye
+width ratio, rigid-fit reprojection error). Real reel, all three AI models:
+frames drawn while floating 42 → 3 (all mid-fade), seated frames unchanged
+(275/338). But on the CG bust the same thresholds hide 55% of an ordinary ±45°
+turn: a collapsed near-profile face is self-consistent, and per frame looks like
+an honest ~32° face. The gate fails it (`--check`: yaw tracked 44.6%). A default-on
+guard needs evidence beyond the landmark layout (image silhouette, or motion over
+time), measured on a CG reel extended to ±75° yaw.
+
+## 9. Wide-yaw probe reel and a default-on profile guard
+
+### The wide reel
+`harness/probereel.html` gained a `wide` segment, appended last so every earlier
+frame keeps its index: 0 → −75° → 0 → +75° → 0 with a second held at each end
+(14 s, frames 1200–1619). The old neck rig's blend band reached into the jaw, so
+past ~50° the chin lagged the face and the jaw smeared. The band is now a
+parameter (`?rig=wide`, the default: `harness/probeGeometry.js` `WIDE_RIG`, the
+twist lives in the neck), written to `params.json`, and the gate rebuilds truth
+with the same band (reels without one use `LEGACY_RIG`, so probe-landscape's truth
+is unchanged). Rendered to `test-mock-head/probe-wide` (1620 frames + truth.csv;
+no y4m built). Evidence: `test-shots/guard-v3/rig-legacy-vs-wide.jpg`.
+
+### Where MediaPipe stops following a clean face (CG bust, guard off)
+| true yaw | solved yaw | drift mm (mean) | shown yaw error |
+|---|---|---|---|
+| 30–40 | follows | 4.5 | 0.7° |
+| 40–50 | 38–44 | 5.4 | 4.3° |
+| 50–60 | 44–48 | 9.7 | 9.1° |
+| 60–70 | 47–51 | 14.2 | 14.9° |
+| 70–75 | 51, then lost | 17.9 | 20° |
+
+No collapse on the CG bust: tracking is good to ~45°, then the solved yaw lags
+the real turn by a steadily growing amount but keeps RISING. The face is lost at
+~72° (left) / ~60° (right). After a loss the glasses stay hidden until the
+production scan re-locks on a near-frontal face.
+
+### The real-face "¾ collapse" was largely the clip leaving its own frame
+`real-turn-hf-fb640` is a portrait clip pasted into the middle (x 162–476) of a
+blurred copy of itself. In every one of its floating frames (205–232, 350–368)
+the face runs off that clip's edge and MediaPipe puts landmarks out on the
+blurred copy (x up to 515, down to 76); on the honest frames they stay inside.
+`test-shots/guard-v3/composite-landmarks-past-clip-edge.jpg` shows frame 214:
+the nose cut by the clip edge, landmarks beyond it. The same clip at its native
+framing (`real-turn-hf-portrait`, extracted to frames for the gate, where the
+clip edge IS the image edge) keeps the glasses seated through the ¾ turn
+(`portrait-guard-off-sheet.jpg`); they only leave the face once the face is half
+out of the picture and the landmark hull sits up to 128 px past the image edge.
+So the 640 reel's floats are a pasted-clip artifact: no camera produces a hard
+edge with a skin-coloured copy of the face beyond it.
+
+### Signals tried
+- Landmark layout (eye-width ratio, rigid-fit RMS, nose offset): face-dependent,
+  as §8 found. Rigid RMS also climbs to 0.047 on the CG bust's honest 25° nod,
+  so it hid 31% of the pitch segment.
+- Skin overrun (`faceOverrun`): on the side the nose points, how far
+  skin-coloured pixels carry on past the landmark hull (face-oval polygon plus
+  nearby landmarks), in face heights, on four rows (nasion, mid-nose, tip, lip),
+  second-largest row. Honest frames read ≤0.03 on both the CG bust (to 70°) and
+  the real face. Two traps found and closed: a warm-lit grey wall reads as skin
+  (light segment, 15° yaw, run never ends) → a run with no edge is UNREAD, not
+  overrun; and a cheek that reaches the image edge is an ordinary ¾ view
+  (portrait 74–92, 232–238) → skin running into the edge is unread too. What
+  remains is "landmarks placed past the edge of the picture, by how far".
+- The engine's own yaw (`matrixYawDeg`, from MediaPipe's matrix; matches the
+  engine's yaw exactly). Face-independent but blunt: the CG bust reads 44.6° at
+  a true 45°, so it cannot hide 50–60° without hiding an ordinary ±45° turn.
+- Motion over time (solved yaw stalling while the image keeps moving) was not
+  needed once the real-reel cause was clear, and was not built.
+
+### Profile guard: now ON by default (`?profileguard=0` turns it off)
+Trust = min(yaw ceiling 44→52°, overrun 0.05→0.12); pixels are read (one
+270-row downscale of the frame) only while the face is turned (eye ratio < 0.9).
+Results (three Create-with-AI fits, `test-shots/guard-v3/`):
+
+| reel | guard off | guard on |
+|---|---|---|
+| probe-landscape `--check` | passes | passes (yaw 100% tracked; was 44.6% with the §8 guard) |
+| probe-wide, true ≤50° | all drawn | all drawn |
+| probe-wide, true 60–75° | 19 drawn (14–18 mm drift) | 13 |
+| real portrait | 520 drawn | 503: hides the face-half-out-of-frame frames (98–102, 245–254) and their dim-copy repeats, keeps every ordinary ¾ frame |
+| real fb640, floating spans | 42/47 drawn | 42/47 drawn (all three fits) |
+
+The fb640 floats are NOT hidden: the landmarks there spill past the pasted
+clip's edge, not the image's, and the run beyond is the blurred skin copy, so
+overrun reads unread. The §8 guard's 3/42 on that reel came from the eye-ratio
+threshold that also hid half of an honest ±45° turn. Use `real-turn-hf-portrait`
+(true image edge) as the real-face benchmark, or rebuild the landscape reel with
+a non-face pad, rather than tuning a production guard to the pasted-clip edge.
+
+### The same footage on a flat pad (`real-turn-hf-flat640`)
+Built from fb640's own frames: the clip (x 162–475) kept and everything outside it
+painted flat 0x101010, close to the clip's dark backdrop. Same framing and motion,
+no skin copy beyond the clip edge. `build-probe-reel.mjs --from-video` now pads this
+way by default (`--pad blur` gives the old pad). Results (all three Create-with-AI
+fits give identical counts; "drawn" = tracked with guard opacity > 0.5, which is
+stricter than the "tracked" count in the table above, so fb640 reads 38/47 with the
+guard on that measure):
+
+| reel, floating spans 205–232 + 350–368 | guard off | guard on |
+|---|---|---|
+| fb640 (blurred-copy pad) | 42/47 drawn | 38/47 |
+| flat640 (flat pad) | 39/47 | **21/47** |
+| flat640, frames outside the spans | 291 | 289 (hides 233, 236: the same 50° turn) |
+
+On the flat pad MediaPipe no longer drags landmarks onto a second face, so its own
+yaw keeps climbing: 43° at 205, 48° at 210, 50–53° from 217 on. The yaw ceiling
+(44→52°) then fades the frame from 206 and has it gone from 224 to the end of the
+span. `overrun` reads 0 throughout, as it should with nothing skin-coloured past
+the hull. The 350–368 span seats correctly on the flat pad in both modes (yaw
+27–45°; the sheet shows the frame on the face), so it was floating only because
+of the pad; the guard starts fading at 360 as yaw passes 45°. Sheets:
+`test-shots/guard-v3/flat640-*/`.
+
+So the clip-edge floats were mostly the pad, and the guard handles what is left
+on an honest pad. `real-turn-hf-flat640` (with `real-turn-hf-portrait`) replaces
+fb640 as the real-face benchmark.
+
+Still open: CG 50–60° (≈10 mm drift) is drawn, because nothing face-independent
+tells it from 45°. A real head-turn filmed straight from a phone/webcam, framed
+with room around the head, would show whether real faces collapse earlier than
+the CG bust when nothing truncates them.
