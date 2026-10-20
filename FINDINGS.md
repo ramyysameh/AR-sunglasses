@@ -474,6 +474,34 @@ threshold that also hid half of an honest ±45° turn. Use `real-turn-hf-portrai
 (true image edge) as the real-face benchmark, or rebuild the landscape reel with
 a non-face pad, rather than tuning a production guard to the pasted-clip edge.
 
+### The same footage on a flat pad (`real-turn-hf-flat640`)
+Built from fb640's own frames: the clip (x 162–475) kept and everything outside it
+painted flat 0x101010, close to the clip's dark backdrop. Same framing and motion,
+no skin copy beyond the clip edge. `build-probe-reel.mjs --from-video` now pads this
+way by default (`--pad blur` gives the old pad). Results (all three Create-with-AI
+fits give identical counts; "drawn" = tracked with guard opacity > 0.5, which is
+stricter than the "tracked" count in the table above, so fb640 reads 38/47 with the
+guard on that measure):
+
+| reel, floating spans 205–232 + 350–368 | guard off | guard on |
+|---|---|---|
+| fb640 (blurred-copy pad) | 42/47 drawn | 38/47 |
+| flat640 (flat pad) | 39/47 | **21/47** |
+| flat640, frames outside the spans | 291 | 289 (hides 233, 236: the same 50° turn) |
+
+On the flat pad MediaPipe no longer drags landmarks onto a second face, so its own
+yaw keeps climbing: 43° at 205, 48° at 210, 50–53° from 217 on. The yaw ceiling
+(44→52°) then fades the frame from 206 and has it gone from 224 to the end of the
+span. `overrun` reads 0 throughout, as it should with nothing skin-coloured past
+the hull. The 350–368 span seats correctly on the flat pad in both modes (yaw
+27–45°; the sheet shows the frame on the face), so it was floating only because
+of the pad; the guard starts fading at 360 as yaw passes 45°. Sheets:
+`test-shots/guard-v3/flat640-*/`.
+
+So the clip-edge floats were mostly the pad, and the guard handles what is left
+on an honest pad. `real-turn-hf-flat640` (with `real-turn-hf-portrait`) replaces
+fb640 as the real-face benchmark.
+
 Still open: CG 50–60° (≈10 mm drift) is drawn, because nothing face-independent
 tells it from 45°. A real head-turn filmed straight from a phone/webcam, framed
 with room around the head, would show whether real faces collapse earlier than

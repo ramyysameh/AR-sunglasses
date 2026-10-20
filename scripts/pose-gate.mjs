@@ -3,7 +3,7 @@
 //
 //   node scripts/pose-gate.mjs                       # baseline + ?pose=pnp, report, check limits
 //   node scripts/pose-gate.mjs --modes pnp --check   # CI-style: exit 1 when a limit is broken
-//   node scripts/pose-gate.mjs --reel real-turn-hf-fb640 --modes mediapipe,pnp \
+//   node scripts/pose-gate.mjs --reel real-turn-hf-flat640 --modes mediapipe,pnp \
 //        --shots 60,135,210,285,360 --no-score       # frame-matched screenshot sheet only
 //
 // It starts the harness dev server (harness/mock-server.config.mjs) on a spare
