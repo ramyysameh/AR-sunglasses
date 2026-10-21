@@ -56,15 +56,35 @@ export function applyModelScale(model, modelScale) {
  * The ear-hook tips can't be hidden by a face occluder (the MediaPipe face mesh
  * has no ears/hair), so we taper them out instead of letting them clip the cheeks.
  * Operates in model-local space, so it holds at any head angle with no per-frame cost.
+ *
+ * Chains any earlier onBeforeCompile / customProgramCacheKey instead of replacing
+ * them: this runs AFTER applyLensShading on lens materials, and overwriting the
+ * hook silently dropped the lens's Fresnel and gradient. Idempotent per material,
+ * since meshes share materials (Lens_L/Lens_R, frame/temples) and a second wrap
+ * would redefine vTempleZ and fail to compile. A repeat call only updates the
+ * fade values.
  * @param {THREE.MeshStandardMaterial} material
  * @param {{ start: number, end: number }} fade start = last fully-opaque local Z; end = fully-gone (more negative)
  */
-function applyTempleFade(material, fade) {
+export function applyTempleFade(material, fade) {
   material.transparent = true
-  material.customProgramCacheKey = () => `templeFade:${fade.start}:${fade.end}`
-  material.onBeforeCompile = (shader) => {
-    shader.uniforms.uTempleFadeStart = { value: fade.start }
-    shader.uniforms.uTempleFadeEnd = { value: fade.end }
+  const existing = material.userData.templeFade
+  if (existing) {
+    existing.uTempleFadeStart.value = fade.start
+    existing.uTempleFadeEnd.value = fade.end
+    return
+  }
+
+  const uniforms = {
+    uTempleFadeStart: { value: fade.start },
+    uTempleFadeEnd: { value: fade.end },
+  }
+  material.userData.templeFade = uniforms
+
+  const previous = material.onBeforeCompile
+  material.onBeforeCompile = (shader, renderer) => {
+    previous?.call(material, shader, renderer)
+    Object.assign(shader.uniforms, uniforms)
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vTempleZ;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vTempleZ = position.z;')
@@ -75,6 +95,10 @@ function applyTempleFade(material, fade) {
         '  float templeFade = smoothstep(uTempleFadeEnd, uTempleFadeStart, vTempleZ);\n  if (templeFade <= 0.002) discard;\n  gl_FragColor.a *= templeFade;\n#include <dithering_fragment>'
       )
   }
+  // The fade values are uniforms, so they do not need to be in the key.
+  const previousKey = material.customProgramCacheKey?.bind(material)
+  material.customProgramCacheKey = () =>
+    `${previousKey ? previousKey() : ''}|templeFade`
 }
 
 export class GlassesModelLoader {
