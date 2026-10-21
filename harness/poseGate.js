@@ -40,6 +40,7 @@ import { getGlassesConfig, getGlassesModelUrl, defaultGlassesKey, registerRuntim
 import { toEngineModelConfig } from '/src/tryon/fitMetadataAdapter.js'
 import { FrameSampler, profileSignals } from '/src/tracking/profileGuard.js'
 import { intrinsicsFromFov } from '/src/tracking/headPoseSolver.js'
+import { irisPdSample } from '/src/fit/pupillaryDistance.js'
 import { PROBE_FOV_DEG, frameBust, neckRig, probeCamera, rigPoint, truthQuaternion } from '/harness/probeGeometry.js'
 
 const q = new URLSearchParams(location.search)
@@ -324,6 +325,22 @@ async function buildEngine(W, H, fovDeg) {
       lms: DUMP_LANDMARKS && lms ? lms.map((p) => [Math.round(p.x * W * 10) / 10, Math.round(p.y * H * 10) / 10]) : undefined,
       signals,
       guardOpacity: loop.profileGuard ? loop._appliedGuardOpacity ?? 1 : null,
+      // True size: the wearer's PD estimate and the scale actually drawn.
+      pd: taps.fit?.pd ?? null,
+      drawnScale: shown ? glassesRoot.scale.x : null,
+      // This frame's own PD reading and iris size, gated or not, for tuning the
+      // estimate against face size.
+      pdSample: lms ? irisPdSample(lms, W, H) : null,
+      irisPx: lms?.length > 476
+        ? (Math.hypot((lms[469].x - lms[471].x) * W, (lms[469].y - lms[471].y) * H) +
+          Math.hypot((lms[474].x - lms[476].x) * W, (lms[474].y - lms[476].y) * H)) / 2
+        : null,
+      // Ungated: each iris, and the PD the pair reads before any gate.
+      irisPair: lms?.length > 476
+        ? [Math.hypot((lms[469].x - lms[471].x) * W, (lms[469].y - lms[471].y) * H),
+          Math.hypot((lms[474].x - lms[476].x) * W, (lms[474].y - lms[476].y) * H)]
+        : null,
+      pupilPx: lms?.length > 476 ? Math.hypot((lms[468].x - lms[473].x) * W, (lms[468].y - lms[473].y) * H) : null,
       diag,
     }
   }
@@ -539,6 +556,12 @@ async function run({ from = 0, to = Infinity, shotsAt = [], shotPrefix = 'gate',
       signals: reading.signals,
       diag: reading.diag ?? undefined,
       guardOpacity: reading.guardOpacity,
+      pd: reading.pd,
+      drawnScale: reading.drawnScale,
+      pdSample: reading.pdSample,
+      irisPx: reading.irisPx,
+      irisPair: reading.irisPair,
+      pupilPx: reading.pupilPx,
       mmPerPx: truthAnchor?.mmPerPx ?? null,
     })
     if (shots.has(i)) shotFiles[i] = await engine.shot(`${shotPrefix}-f${String(i).padStart(4, '0')}`)

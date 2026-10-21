@@ -1500,6 +1500,8 @@ export class RenderLoop {
         if (this.glassesRoot) this.glassesRoot.visible = false
         if (this.contactShadow) this.contactShadow.visible = false
         this.faceOccluder?.hide?.()
+        // The scan's frontal frames are the best ones for measuring the wearer's PD.
+        this.faceFitSolver?.observeFace?.({ landmarks, faceMatrix: pose.rawMatrix, camera: this.camera })
         this.hud?.update({
           calibrationReady: false,
           calibrationProgress: scanState.quality,

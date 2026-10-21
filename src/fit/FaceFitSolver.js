@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { coverNDC } from './coverMap.js'
 import { EYE_CORNER_LANDMARKS, SteadyNasion } from './steadyNasion.js'
+import { PupillaryDistanceEstimator, irisPdSample, trueSizeScale } from './pupillaryDistance.js'
 
 const DEFAULT_MIN_DEPTH = -1.8
 const DEFAULT_MAX_DEPTH = -0.22
@@ -53,6 +54,9 @@ function occluderDepthScale() {
 // rather than a foreshortened measurement -- cos would keep shrinking (and
 // double the noise gain doing it), so clamp and let the hold below carry it.
 const MAX_YAW_DEPTH_CORRECTION = Math.PI / 3 // 60 degrees
+
+/** Frame widths a model in real metres can have; outside, it keeps the fit. */
+const TRUE_SIZE_FRAME_WIDTH_M = { min: 0.1, max: 0.18 }
 // Where landmark 168 is trusted to teach the nasion's offset from the eye
 // corners: facing the camera. Pitch is looser than yaw because MediaPipe reads a
 // level head ~5 degrees pitched, and the offset is learned in that same frame.
@@ -315,12 +319,36 @@ export class FaceFitSolver {
       new URLSearchParams(window.location.search).get('steadynasion') === '1'
     )
     this._steadyNasion = steadyNasionOn ? new SteadyNasion() : null
+    // ?truesize=0 sizes the frame to the face again, for A/B.
+    const trueSizeOff = options.trueSize === false || (
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('truesize') === '0'
+    )
+    this._pd = trueSizeOff ? null : new PupillaryDistanceEstimator()
+  }
+
+  /** Feeds this frame to the PD estimate and returns the current estimate. */
+  /**
+   * Feeds one tracked frame to the PD estimate. Called from solve() AND while the
+   * face scan is still running (RenderLoop does not solve then): a shopper faces
+   * the camera at the start, which is exactly the stretch the scan consumes --
+   * sampling only once it finished left the kling12 reel with 5 PD samples from
+   * its whole frontal opening.
+   */
+  observeFace({ landmarks, faceMatrix, camera } = {}) {
+    if (!this._pd || !faceMatrix) return
+    const headEuler = new THREE.Euler().setFromQuaternion(decomposeMatrix(faceMatrix).quaternion, 'YXZ')
+    this._pd.add(irisPdSample(landmarks, camera?._videoW, camera?._videoH, {
+      yawDeg: THREE.MathUtils.radToDeg(headEuler.y),
+      pitchDeg: THREE.MathUtils.radToDeg(headEuler.x),
+    }))
   }
 
   /**
    * @param {{ pose?: any, landmarks?: any, faceMatrix?: any, scanProfile?: any, skuFitMetadata?: any, camera?: any }} [input]
    */
   solve({ pose, landmarks, faceMatrix, scanProfile, skuFitMetadata, camera } = {}) {
+    this.observeFace({ landmarks, faceMatrix, camera })
     if (!pose?.anchorPoints || !faceMatrix || !scanProfile?.isReady) {
       return null
     }
@@ -533,7 +561,28 @@ export class FaceFitSolver {
       : 0.068
 
     const skuScale = Number.isFinite(skuFitMetadata?.scaleMultiplier) ? skuFitMetadata.scaleMultiplier : 1
-    const fittedScale = targetWidth > 0 ? (targetWidth / naturalFrameWidth) * skuScale : 1
+    const faceFitScale = targetWidth > 0 ? (targetWidth / naturalFrameWidth) * skuScale : 1
+
+    // TRUE SIZE: the frame at its physical width against the wearer's measured PD
+    // (see pupillaryDistance.js), instead of stretched to the face's temple span.
+    // Only for frames whose size was AUTHORED: in real metres (a width outside a
+    // real frame's range means some other unit) and not rescaled by calibration
+    // -- a model it had to rescale was set to a canonical 145 mm, a guess that
+    // would show every such frame as large on a small face. Those keep the fit.
+    const pd = this._pd ? this._pd.estimate() : null
+    const physicalFrame = naturalFrameWidth >= TRUE_SIZE_FRAME_WIDTH_M.min &&
+      naturalFrameWidth <= TRUE_SIZE_FRAME_WIDTH_M.max &&
+      (skuFitMetadata?.modelScale ?? 1) === 1
+    // The eyes as the scene places them: each iris at its own depth, by the same
+    // mapping the nose anchor uses, so the frame is sized in the space it is drawn in.
+    const irisDepthScale = landmarkDepthToMetres(camera, baseDepth)
+    const sceneEyeSpacing = span(
+      anchorToWorld(pose.anchorPoints?.leftIris, camera, baseDepth, irisDepthScale),
+      anchorToWorld(pose.anchorPoints?.rightIris, camera, baseDepth, irisDepthScale),
+    )
+    const fittedScale = pd && physicalFrame && sceneEyeSpacing > 0
+      ? trueSizeScale(sceneEyeSpacing, pd.pdMm) * skuScale
+      : faceFitScale
 
     const limits = skuFitMetadata?.scaleLimits ?? { min: 0.85, max: 1.25 }
     const scale = THREE.MathUtils.clamp(fittedScale, limits.min, limits.max)
@@ -607,6 +656,10 @@ export class FaceFitSolver {
       // exact same value as the depth-hold here (no out-of-sync transition).
       headYaw: headEuler.y,
       fittedScaleRaw: fittedScale,
+      // The face-fitted scale the frame would have without true size, and the
+      // PD estimate behind the true one (null with ?truesize=0).
+      faceFitScale,
+      pd,
       scaleClamped,
       occlusionMesh: {
         landmarks,
