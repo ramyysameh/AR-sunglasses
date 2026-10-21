@@ -272,4 +272,33 @@ describe('RenderLoop guard opacity', () => {
     expect(frame.opacity).toBe(1)
     expect(frame.transparent).toBe(false)
   })
+
+  // The temple arms get NEW materials after the opacities are captured: the
+  // near-arm clip clones them (so clipping cannot cut a lens sharing the same
+  // material) and so does its behind-the-ear remainder. Left out of the fade,
+  // the guard hid the glasses and left a bare arm hanging from the ear -- seen
+  // on a real ~65 degree turn at guard opacity 0.03.
+  it('fades materials created after the opacities were captured, and restores them', () => {
+    const loop = new RenderLoop({ profileGuard: null })
+    const root = new THREE.Group()
+    const front = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial())
+    const arm = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial())
+    root.add(front, arm)
+    loop.glassesRoot = root
+    loop._baseOpacity = new Map([[front.material, { opacity: 1, transparent: false }], [arm.material, { opacity: 1, transparent: false }]])
+    loop._appliedGuardOpacity = 1
+
+    arm.material = arm.material.clone() // what applyNearArmClip does on the first frame
+    const behind = new THREE.Mesh(arm.geometry, arm.material.clone()) // its remainder
+    root.add(behind)
+
+    expect(loop._applyGuardOpacity(0.01)).toBe(false)
+    expect(arm.material.opacity).toBeCloseTo(0.01)
+    expect(behind.material.opacity).toBeCloseTo(0.01)
+
+    loop._applyGuardOpacity(1)
+    expect(arm.material.opacity).toBe(1)
+    expect(behind.material.opacity).toBe(1)
+    expect(arm.material.transparent).toBe(false)
+  })
 })
