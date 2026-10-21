@@ -41,6 +41,8 @@ import { toEngineModelConfig } from '/src/tryon/fitMetadataAdapter.js'
 import { FrameSampler, profileSignals } from '/src/tracking/profileGuard.js'
 import { intrinsicsFromFov } from '/src/tracking/headPoseSolver.js'
 import { irisPdSample } from '/src/fit/pupillaryDistance.js'
+import { halfWidthAt, toWorldPositions } from '/src/occlusion/headWidth.js'
+import { SHELL_INDEX_START } from '/src/occlusion/FaceOccluder.js'
 import { PROBE_FOV_DEG, frameBust, neckRig, probeCamera, rigPoint, truthQuaternion } from '/harness/probeGeometry.js'
 
 const q = new URLSearchParams(location.search)
@@ -57,6 +59,8 @@ const DUMP_LANDMARKS = q.get('lms') === '1'
 // ?diag=1: mark the near-arm cut on the shots and put it in the rows.
 const DIAG = q.get('diag') === '1'
 const HIDE_ARM = Number(q.get('hidearm')) || 0
+// ?templegap=1: how far each temple stands off the head, in the rows (templeGap).
+const TEMPLE_GAP = q.get('templegap') === '1'
 // ?truthlms=168.6....: give these landmarks the nasion's treatment -- the bust
 // surface under each on the frontal anchor frame, carried through every truth
 // pose -- so any landmark's drift can be scored, not just 168's. Rows then carry
@@ -304,6 +308,7 @@ async function buildEngine(W, H, fovDeg) {
     const lms = tracker.lastResult?.faceLandmarks?.[0]
     const nasion = lms?.[168]
     diag = DIAG ? readDiag(lms) : null
+    const templeGap = TEMPLE_GAP && shown ? readTempleGap(lms) : null
     // Candidate "landmarks are guessing" signals, recorded for tuning the guard.
     // overrun is read on every frame here (the guard itself only reads pixels
     // once the face is turned), so the rows show it head-on too.
@@ -342,8 +347,105 @@ async function buildEngine(W, H, fovDeg) {
         : null,
       pupilPx: lms?.length > 476 ? Math.hypot((lms[468].x - lms[473].x) * W, (lms[468].y - lms[473].y) * H) : null,
       diag,
+      templeGap,
     }
   }
+
+  /**
+   * ?templegap=1: how far each temple stands off the head.
+   *
+   * In the frame's own space (x lateral, z forward), at slices from the hinge
+   * (t = 0) back to the ear plane (t = 1, the tragion midpoint):
+   *   shellMm  the arm's INNER edge minus the head shell's half-width there, by
+   *            ray-casting the shell at the arm's height (what the splay aims at)
+   *   ovalMm   at the ear slice only: the inner edge minus the face oval's own
+   *            half-width at the tragion (234/454), i.e. off the skin
+   *   outerMm  the arm's OUTER edge minus the shell, i.e. how far the arm's
+   *            silhouette reaches past the head proxy
+   * World units x 1000 ("mm"). Plus overhangPx: in the view, the arm's outermost
+   * pixel in front of the ear past the face oval's 234/454 -- what a head-on
+   * look sees as "the arms stick out".
+   */
+  function readTempleGap(lms) {
+    const hinges = loop._hinges ?? []
+    const occ = loop.faceOccluder?.occluderMesh
+    if (!hinges.length || !occ?.visible || !lms) return null
+    glassesRoot.updateMatrixWorld(true)
+    occ.updateMatrixWorld(true)
+    const pos = occ.geometry.attributes.position
+    const world = toWorldPositions(pos.array, occ.matrixWorld.elements, new Float64Array(pos.array.length))
+    const shellIndex = occ.geometry.index.array.subarray(SHELL_INDEX_START)
+    const toLocal = new THREE.Matrix4().copy(glassesRoot.matrixWorld).invert()
+    const s = glassesRoot.scale.x
+    const mm = (local) => Math.round(local * s * 10000) / 10
+    const ear = [234, 454].map((i) => new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(occ.matrixWorld))
+    const earLocal = ear.map((e) => e.clone().applyMatrix4(toLocal))
+    const earZ = (earLocal[0].z + earLocal[1].z) / 2
+    const axX = new THREE.Vector3(1, 0, 0).applyQuaternion(glassesRoot.quaternion).normalize()
+    const axY = new THREE.Vector3(0, 1, 0).applyQuaternion(glassesRoot.quaternion).normalize()
+    const nose = toView(new THREE.Vector3().fromBufferAttribute(pos, 1).applyMatrix4(occ.matrixWorld))
+    const ovalU = [234, 454].map((i) => (1 - lms[i].x) * W)
+
+    const v = new THREE.Vector3()
+    const out = { splayDeg: round1(THREE.MathUtils.radToDeg(loop._splayAngle ?? 0)), headHalfMm: loop._headWidthMean ? Math.round(loop._headWidthMean * 10000) / 10 : null, arms: {} }
+    for (const hinge of hinges) {
+      const pts = []
+      let extremeU = null
+      for (const mesh of hinge.meshes) {
+        const p = mesh.geometry.attributes.position
+        mesh.updateWorldMatrix(true, false)
+        for (let i = 0; i < p.count; i += 1) {
+          v.fromBufferAttribute(p, i).applyMatrix4(mesh.matrixWorld)
+          const l = v.clone().applyMatrix4(toLocal)
+          pts.push(l)
+          if (l.z < earZ) continue
+          const u = toView(v).u
+          const d = Math.abs(u - nose.u)
+          if (extremeU == null || d > extremeU) extremeU = d
+        }
+      }
+      const hingeZ = hinge.hingeLocal.z
+      const slab = 0.003 / s
+      const slices = []
+      for (const t of [0.05, 0.25, 0.5, 0.75, 1]) {
+        const z = hingeZ + (earZ - hingeZ) * t
+        let inner = Infinity, outer = -Infinity, sy = 0, n = 0
+        for (const l of pts) {
+          if (Math.abs(l.z - z) > slab) continue
+          const lat = hinge.side * l.x
+          if (lat < inner) inner = lat
+          if (lat > outer) outer = lat
+          sy += l.y; n += 1
+        }
+        if (!n) { slices.push({ t, n: 0 }); continue }
+        const o = glassesRoot.localToWorld(new THREE.Vector3(0, sy / n, z))
+        const shellHalf = halfWidthAt(world, shellIndex, [o.x, o.y, o.z], [axX.x, axX.y, axX.z], [axY.x, axY.y, axY.z], 0)
+        const headHalf = halfWidthAt(world, occ.geometry.index.array, [o.x, o.y, o.z], [axX.x, axX.y, axX.z], [axY.x, axY.y, axY.z], 0)
+        const row = {
+          t,
+          innerMm: mm(inner),
+          // Off whatever of the occluder (face mesh or shell) the cast meets first.
+          headMm: headHalf == null ? null : Math.round((inner * s - headHalf) * 10000) / 10,
+          shellMm: shellHalf == null ? null : Math.round((inner * s - shellHalf) * 10000) / 10,
+          outerMm: shellHalf == null ? null : Math.round((outer * s - shellHalf) * 10000) / 10,
+        }
+        if (t === 1) {
+          const e = earLocal.find((x) => Math.sign(x.x) === hinge.side) ?? earLocal[0]
+          row.ovalMm = mm(inner - Math.abs(e.x))
+        }
+        slices.push(row)
+      }
+      // The face oval point on the same side of the nose as this arm.
+      const armU = toView(hinge.group.getWorldPosition(new THREE.Vector3())).u
+      const lmU = ovalU.find((u) => Math.sign(u - nose.u) === Math.sign(armU - nose.u)) ?? ovalU[0]
+      out.arms[hinge.side] = {
+        slices,
+        overhangPx: extremeU == null ? null : Math.round(extremeU - Math.abs(lmU - nose.u)),
+      }
+    }
+    return out
+  }
+  const round1 = (x) => Math.round(x * 10) / 10
 
   // In VIEW pixels (the mirrored, composited picture the shots show).
   const toView = (world) => {
@@ -555,6 +657,7 @@ async function run({ from = 0, to = Infinity, shotsAt = [], shotPrefix = 'gate',
       lms: reading.lms,
       signals: reading.signals,
       diag: reading.diag ?? undefined,
+      templeGap: reading.templeGap ?? undefined,
       guardOpacity: reading.guardOpacity,
       pd: reading.pd,
       drawnScale: reading.drawnScale,

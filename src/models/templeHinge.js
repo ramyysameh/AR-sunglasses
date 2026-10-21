@@ -113,9 +113,36 @@ export function selectArms(candidates, bounds) {
  * the skin-aimed version badly failed it while also having the shell eat 41%
  * of the temple. This constant is measured straight off the shell instead, and
  * the caller no longer subtracts any inflation term.
+ *
+ * WHY IT IS NOW 0.008, NOT 0.0148. That table predates drawing the near arm
+ * ON TOP of the occluder in front of the ear (applyNearArmClip), which is what
+ * reaching the ear on a turn now depends on -- the shell no longer gets a say
+ * there. Re-measured on the three Create-with-AI models with ?probe=1&mock=turn,
+ * the turn verdict does not move with this constant at all: 15/15 judged poses,
+ * zero arm holes and earGapRatio -0.05..-0.07 at both 0.0148 and 0.004.
+ *
+ * What it DOES move is the head-on look. 0.0148 is aimed at the joint, behind
+ * the ear, so at the ear plane it left the arm's inner edge 3-6 mm outside the
+ * shell and the arm 11-32 px past the face outline from the front: the arms
+ * visibly flared away from the head. Pose gate ?templegap=1, frontal medians:
+ *
+ *   clearance   splay    arm off shell at ear   past face outline
+ *   0.0148      17.8     +4.2 mm                13-14 px     (aviator, probe bust)
+ *   0.008       14.1     +0.2 mm                 5-6 px
+ *   0.004       11.9     -2.1 mm (into the head)  2-5 px
+ *
+ * 0.008 is the value that lands the arm ON the head at the ear: across all
+ * three models and four reels it reads -1..+2.3 mm off the shell, where 0.0148
+ * read +3..+6.4. Any tighter and the arm runs into the skull there.
+ * Tunable with ?templeclear.
  */
-export const TEMPLE_SHELL_CLEARANCE = 0.0148
+export const TEMPLE_SHELL_CLEARANCE = 0.008
 
+/** ?templeclear=<world units, 0..0.05>: override TEMPLE_SHELL_CLEARANCE for tuning. */
+export function resolveTempleClearance(search) {
+  const raw = parseFloat(new URLSearchParams(search ?? '').get('templeclear'))
+  return Number.isFinite(raw) && raw >= 0 && raw <= 0.05 ? raw : TEMPLE_SHELL_CLEARANCE
+}
 
 
 /**
@@ -123,7 +150,7 @@ export const TEMPLE_SHELL_CLEARANCE = 0.0148
  *
  * A guard on a bad head measurement, not a target. The solve asks for 24.65
  * degrees at the widest frame-to-head ratio in the current merchant band, so
- * this sits clear of the working range.
+ * this sits clear of the working range (the AI models solve 5-16 deg).
  */
 export const MAX_SPLAY_RAD = 0.6
 
@@ -449,17 +476,18 @@ function splitArm(mesh, group, cutZ) {
  *   (at 0.90, 24 scores 2/7 and 28 scores 8/8; at 1.12, 20 scores 0/8)
  *
  * This table is historical evidence for that superseded formula, not a current
- * prediction: under the shipped formula (TEMPLE_SHELL_CLEARANCE, ray-cast
- * headHalf) the same three frame-scale cases solve to 19.3 / 13.6 / 8.3 deg.
+ * prediction: under the ray-cast headHalf with the old 0.0148 clearance the
+ * same three frame-scale cases solved to 19.3 / 13.6 / 8.3 deg (less now --
+ * see TEMPLE_SHELL_CLEARANCE).
  *
  * @param {number} headHalf measured head half-width, world units
  * @param {number} armLateral where the arm sits at the joint, world units
  * @param {number} jointDepth how far back the joint is, world units
  * @returns {number} radians
  */
-export function solveSplay(headHalf, armLateral, jointDepth) {
+export function solveSplay(headHalf, armLateral, jointDepth, clearance = TEMPLE_SHELL_CLEARANCE) {
   if (!(jointDepth > 0) || !(headHalf > 0) || !Number.isFinite(armLateral)) return 0
-  const reach = headHalf + TEMPLE_SHELL_CLEARANCE - armLateral
+  const reach = headHalf + clearance - armLateral
   // Clamped at zero, not allowed to go negative: a frame already wider than the
   // head asks for a negative reach, and honouring it would rotate the arm
   // inward until it clamped through the cheek.

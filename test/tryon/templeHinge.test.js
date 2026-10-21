@@ -11,6 +11,7 @@ import {
   applyCurl,
   applyNearArmClip,
   nearArmSide,
+  resolveTempleClearance,
   solveSplay,
   applySplay,
   buildHinges,
@@ -36,11 +37,23 @@ describe('solveSplay', () => {
   const JOINT = 0.1243  // gripz
 
   it('places the arm outside the SHELL, which is what culls it', () => {
-    // Aiming at the skin instead put the arm inside the shell, and the shell ate
-    // it: Willow at -39 deg yaw measured earGapRatio +0.122 with 41% of the
-    // temple hidden, against -0.030 and 27% at the clearance used here.
+    // Aimed at the shell wall plus a small clearance at the JOINT, which sits
+    // behind the ear plane -- so at the ear the arm's inner edge lands on the
+    // shell rather than inside it (measured 0.2-1.2 mm off on the probe bust).
     const target = HEAD + TEMPLE_SHELL_CLEARANCE
     expect(solveSplay(HEAD, ARM, JOINT)).toBeCloseTo(Math.asin((target - ARM) / JOINT), 9)
+  })
+
+  it('takes a clearance override, and a tighter one closes the arms', () => {
+    const tight = solveSplay(HEAD, ARM, JOINT, 0.004)
+    expect(tight).toBeCloseTo(Math.asin((HEAD + 0.004 - ARM) / JOINT), 9)
+    expect(tight).toBeLessThan(solveSplay(HEAD, ARM, JOINT))
+  })
+
+  it('opens less than the clearance it replaced, which held the arms off the head', () => {
+    // 0.0148 left the arm 4-6 mm outside the shell at the ear and 12-20 px past
+    // the face outline head-on, on every AI model and reel measured.
+    expect(solveSplay(HEAD, ARM, JOINT)).toBeLessThan(solveSplay(HEAD, ARM, JOINT, 0.0148))
   })
 
   it('gives two frames on the same head nearly the same opening', () => {
@@ -502,11 +515,13 @@ describe('solveSplay across the plausible range of merchant frames', () => {
     // A real band, not the trivial bounds the implementation already
     // guarantees on its own (>= 0 from the reach clamp, < MAX_SPLAY_RAD's ~34
     // deg ceiling from the asin clamp) -- either of those would pass an
-    // implementation that just returned a constant 5 degrees. 5..30 deg is the
-    // range an upload in this band actually has to land in to look right.
+    // implementation that just returned a constant 3 degrees. 3..30 deg is the
+    // range an upload in this band actually has to land in to look right; the
+    // floor is low because wide-set arms need only a few degrees to meet the
+    // head (the AI round frame solves 4.9 on the probe bust).
     for (const frame of FRAMES) {
       const angle = deg(solveSplay(HEAD, frame.armLateral, frame.jointDepth))
-      expect(angle, frame.name).toBeGreaterThan(5)
+      expect(angle, frame.name).toBeGreaterThan(3)
       expect(angle, frame.name).toBeLessThan(30)
     }
   })
@@ -526,7 +541,7 @@ describe('solveSplay across the plausible range of merchant frames', () => {
   })
 
   it('asks for nothing when the arms already sit outside the shell', () => {
-    // 0.1100 is genuinely wider than HEAD + TEMPLE_SHELL_CLEARANCE (0.1067), so
+    // 0.1100 is genuinely wider than HEAD + TEMPLE_SHELL_CLEARANCE (0.0999), so
     // the reach the solve computes is negative and clamps to zero.
     expect(solveSplay(HEAD, 0.1100, 0.1241)).toBe(0)
   })
@@ -536,6 +551,17 @@ describe('solveSplay across the plausible range of merchant frames', () => {
     // move together if it is fat-fingered. This is the only assertion that would
     // catch 0.148 for 0.0148. The value comes from a harness sweep on three
     // frames -- see the constant's own doc comment for the table.
-    expect(TEMPLE_SHELL_CLEARANCE).toBe(0.0148)
+    expect(TEMPLE_SHELL_CLEARANCE).toBe(0.008)
+  })
+})
+
+describe('resolveTempleClearance', () => {
+  it('reads ?templeclear, and falls back to the constant on junk or out of range', () => {
+    expect(resolveTempleClearance('?templeclear=0.004')).toBe(0.004)
+    expect(resolveTempleClearance('?templeclear=0')).toBe(0)
+    expect(resolveTempleClearance('')).toBe(TEMPLE_SHELL_CLEARANCE)
+    expect(resolveTempleClearance('?templeclear=abc')).toBe(TEMPLE_SHELL_CLEARANCE)
+    expect(resolveTempleClearance('?templeclear=-0.01')).toBe(TEMPLE_SHELL_CLEARANCE)
+    expect(resolveTempleClearance('?templeclear=0.2')).toBe(TEMPLE_SHELL_CLEARANCE)
   })
 })

@@ -2,7 +2,7 @@
  * Main AR render loop that fuses face tracking, pose filtering, occlusion, and Three.js rendering.
  */
 import * as THREE from 'three'
-import { TEMPLE_BEHIND_EAR_KEEP_M, TEMPLE_CURL_RAD, TEMPLE_CUT_BEHIND_EAR_M, applyCurl, applyNearArmClip, applyOffset, applySplay, nearArmSide, buildHinges, solveSplay } from '../models/templeHinge.js'
+import { TEMPLE_BEHIND_EAR_KEEP_M, TEMPLE_CURL_RAD, TEMPLE_CUT_BEHIND_EAR_M, applyCurl, applyNearArmClip, applyOffset, applySplay, nearArmSide, buildHinges, resolveTempleClearance, solveSplay } from '../models/templeHinge.js'
 import { EAR_LANDMARKS, EYE_LANDMARKS, NOSE_LANDMARK, headFrame } from '../occlusion/headFrame.js'
 import { halfWidthAt, toWorldPositions } from '../occlusion/headWidth.js'
 import { SHELL_INDEX_START } from '../occlusion/FaceOccluder.js'
@@ -1090,7 +1090,8 @@ export class RenderLoop {
 
     let angle = 0
     for (const hinge of this._hinges) {
-      const solved = solveSplay(this._headWidthMean, hinge.armLateral * scale, hinge.jointDepth * scale)
+      this._templeClearance ??= resolveTempleClearance(typeof window !== 'undefined' ? window.location.search : '')
+      const solved = solveSplay(this._headWidthMean, hinge.armLateral * scale, hinge.jointDepth * scale, this._templeClearance)
       if (solved > angle) angle = solved
     }
 
