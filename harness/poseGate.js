@@ -48,6 +48,15 @@ const MODEL = q.get('model')
 // is a Create-with-AI model, because that is what merchants' shoppers wear.
 const FIT = q.has('fit') || q.has('model') ? q.get('fit') : '/calibrated/ai-classic-aviator.json'
 const DUMP_LANDMARKS = q.get('lms') === '1'
+// ?truthlms=168.6....: give these landmarks the nasion's treatment -- the bust
+// surface under each on the frontal anchor frame, carried through every truth
+// pose -- so any landmark's drift can be scored, not just 168's. Rows then carry
+// lmPx / lmTruth: {index: [u, v]} in raw-image px. Dots as well as commas,
+// because pose-gate.mjs splits --modes on commas.
+const TRUTH_LANDMARKS = (q.get('truthlms') ?? '')
+  .split(/[,.]/)
+  .map((s) => parseInt(s, 10))
+  .filter((n) => Number.isInteger(n) && n >= 0 && n < 478)
 const statusEl = document.getElementById('status')
 const status = (text) => { statusEl.textContent = text }
 
@@ -136,6 +145,16 @@ function projectTruth(bust, anchor, truth, W, H) {
   // Image px -> mm at the nasion's depth, in real millimetres (see metresPerUnit).
   const mmPerPx = ((2 * Math.tan(THREE.MathUtils.degToRad(PROBE_FOV_DEG / 2)) * depth) / H) * 1000 * anchor.metresPerUnit
   return { u: ((ndc.x + 1) / 2) * W, v: ((1 - ndc.y) / 2) * H, mmPerPx }
+}
+
+/** projectTruth for each ?truthlms anchor: {index: [u, v]}, or null if none. */
+function truthLandmarks(bust, lmAnchors, truth, W, H) {
+  const keys = Object.keys(lmAnchors)
+  if (!bust || !keys.length) return null
+  return Object.fromEntries(keys.map((k) => {
+    const t = projectTruth(bust, lmAnchors[k], truth, W, H)
+    return [k, [t.u, t.v]]
+  }))
 }
 
 // ---- engine -----------------------------------------------------------------
@@ -321,6 +340,7 @@ async function run({ from = 0, to = Infinity, shotsAt = [], shotPrefix = 'gate',
 
   const rows = []
   let anchor = null
+  const lmAnchors = {}
   const ahead = new Map()
   const prefetch = (i) => {
     if (i < total && !ahead.has(i)) ahead.set(i, loadFrame(i))
@@ -345,8 +365,20 @@ async function run({ from = 0, to = Infinity, shotsAt = [], shotPrefix = 'gate',
         anchor.metresPerUnit = metresPerUnit(bust, engine.lastLandmarks(), W, H)
         if (!anchor.metresPerUnit) anchor = null
       }
+      if (anchor && TRUTH_LANDMARKS.length) {
+        const lms = engine.lastLandmarks()
+        for (const k of TRUTH_LANDMARKS) {
+          const hit = lms?.[k] ? surfacePointUnder(bust, lms[k].x * W, lms[k].y * H, W, H) : null
+          if (hit) lmAnchors[k] = { ...hit, metresPerUnit: anchor.metresPerUnit }
+        }
+      }
     }
     const truthAnchor = bust && anchor && truth ? projectTruth(bust, anchor, truth, W, H) : null
+    const lmTruth = truth ? truthLandmarks(bust, lmAnchors, truth, W, H) : null
+    const lmNow = engine.lastLandmarks()
+    const lmPx = TRUTH_LANDMARKS.length && lmNow
+      ? Object.fromEntries(TRUTH_LANDMARKS.filter((k) => lmNow[k]).map((k) => [k, [lmNow[k].x * W, lmNow[k].y * H]]))
+      : null
 
     rows.push({
       frame: i,
@@ -363,6 +395,8 @@ async function run({ from = 0, to = Infinity, shotsAt = [], shotPrefix = 'gate',
       // MediaPipe's own nasion landmark: separates "the tracker lost the nose"
       // from "the fit put the frame somewhere else".
       nasionPx: reading.nasionPx,
+      lmPx,
+      lmTruth,
       lms: reading.lms,
       signals: reading.signals,
       guardOpacity: reading.guardOpacity,
@@ -380,6 +414,7 @@ async function run({ from = 0, to = Infinity, shotsAt = [], shotPrefix = 'gate',
       const t = projectTruth(bust, anchor, row.truth, W, H)
       row.truthAnchor = { u: t.u, v: t.v }
       row.mmPerPx = t.mmPerPx
+      row.lmTruth = truthLandmarks(bust, lmAnchors, row.truth, W, H)
     }
   }
 
