@@ -21,6 +21,11 @@
  *         (?model= with no value: the built-in default SKU), ?lms=1 to put every
  *         landmark in the rows (raw-image px) for tuning signals offline,
  *         ?profileguard=0 to run without the profile guard (on by default).
+ *
+ * Near-arm diagnostics: ?diag=1 marks the ear cut plane and the ear landmarks
+ * on the shots and records the cut, plus how deep the lifted arm sits behind
+ * the head shell, in the rows; ?hidearm=-1|1 draws without that side's arm;
+ * ?nofloor=1 / ?floor=<world units> turn the temple floor off or move it.
  */
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
@@ -48,6 +53,9 @@ const MODEL = q.get('model')
 // is a Create-with-AI model, because that is what merchants' shoppers wear.
 const FIT = q.has('fit') || q.has('model') ? q.get('fit') : '/calibrated/ai-classic-aviator.json'
 const DUMP_LANDMARKS = q.get('lms') === '1'
+// ?diag=1: mark the near-arm cut on the shots and put it in the rows.
+const DIAG = q.get('diag') === '1'
+const HIDE_ARM = Number(q.get('hidearm')) || 0
 // ?truthlms=168.6....: give these landmarks the nasion's treatment -- the bust
 // surface under each on the frontal anchor frame, carried through every truth
 // pose -- so any landmark's drift can be scored, not just 168's. Rows then carry
@@ -240,6 +248,30 @@ async function buildEngine(W, H, fovDeg) {
   const solve = loop.faceFitSolver.solve.bind(loop.faceFitSolver)
   loop.faceFitSolver.solve = (input) => (taps.fit = solve(input))
 
+  // ?hidearm=-1|1: draw without that side's temple arm (both of its pieces),
+  // to tell which arm a stray fragment belongs to.
+  if (HIDE_ARM) {
+    const clip = loop._clipNearArm.bind(loop)
+    loop._clipNearArm = (transform) => {
+      clip(transform)
+      for (const hinge of loop._hinges ?? []) {
+        if (hinge.side !== HIDE_ARM) continue
+        for (const mesh of hinge.meshes) {
+          mesh.visible = false
+          if (mesh.userData.templeBehind) mesh.userData.templeBehind.visible = false
+        }
+      }
+    }
+  }
+
+  // ?nofloor=1: never aim the temple floor, to see what it hides;
+  // ?floor=<world units>: aim it at that depth instead.
+  if (q.get('nofloor') === '1' || q.has('floor')) {
+    const aim = loop.faceOccluder.aimTempleFloor.bind(loop.faceOccluder)
+    const bound = parseFloat(q.get('floor'))
+    loop.faceOccluder.aimTempleFloor = (view) => aim(q.get('nofloor') === '1' ? null : view, bound)
+  }
+
   const pivot = modelConfig.bridgePivot?.clone?.() ?? new THREE.Vector3()
 
   /** The frame's nose-contact point in raw-image pixels (the view is mirrored). */
@@ -270,6 +302,7 @@ async function buildEngine(W, H, fovDeg) {
     }
     const lms = tracker.lastResult?.faceLandmarks?.[0]
     const nasion = lms?.[168]
+    diag = DIAG ? readDiag(lms) : null
     // Candidate "landmarks are guessing" signals, recorded for tuning the guard.
     // overrun is read on every frame here (the guard itself only reads pixels
     // once the face is turned), so the rows show it head-on too.
@@ -291,6 +324,110 @@ async function buildEngine(W, H, fovDeg) {
       lms: DUMP_LANDMARKS && lms ? lms.map((p) => [Math.round(p.x * W * 10) / 10, Math.round(p.y * H * 10) / 10]) : undefined,
       signals,
       guardOpacity: loop.profileGuard ? loop._appliedGuardOpacity ?? 1 : null,
+      diag,
+    }
+  }
+
+  // In VIEW pixels (the mirrored, composited picture the shots show).
+  const toView = (world) => {
+    const ndc = world.clone().project(camera)
+    return { u: ((ndc.x + 1) / 2) * W, v: ((1 - ndc.y) / 2) * H }
+  }
+  let diag = null
+  function readDiag(lms) {
+    const side = loop._nearArmSide ?? 0
+    const out = { side, mp: {} }
+    for (const i of [234, 454, 127, 356, 93, 323]) {
+      if (lms?.[i]) out.mp[i] = { u: (1 - lms[i].x) * W, v: lms[i].y * H }
+    }
+    if (side !== 0 && loop._clipCutAt && loop._clipForward) {
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(glassesRoot.quaternion)
+      // The cut plane's trace through the NEAR ear (the plane holds both ears),
+      // 12 mm back, running up the plane.
+      const f = loop._clipForward
+      const inPlaneUp = up.clone().addScaledVector(f, -up.dot(f)).normalize()
+      const nearEar = loop._clipA.distanceTo(camera.position) < loop._clipB.distanceTo(camera.position) ? loop._clipA : loop._clipB
+      const cutNear = nearEar.clone().addScaledVector(f, loop._clipCutAt.distanceTo(loop._clipMid) * -1)
+      out.cut = toView(cutNear)
+      out.cutUp = toView(cutNear.clone().addScaledVector(inPlaneUp, 0.04))
+      out.cutDown = toView(cutNear.clone().addScaledVector(inPlaneUp, -0.02))
+      out.earA = toView(loop._clipA)
+      out.earB = toView(loop._clipB)
+      out.origin = toView(loop._clipMid)
+      out.forward = loop._clipForward.toArray()
+      // Forward axis vs the frame's own +Z, and its pitch out of the frame's XZ.
+      const fz = new THREE.Vector3(0, 0, 1).applyQuaternion(glassesRoot.quaternion)
+      out.fwdVsFrameDeg = THREE.MathUtils.radToDeg(loop._clipForward.angleTo(fz))
+      out.fwdPitchDeg = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(loop._clipForward.dot(up), -1, 1)))
+      out.depth = liftedArmDepth(side)
+    }
+    return out
+  }
+  /**
+   * How far the lifted near arm sits BEHIND the head shell, along the view:
+   * for each arm vertex in front of the cut, the first shell surface on the
+   * camera ray to it, and the vertex's depth past that surface. The depth
+   * buffer's own opinion, which is what the temple floor is compared against
+   * (it hides what lies more than its bound past the shell).
+   */
+  const ray = new THREE.Raycaster()
+  const viewDir = new THREE.Vector3()
+  function liftedArmDepth(side) {
+    const occ = loop.faceOccluder.occluderMesh
+    const plane = loop._clipPlane
+    if (!occ?.visible || !plane) return null
+    occ.updateMatrixWorld(true)
+    // The shell is rewritten every frame; a stale sphere makes every ray miss.
+    occ.geometry.computeBoundingSphere()
+    camera.getWorldDirection(viewDir)
+    const v = new THREE.Vector3()
+    const dir = new THREE.Vector3()
+    const depths = []
+    for (const hinge of loop._hinges ?? []) {
+      if (hinge.side !== side) continue
+      for (const mesh of hinge.meshes) {
+        const pos = mesh.geometry.attributes.position
+        const stride = Math.max(1, Math.floor(pos.count / 300))
+        mesh.updateWorldMatrix(true, false)
+        for (let i = 0; i < pos.count; i += stride) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld)
+          if (plane.distanceToPoint(v) < 0) continue
+          dir.subVectors(v, camera.position)
+          const far = dir.length()
+          ray.set(camera.position, dir.normalize())
+          ray.far = far
+          const hit = ray.intersectObject(occ, false)[0]
+          // Nothing of the shell in front of it: the arm is clear of the head.
+          depths.push(hit ? v.clone().sub(hit.point).dot(viewDir) : 0)
+        }
+      }
+    }
+    if (!depths.length) return null
+    depths.sort((a, b) => a - b)
+    return { max: depths[depths.length - 1], p95: depths[Math.floor(depths.length * 0.95)], n: depths.length }
+  }
+
+  function drawDiag(ctx) {
+    if (!diag) return
+    const dot = (p, color, r = 4) => {
+      if (!p) return
+      ctx.fillStyle = color
+      ctx.beginPath()
+      ctx.arc(p.u, p.v, r, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    for (const p of Object.values(diag.mp)) dot(p, '#ff0', 3)
+    dot(diag.earA, '#0af', 5)
+    dot(diag.earB, '#0f0', 5)
+    dot(diag.origin, '#fff', 3)
+    if (diag.cut) {
+      ctx.strokeStyle = '#f00'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(diag.cutUp.u, diag.cutUp.v)
+      ctx.lineTo(diag.cutDown.u, diag.cutDown.v)
+      ctx.stroke()
+      dot(diag.cut, '#f00', 4)
     }
   }
 
@@ -309,6 +446,7 @@ async function buildEngine(W, H, fovDeg) {
     ctx.restore()
     // Same task as the render, so the drawing buffer is still intact.
     ctx.drawImage(loop.renderer.domElement, 0, 0, W, H)
+    drawDiag(ctx)
     const r = await fetch('/__shot', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -399,6 +537,7 @@ async function run({ from = 0, to = Infinity, shotsAt = [], shotPrefix = 'gate',
       lmTruth,
       lms: reading.lms,
       signals: reading.signals,
+      diag: reading.diag ?? undefined,
       guardOpacity: reading.guardOpacity,
       mmPerPx: truthAnchor?.mmPerPx ?? null,
     })

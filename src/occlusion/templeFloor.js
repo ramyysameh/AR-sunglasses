@@ -35,11 +35,31 @@
  * the head, not through it. GRIPZ and WILLOW show no drop at any bound at all,
  * at every pose in a +/-53 degree sweep.
  *
- * The value below is 1.5x the measured worst case, so ordinary variation
- * between faces cannot trip it, and it fails gracefully if it ever does: a few
- * pixels of arm at extreme yaw get occluded, which is nothing like the
- * eaten-from-the-cheek failure -- the ear-plane clip that prevents that is
- * untouched and independent.
+ * THAT SWEEP WAS TOO NARROW, and 0.015 tripped. The Create-with-AI models on the
+ * probe and real-face reels run much deeper, and the depth grows with yaw: rays
+ * near the side of the head cross the shell at a grazing angle, so an arm lying
+ * a few millimetres inside that fat shell sits centimetres behind it along the
+ * view. Pixels of near arm the floor removed, against no floor at all, summed
+ * over the turned frames of each reel:
+ *
+ *   bound                    0.015   0.025   0.035   0.045+
+ *   probe-wide   round        4113    1350       0        0
+ *                aviator      2652     703      76        0
+ *                tortoise     2566    1312     282     noise (<30, flat to 0.07)
+ *   hf-portrait  round        3306       2       0        0
+ *   pitchyaw     round        1377      53       0        0
+ *   kling        all three       0       0       0        0
+ *
+ * At 0.015 that was not "a few pixels": the near arm stopped 1-2 cm short of
+ * the ear at 40-60 degrees, and where the arm rose back out of the band, a
+ * detached triangle of it floated in the hair. With no floor every one of those
+ * frames draws the arm lying along the head and nothing through it.
+ *
+ * The deepest legitimate arm is therefore ~0.04, and the value below is 1.5x
+ * that, the same margin as before. It still bounds what it was built for -- an
+ * arm drawn through the skull to the far side would have to sit a whole head's
+ * half-width (~0.09) behind the near wall -- and the ear-plane clip that
+ * prevents the eaten-from-the-cheek failure is untouched and independent.
  *
  * It is a bound, not a proof of zero. The band has to be at least as wide as the
  * shell's own inaccuracy or the shell goes back to eating arms, which is the
@@ -52,7 +72,7 @@
  * How far behind the head surface the floor sits, in world units (~1.16 x
  * metres), measured along the view axis. See the sweep above.
  */
-export const TEMPLE_FLOOR_DEPTH = 0.015
+export const TEMPLE_FLOOR_DEPTH = 0.06
 
 /**
  * Column-major 4x4 that translates by `bound` along `viewDirection`.

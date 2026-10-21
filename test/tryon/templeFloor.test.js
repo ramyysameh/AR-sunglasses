@@ -76,12 +76,13 @@ describe('templeFloorMatrix', () => {
   })
 
   it('carries a bound clear of the deepest temple actually measured', () => {
-    // Swept on all three models: temple pixels are flat from 0.04 down to
-    // 0.010 and start dropping below it, so 0.010 is where the deepest temple
-    // actually sits. Tighter than that trims arm the engine draws on purpose;
-    // much looser and the bound stops meaning anything.
-    expect(TEMPLE_FLOOR_DEPTH).toBeGreaterThan(0.010)
-    expect(TEMPLE_FLOOR_DEPTH).toBeLessThan(0.025)
+    // Swept on the three Create-with-AI models over the turn reels: near-arm
+    // pixels stop changing at ~0.04 (deeper at more yaw), so that is where the
+    // deepest legitimate temple sits. 0.015 cut the arm short of the ear and
+    // left a floating fragment of it; much looser than a head's half-width and
+    // the bound stops meaning anything.
+    expect(TEMPLE_FLOOR_DEPTH).toBeGreaterThanOrEqual(0.045)
+    expect(TEMPLE_FLOOR_DEPTH).toBeLessThan(0.09)
   })
 })
 

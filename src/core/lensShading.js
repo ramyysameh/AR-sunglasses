@@ -73,6 +73,15 @@ export function lensCoverage(opacity, cosTheta, t, config) {
  * Patches one lens material. The mesh is needed for its geometry's vertical
  * extent; the gradient runs between the lowest and highest lens vertex.
  *
+ * Idempotent per material. A GLB usually has Lens_L and Lens_R share ONE
+ * material and the loader calls this once per mesh; wrapping onBeforeCompile a
+ * second time injected every declaration twice, so the lens program failed to
+ * compile ('vLensY' : redefinition) and the lenses did not draw at all. A
+ * repeat call now only widens the gradient's extent to cover both meshes and
+ * takes the latest config. One extent for both is right for a mirrored pair
+ * authored in the same space (all the current GLBs: identical y ranges, no node
+ * transforms); a pair at different heights would need the material cloned.
+ *
  * @param {import('three').Material} material
  * @param {import('three').Mesh} mesh
  * @param {{ fresnel: number, gradient: number }} config
@@ -83,10 +92,25 @@ export function applyLensShading(material, mesh, config) {
   const geometry = mesh?.geometry
   if (geometry && !geometry.boundingBox) geometry.computeBoundingBox?.()
   const box = geometry?.boundingBox
-  const bottom = box ? box.min.y : 0
+  let bottom = box ? box.min.y : 0
+  let top = box ? box.max.y : 1
+
+  const existing = material.userData.lensShading
+  if (existing) {
+    if (box) {
+      bottom = Math.min(bottom, existing.uLensBottom.value)
+      top = Math.max(top, existing.uLensBottom.value + existing.uLensHeight.value)
+    }
+    existing.uLensFresnel.value = config.fresnel
+    existing.uLensGradient.value = config.gradient
+    existing.uLensBottom.value = bottom
+    existing.uLensHeight.value = Math.max(top - bottom, 1e-6)
+    return
+  }
+
   // A degenerate (flat or missing) extent would divide by zero in the shader;
   // a tiny height just puts the whole lens at the "top" end of the gradient.
-  const height = box ? Math.max(box.max.y - box.min.y, 1e-6) : 1
+  const height = Math.max(top - bottom, 1e-6)
 
   const uniforms = {
     uLensFresnel: { value: config.fresnel },
