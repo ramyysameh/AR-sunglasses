@@ -40,7 +40,15 @@ const MAX_PREDICTION_SPEED = 1.2
 const MAX_POSITION_LEAD_M = 0.035
 // Rotation lead (ms) to cancel capture->detect->render latency during turns.
 const ROT_LEAD_MS = 75
-const MAX_ROT_LEAD_FRAMES = 1
+// The lead extrapolates at most this many camera frames of the smoothed angular
+// change. It now runs once per camera frame; when it also ran on every 60 Hz
+// render, on repeated landmarks, it came out near half a frame. A full frame
+// (33 ms at 30 fps) left the drawn yaw ~15% more jittery live and overshot fast
+// reversals. 0.8 measured on the pose gate (probe-landscape), against 1.0:
+// judder -5%, shake yaw MAE 5.2 -> 4.6 deg, 0.2 frame more lag, roll MAE
+// 0.41 -> 0.52 deg (limit 0.6; 0.65 breaks it). Smoothing the angular velocity
+// harder instead cut judder as much but added up to 0.6 frame of lag on shakes.
+const MAX_ROT_LEAD_FRAMES = 0.8
 const FALLBACK_FACE_DEPTH = -0.78
 const NEAREST_DISPLAY_DEPTH = -0.62
 // How many frontal samples the running size estimate averages over. Capped so it
