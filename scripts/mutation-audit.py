@@ -25,7 +25,7 @@ MUTS = [
     ("head width one-sided", "src/occlusion/headWidth.js",
      "return (right + left) / 2", "return right"),
     ("temple floor pushes TOWARD camera", "src/occlusion/templeFloor.js",
-     "export const TEMPLE_FLOOR_DEPTH = 0.015", "export const TEMPLE_FLOOR_DEPTH = -0.015"),
+     "export const TEMPLE_FLOOR_DEPTH = 0.06", "export const TEMPLE_FLOOR_DEPTH = -0.06"),
     ("frame-swap latch clear reverted", "src/core/RenderLoop.js",
      "    this._splayForWidth = null", "    // this._splayForWidth = null"),
     ("splay never re-solves (latch always set)", "src/core/RenderLoop.js",
