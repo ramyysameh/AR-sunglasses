@@ -19,6 +19,7 @@ import { ContactShadow, resolveContactShadowConfig } from './contactShadow.js'
 import { LightEstimateSmoother, estimateCameraLight, resolveLightEstimateEnabled } from './cameraLightEstimate.js'
 import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
 import { PoseInterpolator } from '../tracking/PoseInterpolator.js'
+import { DetectionScheduler } from '../tracking/DetectionScheduler.js'
 import { ProfileGuard, resolveProfileGuardEnabled } from '../tracking/profileGuard.js'
 import { intrinsicsFromFov } from '../tracking/headPoseSolver.js'
 
@@ -109,6 +110,8 @@ export class RenderLoop {
     this.lastRawQuat = null
     this.lastRawTimestamp = null
     this.lastGoodTransform = null
+    this._displayFrame = null
+    this._pipelineTimestamp = null
     this.lowQualityFrames = 0
     this.smoothedScale = null
     this.smoothedDepth = null
@@ -344,7 +347,7 @@ export class RenderLoop {
       tick: (frames = 1) => {
         for (let i = 0; i < frames; i += 1) {
           window.__mock?.step(1)
-          this._step()
+          this._step({ poll: true })
         }
       },
       /**
@@ -484,8 +487,31 @@ export class RenderLoop {
 
     if (!this.running) {
       this.running = true
+      this._detectionScheduler()
       this._frame()
     }
+  }
+
+  /**
+   * The detection scheduler for the current tracker and video, created on
+   * first use. It drives detection from requestVideoFrameCallback when the
+   * video has it (unless ?rvfc=0), else the render step detects inline.
+   */
+  _detectionScheduler() {
+    if (!this.faceTracker || !this.video) return null
+    const current = this.detectionScheduler
+    if (current && current.tracker === this.faceTracker && current.video === this.video) return current
+    current?.stop()
+    const param = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('rvfc')
+      : null
+    this.detectionScheduler = new DetectionScheduler({
+      video: this.video,
+      tracker: this.faceTracker,
+      useVideoFrames: param !== '0',
+    })
+    this.detectionScheduler.start()
+    return this.detectionScheduler
   }
 
   _resetTrackingState() {
@@ -498,6 +524,8 @@ export class RenderLoop {
     this.lastRawQuat = null
     this.lastRawTimestamp = null
     this.lastGoodTransform = null
+    this._displayFrame = null
+    this._pipelineTimestamp = null
     this.lowQualityFrames = 0
     this.lastPredictionTimestamp = null
     this.poseInterpolator?.reset?.()
@@ -543,6 +571,7 @@ export class RenderLoop {
   }
 
   _hideTrackedObjects(timestamp) {
+    this._displayFrame = null
     // A miss of a frame or two keeps the last drawn pose instead of blinking
     // the glasses off and on. As the face reaches the edge of the picture the
     // detector can miss every other frame, which blinked them at full opacity
@@ -1359,6 +1388,9 @@ export class RenderLoop {
 
   stop() {
     this.running = false
+    this.detectionScheduler?.stop()
+    this.detectionScheduler = null
+    this._displayFrame = null
 
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId)
@@ -1411,6 +1443,40 @@ export class RenderLoop {
     this.renderer.setSize(dispW, dispH, false)
   }
 
+  /**
+   * Redraws the last tracked frame at the interpolator's pose for this render.
+   * Returns false when there is nothing valid to redraw, and the full step runs.
+   */
+  _renderBetweenDetections(renderTimestamp) {
+    const frame = this._displayFrame
+    if (!frame || this.filtersNeedReset || this.glassesRoot !== frame.glassesRoot || !frame.glassesRoot?.parent) {
+      this._displayFrame = null
+      return false
+    }
+    const displayPose = this.poseInterpolator.sample(renderTimestamp)
+    if (!displayPose) return false
+    const displayPos = displayPose.position
+    const displayQuat = displayPose.quaternion
+    const framePos = this.modelConfig?.anchorMode === 'saddle'
+      ? repinSaddle(displayPos.clone(), this.modelConfig.bridgePivot, frame.solvedScale, frame.fitScale, displayQuat)
+      : displayPos
+    const transform = {
+      position: framePos,
+      quaternion: displayQuat,
+      scale: frame.fitScale,
+      anchorWorldPoints: frame.anchorWorldPoints,
+      occlusionMesh: frame.occlusionMesh,
+      occluderCorrection: displayPos.clone().sub(frame.tunedPosition),
+      occluderRotation: displayQuat.clone().multiply(frame.solvedQuaternion.clone().invert()),
+      occluderPivot: frame.tunedPosition.clone(),
+      fitSolution: frame.fitSolution,
+    }
+    this._applyTransform(transform)
+    this.lastGoodTransform = transform
+    this._render()
+    return true
+  }
+
   _frame() {
     if (!this.running) {
       return
@@ -1429,13 +1495,34 @@ export class RenderLoop {
    * glasses stay hidden, and every measurement comes back empty. Stepping this
    * by hand makes automated runs independent of whether anyone is watching --
    * and deterministic, since a step is a frame rather than a slice of wall time.
+   *
+   * Detection itself normally runs outside this step, once per presented video
+   * frame (DetectionScheduler, requestVideoFrameCallback). `poll` makes this
+   * step detect inline anyway, for harness steppers on an unpainted page.
+   *
+   * @param {{ poll?: boolean }} [options]
    */
-  _step() {
+  _step({ poll = false } = {}) {
     try {
       this._syncSize()
 
-      const timestamp = performance.now()
-      const result = this.faceTracker?.detect(this.video, timestamp)
+      const renderTimestamp = performance.now()
+      const detection = this._detectionScheduler()?.take(renderTimestamp, { poll }) ??
+        { fresh: false, timestamp: renderTimestamp }
+      const fresh = detection.fresh
+
+      // No new camera frame since the last render: move the drawn pose along
+      // the interpolator and draw. The filters, prediction and fit only step on
+      // a new observation, with that frame's own time.
+      if (!fresh && this._displayFrame && this._renderBetweenDetections(renderTimestamp)) {
+        return
+      }
+
+      // The frame's own time on a fresh detection, else the render's; kept
+      // monotonic for the time-based filters across the two.
+      const timestamp = Math.max(detection.timestamp, this._pipelineTimestamp ?? -Infinity)
+      this._pipelineTimestamp = timestamp
+      const result = this.faceTracker?.isReady?.(this.video) === false ? null : this.faceTracker?.lastResult
 
       if (!result?.facialTransformationMatrixes?.length) {
         this._hideTrackedObjects(timestamp)
@@ -1477,7 +1564,7 @@ export class RenderLoop {
 
       // On fresh detections only: the guard's fade is time-based, and a repeated
       // camera frame carries no new evidence about the landmarks.
-      if (this.profileGuard && this.faceTracker?.lastDetectionWasFresh !== false &&
+      if (this.profileGuard && fresh &&
         this.camera?._videoW > 0 && this.camera?._videoH > 0) {
         this.guardOpacity = this.profileGuard.update(
           landmarks,
@@ -1546,10 +1633,10 @@ export class RenderLoop {
       const basePosition = fitSolution.glassesTransform.position
       const tunedPosition = basePosition.clone().add(new THREE.Vector3(xOffset, yOffset, zOffset))
 
-      // A 60 Hz render loop commonly sees each 30 Hz camera frame twice. Keep
-      // filtering toward the cached target on the in-between render, but only
-      // update motion classification from a genuinely new observation.
-      if (this.faceTracker?.lastDetectionWasFresh !== false) {
+      // Motion classification only from a genuinely new observation. (The
+      // filters below still run here when no frame has been tracked yet; once
+      // one has, renders between detections take _renderBetweenDetections.)
+      if (fresh) {
         this._updateAdaptiveFilters(tunedPosition, fitSolution.glassesTransform.quaternion, timestamp)
       }
 
@@ -1586,8 +1673,7 @@ export class RenderLoop {
         ? predictedPos.z
         : THREE.MathUtils.lerp(this.smoothedDepth, predictedPos.z, depthAlpha)
       predictedPos.z = this.smoothedDepth
-      const freshDetection = this.faceTracker?.lastDetectionWasFresh !== false
-      if (freshDetection) {
+      if (fresh) {
         this.poseInterpolator.push(
           predictedPos,
           predictedQuat,
@@ -1641,6 +1727,20 @@ export class RenderLoop {
       }
 
       this._applyTransform(transform)
+      // What a render between detections needs to redraw this frame at a later
+      // point of the interpolation.
+      this._displayFrame = fresh
+        ? {
+            glassesRoot: glassesModel,
+            tunedPosition: tunedPosition.clone(),
+            solvedQuaternion: fitSolution.glassesTransform.quaternion.clone(),
+            solvedScale: fitSolution.glassesTransform.scale,
+            fitScale,
+            anchorWorldPoints,
+            occlusionMesh: fitSolution.occlusionMesh,
+            fitSolution,
+          }
+        : null
       this.lastGoodTransform = {
         position: framePos.clone(),
         quaternion: displayQuat.clone(),

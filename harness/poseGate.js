@@ -20,7 +20,9 @@
  *         public/> to calibrate a GLB through the register-model path
  *         (?model= with no value: the built-in default SKU), ?lms=1 to put every
  *         landmark in the rows (raw-image px) for tuning signals offline,
- *         ?profileguard=0 to run without the profile guard (on by default).
+ *         ?profileguard=0 to run without the profile guard (on by default),
+ *         ?rvfc=0 to detect inline in _step (the engine's fallback when a video
+ *         has no requestVideoFrameCallback) instead of per presented frame.
  *
  * Near-arm diagnostics: ?diag=1 marks the ear cut plane and the ear landmarks
  * on the shots and records the cut, plus how deep the lifted arm sits behind
@@ -202,6 +204,23 @@ async function buildEngine(W, H, fovDeg) {
     readyState: { get: () => 4 },
     currentTime: { get: () => frameIndex / FPS },
   })
+  // The engine detects from requestVideoFrameCallback. A canvas has none, and
+  // a real one would fire on the page's paint clock, not this virtual one, so
+  // the driver presents each frame itself (presentVideoFrame, in step()).
+  // ?rvfc=0 leaves it off: the engine then detects inline in _step, its
+  // fallback path. Both paths must score the same.
+  let videoFrameCallbacks = []
+  if (q.get('rvfc') !== '0') {
+    video.requestVideoFrameCallback = (cb) => videoFrameCallbacks.push(cb)
+    video.cancelVideoFrameCallback = () => { videoFrameCallbacks = [] }
+  }
+  const presentVideoFrame = () => {
+    const due = videoFrameCallbacks
+    videoFrameCallbacks = []
+    for (const cb of due) {
+      cb(clock, { presentedFrames: frameIndex + 1, mediaTime: frameIndex / FPS, expectedDisplayTime: clock + FRAME_MS })
+    }
+  }
   const videoCtx = video.getContext('2d')
   const sampler = new FrameSampler()
 
@@ -241,6 +260,8 @@ async function buildEngine(W, H, fovDeg) {
   loop.faceTracker = tracker
   loop.landmarkProcessor = landmarkProcessor
   loop.modelConfig = modelConfig
+  // Register for the first video frame now, as start() would.
+  loop._detectionScheduler()
 
   // Taps: the raw pose and the fit, as the loop computed them this step.
   const taps = { pose: null, fit: null }
@@ -287,6 +308,7 @@ async function buildEngine(W, H, fovDeg) {
     videoCtx.drawImage(bitmap, 0, 0, W, H)
     taps.pose = null
     taps.fit = null
+    presentVideoFrame()
     loop._step()
 
     const shown = glassesRoot.visible && taps.fit
