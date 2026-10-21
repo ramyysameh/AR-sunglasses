@@ -144,6 +144,122 @@ export function resolveShellTaper(search) {
 }
 
 /**
+ * OUTER EARS: one depth-only box per side, standing out from the skull behind
+ * the tragion.
+ *
+ * The shell is a skull with no ears, and the temple's ear sleeve hangs exactly
+ * where the ear should be hiding it. Measured head-local on the aviator, frontal
+ * (span 189 mm): the sleeves reach |x| 92-112 mm, y +4 to -28, z -78 to -137,
+ * against an ear ring at most 109 mm out. Nothing covered the sleeve, so it drew
+ * as an amber speck beside the head.
+ *
+ * Which side showed depended on landmark noise, not on the glasses. The face
+ * oval's two sides sat at +99.3 and -89.9 mm on that frame -- 9.4 mm lopsided,
+ * while the glasses were centred to within 1 mm -- so the wide side's ear ring
+ * happened to cover its sleeve and the narrow side's did not. The boxes are
+ * therefore placed SYMMETRICALLY: both at the mean half-width of the two
+ * tragions, about the head origin (the midline landmarks the glasses also
+ * centre on).
+ *
+ * Every extent is a fraction of the temple span, like the shell's own knobs:
+ *
+ *   inset     0.02  inner face sunk into the skull, so there is no slit between
+ *                   ear and shell wall
+ *   front     0.06  ~11 mm behind the tragion: in line with where the lifted near
+ *                   arm is cut (TEMPLE_CUT_BEHIND_EAR_M, 12 mm), so frontal and
+ *                   turned views end the arm in the same place
+ *   back      0.45  ~85 mm behind it, past the hook's rearmost point (~79 mm)
+ *   top       0.15  ~28 mm above the tragion: up at the helix, ABOVE the arm,
+ *                   which a real ear also rises over
+ *   bottom    0.20  ~38 mm below it, past the hook's lowest point (~12 mm) to the
+ *                   lobe
+ *
+ * Only affects arms drawn AFTER the shell. The lifted near arm (renderOrder -2,
+ * past NEAR_ARM_YAW_DEG) is drawn first and cannot be hidden by these, so the
+ * turned-head arm fixed in templeFloor is untouched. Kept out of the shell's own
+ * index buffer for the same kind of reason: the floor shares that geometry, and
+ * the temple splay casts against it to measure head width.
+ */
+export const EAR_INSET_RATIO = 0.02
+export const EAR_FRONT_RATIO = 0.06
+export const EAR_BACK_RATIO = 0.45
+export const EAR_TOP_RATIO = 0.15
+export const EAR_BOTTOM_RATIO = 0.20
+
+/**
+ * How far the ear stands out from the skull, as a fraction of the temple span.
+ *
+ * 0.13 (~25 mm at span 189) clears the sleeve's outer edge (112 mm) from a
+ * 95 mm half-width with ~7 mm to spare; a real pinna stands 15-25 mm proud.
+ * ?earwide=0 removes the ears entirely, for A/B against the old shell.
+ */
+export const DEFAULT_EAR_PROTRUSION = 0.13
+
+/** ?earwide=<0..1> */
+export function resolveEarProtrusion(search) {
+  return resolve(search, 'earwide', DEFAULT_EAR_PROTRUSION, 1)
+}
+
+export const EAR_VERTEX_COUNT = 16
+
+/**
+ * Corners of both ear boxes, in the head's own frame (+X lateral, -Z back).
+ *
+ * @param {{x:number,y:number,z:number}} tragionA one tragion, head-local
+ * @param {{x:number,y:number,z:number}} tragionB the other, head-local
+ * @param {number} span temple span
+ * @param {number} protrusion fraction of span the ear stands out
+ * @param {Float32Array} [out] EAR_VERTEX_COUNT * 3 floats
+ * @returns {Float32Array} box corners, side -X then +X, 8 each; all collapsed
+ *   to the origin when protrusion is 0 (no ears)
+ */
+export function earBoxVertices(tragionA, tragionB, span, protrusion, out = new Float32Array(EAR_VERTEX_COUNT * 3)) {
+  if (!(protrusion > 0) || !(span > 0)) {
+    out.fill(0)
+    return out
+  }
+  const halfWidth = (Math.abs(tragionA.x) + Math.abs(tragionB.x)) / 2
+  const y = (tragionA.y + tragionB.y) / 2
+  const z = (tragionA.z + tragionB.z) / 2
+  const xs = [halfWidth - EAR_INSET_RATIO * span, halfWidth + protrusion * span]
+  const ys = [y - EAR_BOTTOM_RATIO * span, y + EAR_TOP_RATIO * span]
+  const zs = [z - EAR_BACK_RATIO * span, z - EAR_FRONT_RATIO * span]
+
+  let o = 0
+  for (const side of [-1, 1]) {
+    // Corner c: bit 0 = outer x, bit 1 = top, bit 2 = front.
+    for (let c = 0; c < 8; c += 1) {
+      out[o++] = side * xs[c & 1]
+      out[o++] = ys[(c >> 1) & 1]
+      out[o++] = zs[(c >> 2) & 1]
+    }
+  }
+  return out
+}
+
+/**
+ * Twelve triangles per box, closed. Depth-only and DoubleSide like the shell,
+ * so winding does not matter.
+ *
+ * @returns {number[]} flat triangle index list over EAR_VERTEX_COUNT vertices
+ */
+export function earBoxTriangles() {
+  // Faces of a box whose corner c has bits (x, y, z), as quads of corners.
+  const faces = [
+    [0, 2, 6, 4], [1, 3, 7, 5], // inner, outer
+    [0, 1, 5, 4], [2, 3, 7, 6], // bottom, top
+    [0, 1, 3, 2], [4, 5, 7, 6], // back, front
+  ]
+  const indices = []
+  for (const base of [0, 8]) {
+    for (const [a, b, c, d] of faces) {
+      indices.push(base + a, base + b, base + c, base + a, base + c, base + d)
+    }
+  }
+  return indices
+}
+
+/**
  * Wall + back cap for the extruded ring.
  *
  * The occluder material is DoubleSide and only ever writes depth, so winding is

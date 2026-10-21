@@ -5,9 +5,13 @@ import * as THREE from 'three'
 import { TEMPLE_FLOOR_DEPTH, templeFloorMatrix } from './templeFloor.js'
 import { FaceLandmarker } from '@mediapipe/tasks-vision'
 import {
+  EAR_VERTEX_COUNT,
   FACE_OVAL_RING,
   RING_LENGTH,
   TEMPLE_SPAN_LANDMARKS,
+  earBoxTriangles,
+  earBoxVertices,
+  resolveEarProtrusion,
   resolveShellDepthRatio,
   resolveShellLateralRatio,
   resolveShellTaper,
@@ -42,6 +46,12 @@ const EXTRUDED_START = EAR_RING_START
 const TEMPLE_SPAN_VERTEX = {
   left: TEMPLE_SPAN_LANDMARKS.left,
   right: TEMPLE_SPAN_LANDMARKS.right,
+}
+
+// Where the two tragions sit in the smoothed head-local ring, for the ears.
+const TRAGION_RING_SLOT = {
+  left: FACE_OVAL_RING.indexOf(TEMPLE_SPAN_LANDMARKS.left),
+  right: FACE_OVAL_RING.indexOf(TEMPLE_SPAN_LANDMARKS.right),
 }
 
 /**
@@ -143,6 +153,10 @@ export class FaceOccluder {
     this.scene = null
     this.occluderMesh = null
     this.innerOccluderMesh = null
+    this.earOccluderMesh = null
+    this.earProtrusion = Number.isFinite(options.earProtrusion)
+      ? options.earProtrusion
+      : resolveEarProtrusion(typeof window !== 'undefined' ? window.location.search : '')
     this.shellDepthRatio = Number.isFinite(options.shellDepthRatio)
       ? options.shellDepthRatio
       : resolveShellDepthRatio(typeof window !== 'undefined' ? window.location.search : '')
@@ -206,8 +220,21 @@ export class FaceOccluder {
     this.innerOccluderMesh.visible = false
     this.innerOccluderMesh.matrix.identity()
 
+    // The outer ears (see headShell.js): their own geometry, so neither the
+    // floor nor the head-width cast sees them. Same draw slot as the shell.
+    const earGeometry = new THREE.BufferGeometry()
+    earGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(EAR_VERTEX_COUNT * 3), 3))
+    earGeometry.setIndex(earBoxTriangles())
+    this.earOccluderMesh = new THREE.Mesh(earGeometry, material)
+    this.earOccluderMesh.renderOrder = OCCLUDER_RENDER_ORDER
+    this.earOccluderMesh.matrixAutoUpdate = false
+    this.earOccluderMesh.frustumCulled = false
+    this.earOccluderMesh.visible = false
+    this.earOccluderMesh.matrix.identity()
+
     this.scene.add(this.occluderMesh)
     this.scene.add(this.innerOccluderMesh)
+    this.scene.add(this.earOccluderMesh)
 
     return this
   }
@@ -253,6 +280,15 @@ export class FaceOccluder {
 
     for (let vertex = EXTRUDED_START; vertex < VERTEX_COUNT; vertex += 1) {
       position.setXYZ(vertex, x, y, z)
+    }
+
+    // The ears are posed from the same ring, so they fold away with it.
+    const ears = this.earOccluderMesh?.geometry.attributes.position
+    if (ears) {
+      for (let vertex = 0; vertex < EAR_VERTEX_COUNT; vertex += 1) {
+        ears.setXYZ(vertex, x, y, z)
+      }
+      ears.needsUpdate = true
     }
   }
 
@@ -358,6 +394,35 @@ export class FaceOccluder {
     // the cap flat and inside the ring's own silhouette. It only has to seal the
     // volume, not model the back of the skull.
     position.setXYZ(CAP_VERTEX, capX / RING_LENGTH, capY / RING_LENGTH, capZ / RING_LENGTH)
+
+    this._updateEars(headQuaternion, ox + cx, oy + cy, oz + cz, span)
+  }
+
+  /**
+   * Poses the outer ears from the smoothed head-local tragions, the same way
+   * the ring is posed: built in the head's frame, rotated by the frame's
+   * quaternion, placed at the head origin.
+   */
+  _updateEars(headQuaternion, px, py, pz, span) {
+    const ears = this.earOccluderMesh?.geometry.attributes.position
+    if (!ears) return
+
+    const r = this._ringLocal
+    const at = (slot) => ({ x: r[slot * 3], y: r[slot * 3 + 1], z: r[slot * 3 + 2] })
+    const local = earBoxVertices(
+      at(TRAGION_RING_SLOT.left),
+      at(TRAGION_RING_SLOT.right),
+      span,
+      this.earProtrusion,
+      (this._earLocal ??= new Float32Array(EAR_VERTEX_COUNT * 3)),
+    )
+    const v = (this._earTmp ??= new THREE.Vector3())
+    for (let vertex = 0; vertex < EAR_VERTEX_COUNT; vertex += 1) {
+      const i = vertex * 3
+      v.set(local[i], local[i + 1], local[i + 2]).applyQuaternion(headQuaternion)
+      ears.setXYZ(vertex, px + v.x, py + v.y, pz + v.z)
+    }
+    ears.needsUpdate = true
   }
 
   updateFromFaceMesh(
@@ -457,11 +522,17 @@ export class FaceOccluder {
     if (this.innerOccluderMesh) {
       this.innerOccluderMesh.visible = false
     }
+    if (this.earOccluderMesh) {
+      this.earOccluderMesh.visible = false
+    }
   }
 
   show() {
     if (this.occluderMesh) {
       this.occluderMesh.visible = true
+    }
+    if (this.earOccluderMesh) {
+      this.earOccluderMesh.visible = true
     }
     // Comes back WITH the shell. hide()/show() around a measurement pass would
     // otherwise leave the floor off until the next aim, and a frame with the
