@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { coverNDC } from './coverMap.js'
+import { EYE_CORNER_LANDMARKS, SteadyNasion } from './steadyNasion.js'
 
 const DEFAULT_MIN_DEPTH = -1.8
 const DEFAULT_MAX_DEPTH = -0.22
@@ -52,6 +53,11 @@ function occluderDepthScale() {
 // rather than a foreshortened measurement -- cos would keep shrinking (and
 // double the noise gain doing it), so clamp and let the hold below carry it.
 const MAX_YAW_DEPTH_CORRECTION = Math.PI / 3 // 60 degrees
+// Where landmark 168 is trusted to teach the nasion's offset from the eye
+// corners: facing the camera. Pitch is looser than yaw because MediaPipe reads a
+// level head ~5 degrees pitched, and the offset is learned in that same frame.
+const NASION_LEARN_MAX_YAW = THREE.MathUtils.degToRad(5)
+const NASION_LEARN_MAX_PITCH = THREE.MathUtils.degToRad(15)
 
 // Where the IPD depth estimate stops being a measurement. Both values are
 // measured, not guessed -- see the `trust` comment in solve().
@@ -274,6 +280,14 @@ export class FaceFitSolver {
     this.fallbackDepth = options.fallbackDepth ?? DEFAULT_FALLBACK_DEPTH
     this._smoothForeshorten = null
     this._heldDepth = null
+    // OFF by default; ?steadynasion=1 turns it on. It fixes the CG bust but moves
+    // real faces the other way, and there is no real-face truth to say which is
+    // right -- see steadyNasion.js.
+    const steadyNasionOn = options.steadyNasion === true || (
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('steadynasion') === '1'
+    )
+    this._steadyNasion = steadyNasionOn ? new SteadyNasion() : null
   }
 
   /**
@@ -397,9 +411,19 @@ export class FaceFitSolver {
     //
     // Same bug class as the landmark-depth unit error and the yaw foreshortening:
     // a single scalar standing in for a quantity that actually varies.
-    const bridgeSurfaceWorld = pose.anchorPoints?.bridgeTop
+    const landmarkNasionWorld = pose.anchorPoints?.bridgeTop
       ? anchorToWorld(pose.anchorPoints.bridgeTop, camera, baseDepth, landmarkDepthToMetres(camera, baseDepth))
       : null
+    // Opt-in (?steadynasion=1): correct 168's vertical drift through a turn from
+    // the eye corners (see steadyNasion.js). Off, the frame sits on 168 as before.
+    const bridgeSurfaceWorld = !this._steadyNasion ? landmarkNasionWorld : this._steadyNasion.update(
+      landmarkNasionWorld,
+      EYE_CORNER_LANDMARKS.map((i) => (landmarks?.[i]
+        ? anchorToWorld(landmarks[i], camera, baseDepth, landmarkDepthToMetres(camera, baseDepth))
+        : null)),
+      quaternion,
+      Math.abs(headEuler.y) < NASION_LEARN_MAX_YAW && Math.abs(headEuler.x) < NASION_LEARN_MAX_PITCH,
+    )
 
     const bridgeWorld = anchorWorldPoints.bridgeCenter ?? anchorWorldPoints.bridgeTop
     const irisWorld = anchorWorldPoints.irisCenter
