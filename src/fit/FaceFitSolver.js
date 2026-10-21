@@ -319,12 +319,14 @@ export class FaceFitSolver {
       new URLSearchParams(window.location.search).get('steadynasion') === '1'
     )
     this._steadyNasion = steadyNasionOn ? new SteadyNasion() : null
-    // ?truesize=0 sizes the frame to the face again, for A/B.
-    const trueSizeOff = options.trueSize === false || (
+    // OFF by default; ?truesize=1 turns it on. Shipped on, frames read too big on
+    // real faces -- 12-23% larger than the face fit -- so the face fit is back as
+    // the default while true size is compared on a phone.
+    const trueSizeOn = options.trueSize === true || (
       typeof window !== 'undefined' &&
-      new URLSearchParams(window.location.search).get('truesize') === '0'
+      new URLSearchParams(window.location.search).get('truesize') === '1'
     )
-    this._pd = trueSizeOff ? null : new PupillaryDistanceEstimator()
+    this._pd = trueSizeOn ? new PupillaryDistanceEstimator() : null
   }
 
   /** Feeds this frame to the PD estimate and returns the current estimate. */
@@ -657,7 +659,7 @@ export class FaceFitSolver {
       headYaw: headEuler.y,
       fittedScaleRaw: fittedScale,
       // The face-fitted scale the frame would have without true size, and the
-      // PD estimate behind the true one (null with ?truesize=0).
+      // PD estimate behind the true one (null unless ?truesize=1).
       faceFitScale,
       pd,
       scaleClamped,

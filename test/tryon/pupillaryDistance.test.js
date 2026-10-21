@@ -93,16 +93,18 @@ describe('PupillaryDistanceEstimator', () => {
 })
 
 describe('FaceFitSolver true size switch', () => {
-  it('measures PD by default and not with trueSize: false (?truesize=0)', async () => {
+  // Shipped on, frames read too big on real faces; the face fit is the default
+  // until true size has been judged on a phone.
+  it('keeps the face fit by default and measures PD only with trueSize: true (?truesize=1)', async () => {
     const { FaceFitSolver } = await import('../../src/fit/FaceFitSolver.js')
-    expect(new FaceFitSolver()._pd).toBeInstanceOf(PupillaryDistanceEstimator)
-    expect(new FaceFitSolver({ trueSize: false })._pd).toBeNull()
+    expect(new FaceFitSolver()._pd).toBeNull()
+    expect(new FaceFitSolver({ trueSize: true })._pd).toBeInstanceOf(PupillaryDistanceEstimator)
   })
 
   it('learns the PD from frames seen before the face scan finishes', async () => {
     const THREE = await import('three')
     const { FaceFitSolver } = await import('../../src/fit/FaceFitSolver.js')
-    const solver = new FaceFitSolver()
+    const solver = new FaceFitSolver({ trueSize: true })
     const camera = { _videoW: W, _videoH: H }
     const frontal = new THREE.Matrix4()
     for (let i = 0; i < PD_MIN_SAMPLES; i += 1) solver.observeFace({ landmarks: face(), faceMatrix: frontal, camera })
