@@ -81,6 +81,33 @@ describe('applyLensShading', () => {
     expect(mesh.material.color.toArray()).toEqual([0.1, 0.3, 0.2].map((v) => expect.closeTo(v, 6)))
   })
 
+  // Lens_L and Lens_R share one material in the GLBs, and the loader patches
+  // per mesh. Injecting twice redefined vLensY and the uniforms, so the lens
+  // program failed to compile and the lenses vanished.
+  it('injects its declarations once when two meshes share the material', () => {
+    const left = lensMesh()
+    const right = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.06), left.material)
+    applyLensShading(left.material, left, { fresnel: 0.6, gradient: 0.4 })
+    applyLensShading(left.material, right, { fresnel: 0.6, gradient: 0.4 })
+    const shader = {
+      uniforms: {},
+      vertexShader: THREE.ShaderLib.physical.vertexShader,
+      fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+    }
+    left.material.onBeforeCompile(shader, null)
+    const count = (src, s) => src.split(s).length - 1
+    expect(count(shader.vertexShader, 'varying float vLensY;')).toBe(1)
+    expect(count(shader.vertexShader, 'vLensY = position.y;')).toBe(1)
+    for (const decl of ['varying float vLensY;', 'uniform float uLensFresnel;', 'uniform float uLensHeight;']) {
+      expect(count(shader.fragmentShader, decl)).toBe(1)
+    }
+    expect(count(shader.fragmentShader, 'lensF * uLensFresnel')).toBe(1)
+    expect(count(left.material.customProgramCacheKey(), '|lensShading')).toBe(1)
+    // One extent covering both meshes.
+    expect(shader.uniforms.uLensBottom.value).toBeCloseTo(-0.03)
+    expect(shader.uniforms.uLensHeight.value).toBeCloseTo(0.06)
+  })
+
   it('is a no-op when both effects are off', () => {
     const mesh = lensMesh()
     const before = mesh.material.onBeforeCompile
