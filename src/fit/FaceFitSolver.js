@@ -268,6 +268,33 @@ function weightedWorldFaceWidth({ leftTemple, rightTemple, leftCheek, rightCheek
   return Number.isFinite(weightedSpan) && weightedSpan > 0 ? weightedSpan : 0
 }
 
+/**
+ * Moves a saddle-anchored position so the saddle stays pinned when the frame is
+ * drawn at a different scale than the one it was solved at.
+ *
+ * The saddle pin below (position = anchor - R*(saddle*scale)) is exact only at
+ * the scale it used, and that is the solver's raw size: the projected temple
+ * span, which narrows as the head turns. The render loop draws at a different
+ * one -- it holds the frontal size through a turn -- so the saddle landed at
+ * anchor + R*saddle*(drawn - solved). The aviator's saddle sits 16 mm above its
+ * origin, so that lifted the frame: measured against the probe reel's truth, the
+ * drawn bridge rode 0.25 / 0.46 / 0.91 / 1.68 mm above MediaPipe's own nasion at
+ * 17 / 26 / 35 / 42 degrees of yaw, on top of the landmark's own error.
+ *
+ * @param {THREE.Vector3} position solved position, updated in place
+ * @param {THREE.Vector3|null} saddle the frame's nose saddle, model units
+ * @param {number} solvedScale scale the position was pinned with
+ * @param {number} drawnScale scale the frame is actually drawn at
+ * @param {THREE.Quaternion} quaternion rotation the frame is drawn with
+ * @returns {THREE.Vector3} position
+ */
+export function repinSaddle(position, saddle, solvedScale, drawnScale, quaternion) {
+  if (!saddle || !Number.isFinite(solvedScale) || !Number.isFinite(drawnScale) || solvedScale === drawnScale) {
+    return position
+  }
+  return position.sub(saddle.clone().multiplyScalar(drawnScale - solvedScale).applyQuaternion(quaternion))
+}
+
 export class FaceFitSolver {
   constructor(options = {}) {
     this.landmarkDepthScale = options.landmarkDepthScale ?? DEFAULT_LANDMARK_DEPTH_SCALE

@@ -9,7 +9,7 @@ import { SHELL_INDEX_START } from '../occlusion/FaceOccluder.js'
 import { scaleMultiplier, xOffset, yOffset, zOffset, rotOffsetX, rotOffsetY, rotOffsetZ, trackingSmoothness } from '../config/poseConfig.js'
 import { FitCalibrator } from '../fit/FitCalibrator.js'
 import { LocalFaceScanner } from '../fit/LocalFaceScanner.js'
-import { FaceFitSolver } from '../fit/FaceFitSolver.js'
+import { FaceFitSolver, repinSaddle } from '../fit/FaceFitSolver.js'
 import { coverNDC } from '../fit/coverMap.js'
 import { resolveGlassesScaleMultiplier, resolveModelSizeMultiplier } from './glassesScale.js'
 import { createLensEnvironment } from './lensEnvironment.js'
@@ -1577,6 +1577,13 @@ export class RenderLoop {
       )
       const occluderPivot = tunedPosition.clone()
       const fitScale = this._smoothSolvedScale(fitSolution.glassesTransform.scale)
+      // The solver pinned the nose saddle at ITS scale; the frame is drawn at
+      // fitScale, held frontal through turns. Re-pin at the drawn one, or the
+      // saddle lifts off the nose as the head turns (see repinSaddle). After the
+      // occluder correction on purpose: the face did not move, only the frame.
+      const framePos = this.modelConfig?.anchorMode === 'saddle'
+        ? repinSaddle(displayPos.clone(), this.modelConfig.bridgePivot, fitSolution.glassesTransform.scale, fitScale, displayQuat)
+        : displayPos
       this._updateFitDebugOverlay({
         yaw: THREE.MathUtils.radToDeg(this.headYaw ?? 0),
         scale: fitScale,
@@ -1587,7 +1594,7 @@ export class RenderLoop {
         quality: fitSolution.fitQuality,
       })
       const transform = {
-        position: displayPos,
+        position: framePos,
         quaternion: displayQuat,
         scale: fitScale,
         anchorWorldPoints,
@@ -1600,7 +1607,7 @@ export class RenderLoop {
 
       this._applyTransform(transform)
       this.lastGoodTransform = {
-        position: displayPos.clone(),
+        position: framePos.clone(),
         quaternion: displayQuat.clone(),
         scale: fitScale,
         anchorWorldPoints,
