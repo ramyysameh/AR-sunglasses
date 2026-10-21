@@ -933,7 +933,8 @@ export class RenderLoop {
    */
   _applyGuardOpacity(opacity) {
     const o = Math.min(1, Math.max(0, opacity))
-    if (o === this._appliedGuardOpacity) return o > 0.02
+    const adopted = this._adoptGuardMaterials()
+    if (o === this._appliedGuardOpacity && !adopted) return o > 0.02
     this._appliedGuardOpacity = o
     for (const [material, base] of this._baseOpacity ?? []) {
       const transparent = o < 1 ? true : base.transparent
@@ -942,6 +943,38 @@ export class RenderLoop {
       material.opacity = base.opacity * o
     }
     return o > 0.02
+  }
+
+  /**
+   * Adds glasses materials the fade has not seen yet to `_baseOpacity`.
+   *
+   * The authored opacities are captured when the glasses arrive, but the temple
+   * arms get new materials after that: the near-arm clip clones them on the
+   * first tracked frame, and so does its behind-the-ear remainder. Missing from
+   * the list, they never faded -- the guard hid the frame and left a bare arm
+   * hanging from the ear. The clones are made while the fade is at rest, so
+   * their current opacity IS the authored one; dividing by the applied fade
+   * recovers it should one ever appear mid-fade.
+   *
+   * @returns {boolean} whether any were added
+   */
+  _adoptGuardMaterials() {
+    const base = (this._baseOpacity ??= new Map())
+    const applied = this._appliedGuardOpacity ?? 1
+    let adopted = false
+    this.glassesRoot?.traverse((child) => {
+      if (!child.isMesh) return
+      const materials = Array.isArray(child.material) ? child.material : [child.material]
+      for (const m of materials) {
+        if (!m || base.has(m)) continue
+        base.set(m, {
+          opacity: applied > 0.02 ? Math.min(1, m.opacity / applied) : m.opacity,
+          transparent: m.transparent,
+        })
+        adopted = true
+      }
+    })
+    return adopted
   }
 
   /**
