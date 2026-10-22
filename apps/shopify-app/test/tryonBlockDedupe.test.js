@@ -68,12 +68,17 @@ function makePage({ nativeCommands = false } = {}) {
 // Each block's script runs right after its own markup during parsing, so when
 // instance N runs, the DOM holds instances 1..N. `currentScript: null` models a
 // script a theme re-inserted after swapping in new section HTML.
-function runFor(index, roots, fetch = () => Promise.resolve(), page = makePage(), { currentScript } = {}) {
+function runFor(index, roots, fetch = () => Promise.resolve(), page = makePage(), { currentScript, readyState } = {}) {
   const visible = roots.slice(0, index + 1)
+  page.onReady = page.onReady || []
   const document = {
     currentScript: currentScript === undefined ? { previousElementSibling: roots[index] } : currentScript,
+    readyState,
     querySelectorAll: () => visible,
-    addEventListener: (type, fn) => { if (type === 'click') page.listeners.push(fn) },
+    addEventListener: (type, fn) => {
+      if (type === 'click') page.listeners.push(fn)
+      if (type === 'DOMContentLoaded') page.onReady.push(fn)
+    },
   }
   new Function('window', 'document', 'fetch', 'Element', 'HTMLButtonElement', scriptBody)(
     page.window, document, fetch, Element, page.Button,
@@ -131,6 +136,30 @@ describe('try-on block duplicate handling', () => {
     roots.forEach((_, i) => runFor(i, roots, fetch))
 
     expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for the page to finish parsing before reporting', () => {
+    // The embed's reveal rule is at the end of <body>, after the block.
+    const fetch = vi.fn(() => Promise.resolve())
+    const roots = [makeRoot({ installedUrl: 'https://app.test/api/tryon-installed?shop=s&productId=p' })]
+    const page = runFor(0, roots, fetch, makePage(), { readyState: 'loading' })
+
+    expect(fetch).not.toHaveBeenCalled()
+    page.onReady.forEach((fn) => fn())
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not report a block whose button is hidden because the app embed is off', () => {
+    vi.stubGlobal('getComputedStyle', () => ({ display: 'none' }))
+    try {
+      const fetch = vi.fn(() => Promise.resolve())
+      const roots = [makeRoot({ installedUrl: 'https://app.test/api/tryon-installed?shop=s&productId=p' })]
+      runFor(0, roots, fetch)
+
+      expect(fetch).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('does not report from the theme editor', () => {
