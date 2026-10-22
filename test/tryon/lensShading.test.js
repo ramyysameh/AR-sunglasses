@@ -115,3 +115,45 @@ describe('applyLensShading', () => {
     expect(mesh.material.onBeforeCompile).toBe(before)
   })
 })
+
+describe('deriveLensOpacity', async () => {
+  const { deriveLensOpacity, DERIVED_LENS_OPACITY_MAX, DERIVED_LENS_OPACITY_MIN } =
+    await import('../../src/core/lensShading.js')
+  const lens = (hex, { transmission = 0, opacity = 1, transparent = false, map = null } = {}) => {
+    const m = new THREE.MeshPhysicalMaterial({ color: hex, opacity, transparent, transmission })
+    m.map = map
+    return m
+  }
+
+  it('renders a dark smoke lens (AI-generated) dark, capped so the eyes still show', () => {
+    // _m-gripz.glb: base ~0.052 linear, transmission 0.42 -> ~2% of light gets through.
+    const m = lens(new THREE.Color().setRGB(0.052, 0.054, 0.06), { transmission: 0.42 })
+    expect(deriveLensOpacity(m, 0.4)).toBe(DERIVED_LENS_OPACITY_MAX)
+  })
+
+  it('keeps a pale tint pale', () => {
+    const m = lens(new THREE.Color().setRGB(0.86, 0.8, 0.09), { transmission: 1 })
+    const o = deriveLensOpacity(m, 0.4)
+    expect(o).toBeGreaterThanOrEqual(DERIVED_LENS_OPACITY_MIN)
+    expect(o).toBeLessThan(0.4)
+  })
+
+  it('takes authored alpha when the lens is authored as blended', () => {
+    const m = lens(new THREE.Color(1, 0.8, 0), { opacity: 0.62, transparent: true })
+    expect(deriveLensOpacity(m, 0.4)).toBeCloseTo(0.62)
+  })
+
+  it('falls back when the tint lives in a texture', () => {
+    expect(deriveLensOpacity(lens(0xffffff, { map: new THREE.Texture() }), 0.4)).toBe(0.4)
+  })
+
+  it('returns the cached value on a shared material after the loader overwrote it', () => {
+    const m = lens(new THREE.Color().setRGB(0.05, 0.05, 0.05), { transmission: 0.4 })
+    const first = deriveLensOpacity(m, 0.4)
+    m.transmission = 0
+    m.transparent = true
+    m.opacity = first
+    m.color.setRGB(1, 1, 1)
+    expect(deriveLensOpacity(m, 0.4)).toBe(first)
+  })
+})

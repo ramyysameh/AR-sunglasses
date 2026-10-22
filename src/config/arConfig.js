@@ -249,9 +249,12 @@ export function registerRuntimeGlassesConfig(key, engineModelConfig) {
     // gloss, addressed in the lighting, not by altering the model's material.
     preserveMaterials: true,
     // Uploaded models only -- the four built-in SKUs keep their own tuned values.
-    // 0.62 (inherited from the base SKU) read as a near-solid panel rather than a
-    // tinted lens you can see eyes through. ?lensopacity=<n> overrides live.
-    materialProfile: { ...base.materialProfile, lensOpacity: 0.4 },
+    // No fixed lens opacity: it comes from the lens's authored tint and
+    // transmission (deriveLensOpacity), so a dark smoke lens renders dark and a
+    // pale one stays pale. A flat 0.4 made every merchant's sunglasses look
+    // lightly tinted. 0.4 is still used when the tint is in a texture and can't
+    // be read. ?lensopacity=<n> overrides live.
+    materialProfile: { ...base.materialProfile, lensOpacity: null, lensOpacityFallback: 0.4 },
     // Pin the frame's own nose saddle to the face's nose bridge rather than
     // dropping the model's bounding-box centre on a brow point. Uploaded models
     // only: the built-in SKUs ship pre-normalized files the loader does not
