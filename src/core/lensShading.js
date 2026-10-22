@@ -54,6 +54,54 @@ export function resolveLensShadingConfig(search, materialProfile = {}) {
   }
 }
 
+// Lens coverage derived from the model is kept inside this range. The top stops a
+// near-black authored lens from hiding the eyes completely (shoppers still want
+// to see their eyes through dark sunglasses, as with category-3 lenses, which
+// pass 8-18% of light); the bottom stops a pale tint from vanishing.
+export const DERIVED_LENS_OPACITY_MIN = 0.3
+export const DERIVED_LENS_OPACITY_MAX = 0.85
+
+/**
+ * How opaque an uploaded model's lens should be, read from its AUTHORED material.
+ *
+ * Uploaded lenses are authored as glass: a tint colour plus glTF transmission.
+ * Transmission is switched off at render time (see the header), and the lens
+ * used to get one flat opacity for every model, so a dark smoke lens and a pale
+ * yellow one both came out as the same light film. glTF tints transmitted light
+ * by the base colour, so the light that gets through is roughly
+ * transmission x luminance(baseColor), and coverage is the rest.
+ *
+ *  - Authored alpha below 1 (alphaMode BLEND) is taken as the designer's choice.
+ *  - A base-colour texture hides the real tint, so it gets `fallback`.
+ *  - No transmission on an untextured lens is treated as fully transmissive
+ *    glass, so its darkness alone sets the coverage.
+ *
+ * Read BEFORE the loader zeroes transmission and overwrites opacity, and cached
+ * on the material: Lens_L and Lens_R usually share one material, and the second
+ * visit would otherwise read the values the first visit wrote.
+ *
+ * @param {import('three').MeshPhysicalMaterial} material
+ * @param {number} fallback
+ * @returns {number}
+ */
+export function deriveLensOpacity(material, fallback) {
+  if (Number.isFinite(material?.userData?.derivedLensOpacity)) {
+    return material.userData.derivedLensOpacity
+  }
+  let opacity = fallback
+  if (material?.transparent && material.opacity < 1) {
+    opacity = material.opacity
+  } else if (material?.color && !material.map) {
+    const { r, g, b } = material.color
+    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    const transmission = material.transmission > 0 ? material.transmission : 1
+    opacity = 1 - transmission * luminance
+  }
+  opacity = Math.min(Math.max(opacity, DERIVED_LENS_OPACITY_MIN), DERIVED_LENS_OPACITY_MAX)
+  if (material?.userData) material.userData.derivedLensOpacity = opacity
+  return opacity
+}
+
 /**
  * CPU mirror of the shader's coverage, for tests and for reasoning about values.
  *

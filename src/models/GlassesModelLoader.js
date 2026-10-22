@@ -6,7 +6,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { getGlassesConfig } from '../config/arConfig.js'
 import { applyLensReflection } from '../core/lensReflection.js'
-import { applyLensShading, resolveLensShadingConfig } from '../core/lensShading.js'
+import { applyLensShading, deriveLensOpacity, resolveLensShadingConfig } from '../core/lensShading.js'
 import { applyFrameReflection } from '../core/frameReflection.js'
 import { fetchBytes } from '../support/fetchBytes.js'
 
@@ -219,16 +219,20 @@ export class GlassesModelLoader {
         if (modelConfig.preserveMaterials) {
           const name = `${material.name ?? ''} ${child.name ?? ''}`.toLowerCase()
           if (name.includes('lens') || name.includes('glass')) {
+            // Before transmission/opacity are overwritten below -- it reads them.
+            const derivedOpacity = deriveLensOpacity(
+              material,
+              Number.isFinite(materialProfile.lensOpacityFallback) ? materialProfile.lensOpacityFallback : 0.4,
+            )
             if ('transmission' in material) material.transmission = 0
             material.transparent = true
-            // 0.35 -> 0.18: user wanted the lens "black but very transparent" --
-            // pairs with the pure-black Base Color set in Blender for this tint.
-            // ?lensopacity=<0..1> wins over the SKU profile so the lens can be
-            // dialled live on a phone; falls through to the profile when absent.
+            // ?lensopacity=<0..1> wins so the lens can be dialled live on a
+            // phone, then a fixed SKU profile value, then the opacity derived
+            // from the lens's own authored tint and transmission.
             const tunedOpacity = this.lensReflection?.opacity
             material.opacity = Number.isFinite(tunedOpacity)
               ? tunedOpacity
-              : Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : 0.18
+              : Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : derivedOpacity
             material.depthWrite = false
             applyLensReflection(material, this.lensEnvMap, this.lensReflection)
             applyLensShading(material, child, lensShading)
