@@ -30,6 +30,7 @@ export class FaceTracker {
     this.lastResult = null
     this.lastDetectionWasFresh = false
     this.lastDetectionTimestamp = null
+    this.lastDetectionFromRender = false
     this.frameIntervalMs = 1000 / 30
   }
 
@@ -56,17 +57,48 @@ export class FaceTracker {
     return this
   }
 
+  /**
+   * Render-loop detection (the rAF fallback): skips a video frame it has
+   * already seen, judged by video.currentTime.
+   */
   detect(videoElement, timestamp = performance.now()) {
-    if (!this.faceLandmarker || !videoElement || videoElement.readyState < 2) {
-      return null
-    }
+    if (!this.isReady(videoElement)) return null
 
     const videoTime = Number(videoElement.currentTime)
     if (Number.isFinite(videoTime) && videoTime === this.lastVideoTime) {
       this.lastDetectionWasFresh = false
       return this.lastResult
     }
+    this.lastDetectionFromRender = true
+    return this._run(videoElement, timestamp, videoTime)
+  }
 
+  /**
+   * Detection for one presented video frame (requestVideoFrameCallback). The
+   * caller has already established the frame is new; `timestamp` is the
+   * frame's own time. currentTime is only consulted to skip a frame that the
+   * render-loop path (a harness poll) detected first; it is not reliable enough
+   * on a live stream to be the frame key here.
+   */
+  detectFrame(videoElement, timestamp) {
+    if (!this.isReady(videoElement)) {
+      this.lastDetectionWasFresh = false
+      return null
+    }
+    const videoTime = Number(videoElement.currentTime)
+    if (this.lastDetectionFromRender && Number.isFinite(videoTime) && videoTime === this.lastVideoTime) {
+      this.lastDetectionWasFresh = false
+      return this.lastResult
+    }
+    this.lastDetectionFromRender = false
+    return this._run(videoElement, timestamp, videoTime)
+  }
+
+  isReady(videoElement) {
+    return Boolean(this.faceLandmarker && videoElement && videoElement.readyState >= 2)
+  }
+
+  _run(videoElement, timestamp, videoTime) {
     this.lastResult = this.faceLandmarker.detectForVideo(videoElement, timestamp)
     if (this.lastDetectionTimestamp != null) {
       const observedInterval = timestamp - this.lastDetectionTimestamp
