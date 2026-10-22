@@ -50,6 +50,12 @@
   {% endif %}
   {{ attributes }}
 >
+  {% if request.design_mode and placement == 'block' %}
+    <p class="ar-tryon__embed-off">
+      <strong>AR Try-On</strong> is switched off. Turn on the AR Try-on app embed
+      (Theme settings → App embeds) to show this button to shoppers.
+    </p>
+  {% endif %}
   <button class="ar-tryon__open" type="button" commandfor="{{ dialog_id }}" command="show-modal">
     <svg class="ar-tryon__open-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3h5Z"></path>
@@ -162,11 +168,20 @@
     // is nothing to read back -- the request is still delivered, and this way a
     // blocked response cannot put an error on a merchant's storefront. The
     // server throttles to one write per mapping per hour.
+    //
+    // A block's button is hidden unless the app embed is on (see the styles
+    // below), so wait until the page is parsed -- the embed's reveal rule sits
+    // at the end of <body> -- and only report a button shoppers can see.
     const installedUrl = root.dataset.arTryonInstalledUrl
     if (installedUrl) {
-      try {
-        fetch(installedUrl, { mode: 'no-cors', credentials: 'omit' }).catch(() => {})
-      } catch (e) { /* never let bookkeeping break the product page */ }
+      const report = () => {
+        try {
+          if (typeof getComputedStyle === 'function' && getComputedStyle(root).display === 'none') return
+          fetch(installedUrl, { mode: 'no-cors', credentials: 'omit' }).catch(() => {})
+        } catch (e) { /* never let bookkeeping break the product page */ }
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', report, { once: true })
+      else report()
     }
   })()
 </script>
@@ -313,6 +328,27 @@
      margins would inset it out of that column. */
   .ar-tryon {
     margin: 14px 0;
+  }
+
+  /* The app embed is the store's on/off switch for try-on. A block placed in a
+     template would otherwise keep showing the button after the merchant turns
+     the embed off, so a block's button starts hidden and the embed reveals it
+     (tryon_embed.liquid, same selectors with a leading `html` so they win even
+     when a theme re-renders this section and re-inserts these styles later in
+     the page). In the theme editor the block shows a note instead. */
+  .ar-tryon[data-ar-tryon-placement="block"]:not([data-ar-tryon-design-mode]) {
+    display: none;
+  }
+  .ar-tryon[data-ar-tryon-placement="block"][data-ar-tryon-design-mode] .ar-tryon__open {
+    display: none;
+  }
+  .ar-tryon__embed-off {
+    padding: 1rem;
+    border: 1px dashed #8a8a8a;
+    border-radius: 4px;
+    color: #616161;
+    font: inherit;
+    margin: 0;
   }
   .ar-tryon.ar-tryon--floating {
     position: fixed;

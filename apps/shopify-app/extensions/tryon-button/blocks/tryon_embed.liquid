@@ -5,7 +5,23 @@
   blocks in templates. Same markup and script as the app block (snippet
   tryon_core); if a page also has the block, the block (earlier in the DOM)
   wins the first-instance dedupe and this copy removes itself.
+
+  The embed is also the on/off switch for blocks: a block's button is hidden by
+  tryon_core's styles until this rule reveals it, so turning the embed off hides
+  every Try-on button in the store. Output on every page (no enabled_on), since
+  a block can sit in a featured-product section outside product templates.
 {% endcomment %}
+<style>
+  html .ar-tryon[data-ar-tryon-placement="block"]:not([data-ar-tryon-design-mode]) {
+    display: block;
+  }
+  html .ar-tryon[data-ar-tryon-placement="block"][data-ar-tryon-design-mode] .ar-tryon__open {
+    display: inline-flex;
+  }
+  html .ar-tryon__embed-off {
+    display: none;
+  }
+</style>
 {% if request.page_type == 'product' and product %}
   {% assign dialog_id = 'ar-tryon-dialog-embed-' | append: product.id %}
   {% render 'tryon_core',
@@ -112,7 +128,6 @@
 {
   "name": "AR Try-on",
   "target": "body",
-  "enabled_on": { "templates": ["product"] },
   "settings": [
     { "type": "text", "id": "button_label", "label": "Button label", "default": "Try on" },
     { "type": "range", "id": "gscale", "label": "Glasses size", "min": 0.5, "max": 2.5, "step": 0.1, "unit": "x", "default": 1, "info": "Scales the glasses on the face. 1 = natural fit; higher = larger. Try ~1.6 if they look too small." },
