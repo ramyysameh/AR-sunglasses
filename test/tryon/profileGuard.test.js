@@ -205,10 +205,12 @@ describe('ProfileGuard', () => {
     expect(guard.lastSignals.overrun).toBeGreaterThan(PROFILE_GUARD_DEFAULTS.overrunHide)
   })
 
-  it('is on by default and off with ?profileguard=0', () => {
-    expect(resolveProfileGuardEnabled('')).toBe(true)
-    expect(resolveProfileGuardEnabled('?profileguard=1')).toBe(true)
+  it('is off by default and on only with ?profileguard=1', () => {
+    // The owner asked for the opacity fade to be reverted: the glasses draw
+    // at full opacity unless the guard is asked for.
+    expect(resolveProfileGuardEnabled('')).toBe(false)
     expect(resolveProfileGuardEnabled('?profileguard=0')).toBe(false)
+    expect(resolveProfileGuardEnabled('?profileguard=1')).toBe(true)
   })
 })
 

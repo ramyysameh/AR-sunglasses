@@ -20,7 +20,7 @@
  *         public/> to calibrate a GLB through the register-model path
  *         (?model= with no value: the built-in default SKU), ?lms=1 to put every
  *         landmark in the rows (raw-image px) for tuning signals offline,
- *         ?profileguard=0 to run without the profile guard (on by default).
+ *         ?profileguard=1 to run with the profile guard (off by default).
  *
  * Near-arm diagnostics: ?diag=1 marks the ear cut plane and the ear landmarks
  * on the shots and records the cut, plus how deep the lifted arm sits behind
