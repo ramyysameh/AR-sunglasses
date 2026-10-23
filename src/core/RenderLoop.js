@@ -16,6 +16,7 @@ import { createLensEnvironment } from './lensEnvironment.js'
 import { resolveLensReflectionConfig, resolveEnvironmentName} from './lensReflection.js'
 import { resolveFrameReflectionConfig } from './frameReflection.js'
 import { ContactShadow, resolveContactShadowConfig } from './contactShadow.js'
+import { LensFilterLayer } from './lensFilter.js'
 import { LightEstimateSmoother, estimateCameraLight, resolveLightEstimateEnabled } from './cameraLightEstimate.js'
 import { OcclusionProbe, compositeFrame, evaluate } from '../debug/occlusionProbe.js'
 import { PoseInterpolator } from '../tracking/PoseInterpolator.js'
@@ -1310,6 +1311,10 @@ export class RenderLoop {
         (this._appliedGuardOpacity ?? 1) >= 0.5 &&
         Boolean(this.faceOccluder?.occluderMesh?.visible),
     )
+    // Clear tinted lenses multiply the video beneath this canvas (lensFilter.js).
+    // A no-op that keeps its canvas hidden unless the model has such a lens.
+    this.lensFilter ??= new LensFilterLayer(this.canvas)
+    this.lensFilter.render(this.renderer, this.scene, this.camera, this.glassesRoot)
     this.renderer.render(this.scene, this.camera)
   }
 
@@ -1360,6 +1365,7 @@ export class RenderLoop {
 
   stop() {
     this.running = false
+    this.lensFilter?.hide()
 
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId)
@@ -1371,6 +1377,8 @@ export class RenderLoop {
     this.stop()
     this.contactShadow?.dispose()
     this.contactShadow = null
+    this.lensFilter?.dispose()
+    this.lensFilter = null
     this.lensEnvironment?.dispose?.()
     this.lensEnvironment = null
     this.lensEnvMap = null
