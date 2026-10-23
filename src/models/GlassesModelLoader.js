@@ -7,6 +7,7 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { getGlassesConfig } from '../config/arConfig.js'
 import { applyLensReflection } from '../core/lensReflection.js'
 import { applyLensShading, deriveLensOpacity, resolveLensShadingConfig } from '../core/lensShading.js'
+import { createLensFilterMesh, deriveLensFilter, isLensFilterEnabled } from '../core/lensFilter.js'
 import { applyFrameReflection } from '../core/frameReflection.js'
 import { fetchBytes } from '../support/fetchBytes.js'
 
@@ -173,6 +174,13 @@ export class GlassesModelLoader {
     // reported to the solver are both in metres.
     applyModelScale(model, modelConfig.modelScale)
 
+    const search = typeof window !== 'undefined' ? window.location.search : ''
+    const lensFilterEnabled = isLensFilterEnabled(search)
+    // Filter twins are added after the traverse: adding children mid-traverse
+    // would visit them, and their name/material would be treated as a lens.
+    /** @type {{ mesh: THREE.Mesh, color: THREE.Color }[]} */
+    const filterTargets = []
+
     model.traverse((node) => {
       const child = /** @type {THREE.Mesh} */ (node)
       if (!child.isMesh) {
@@ -224,15 +232,29 @@ export class GlassesModelLoader {
               material,
               Number.isFinite(materialProfile.lensOpacityFallback) ? materialProfile.lensOpacityFallback : 0.4,
             )
+            const tunedOpacity = this.lensReflection?.opacity
+            // Clear tinted glass is drawn as a colour filter over the video
+            // (lensFilter.js) and only a faint residual stays in this pass.
+            // An explicit ?lensopacity= or SKU lensOpacity still wins, and a
+            // lens sharing its mesh with other materials is left alone, since
+            // the filter twin would tint the whole mesh.
+            const filter = lensFilterEnabled &&
+              !Number.isFinite(tunedOpacity) &&
+              !Number.isFinite(materialProfile.lensOpacity) &&
+              materials.length === 1
+              ? deriveLensFilter(material)
+              : null
+            if (filter) filterTargets.push({ mesh: child, color: filter.color })
             if ('transmission' in material) material.transmission = 0
             material.transparent = true
             // ?lensopacity=<0..1> wins so the lens can be dialled live on a
-            // phone, then a fixed SKU profile value, then the opacity derived
-            // from the lens's own authored tint and transmission.
-            const tunedOpacity = this.lensReflection?.opacity
+            // phone, then a fixed SKU profile value, then the filter residual,
+            // then the opacity derived from the lens's own authored tint and
+            // transmission.
             material.opacity = Number.isFinite(tunedOpacity)
               ? tunedOpacity
-              : Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity : derivedOpacity
+              : Number.isFinite(materialProfile.lensOpacity) ? materialProfile.lensOpacity
+              : filter ? filter.residualOpacity : derivedOpacity
             material.depthWrite = false
             applyLensReflection(material, this.lensEnvMap, this.lensReflection)
             applyLensShading(material, child, lensShading)
@@ -287,6 +309,10 @@ export class GlassesModelLoader {
         material.needsUpdate = true
       }
     })
+
+    for (const { mesh, color } of filterTargets) {
+      mesh.add(createLensFilterMesh(mesh, color))
+    }
 
     const box = new THREE.Box3().setFromObject(model)
     const size = box.getSize(new THREE.Vector3())
