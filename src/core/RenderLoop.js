@@ -118,7 +118,7 @@ export class RenderLoop {
     this.poseInterpolator = new PoseInterpolator()
     // Fades the glasses out near profile and as the face leaves the frame, where
     // the landmarks stop being trustworthy and any pose drawn from them floats
-    // off the face (profileGuard.js). On by default; ?profileguard=0 turns it off.
+    // off the face (profileGuard.js). Off by default; ?profileguard=1 turns it on.
     this.profileGuard = options.profileGuard ?? (
       resolveProfileGuardEnabled(typeof window !== 'undefined' ? window.location.search : '') ? new ProfileGuard() : null
     )

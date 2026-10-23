@@ -216,11 +216,11 @@ export function landmarkTrust(signals, options = PROFILE_GUARD_DEFAULTS) {
 }
 
 /**
- * On by default; ?profileguard=0 turns it off (to compare against, or if a
- * deployment ever needs the old behaviour back).
+ * Off by default (the owner asked for the opacity fade to be reverted, so the
+ * glasses always draw at full opacity); ?profileguard=1 turns it on.
  */
 export function resolveProfileGuardEnabled(search = typeof window !== 'undefined' ? window.location.search : '') {
-  return new URLSearchParams(search).get('profileguard') !== '0'
+  return new URLSearchParams(search).get('profileguard') === '1'
 }
 
 /**

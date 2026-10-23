@@ -14,7 +14,7 @@
 // Options:
 //   --reel <dir>         reel under test-mock-head/ (default probe-landscape)
 //   --modes a,b          pose modes to run: mediapipe (no ?pose), pnp (default both);
-//                        the profile guard is on by default: mediapipe:profileguard=0 runs without it;
+//                        the profile guard is off by default: mediapipe:profileguard=1 runs with it;
 //                        extra engine params after a colon, e.g. pnp:pnpdepth=canonical
 //   --fov <deg>          vertical FOV the ENGINE assumes. Default: the reel's own
 //                        (probe reels record it) -- pass 45.24 to see the engine default
