@@ -2,6 +2,7 @@
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { useAppBridge } from '@shopify/app-bridge-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-router'
 import { authenticate } from '../shopify.server'
 import { handleProductAction } from '../productActions.server'
@@ -317,13 +318,19 @@ export default function Workspace() {
     setReviewMapping(mapping)
     shopify.modal.show('workspace-review-fit')
   }
+  // These two dialogs are keyed by mapping, so picking a different product
+  // replaces the <s-modal> element. flushSync puts the new one in the DOM
+  // before show() looks it up by id; otherwise show() reaches the element
+  // React is about to remove and the first tap on a row opens nothing.
   const openChangeModel = (mapping) => {
-    setChangeMapping(mapping)
-    setChangeDialogSession((current) => current + 1)
+    flushSync(() => {
+      setChangeMapping(mapping)
+      setChangeDialogSession((current) => current + 1)
+    })
     shopify.modal.show('workspace-change-model')
   }
   const openRemove = (mapping) => {
-    setRemoveMapping(mapping)
+    flushSync(() => setRemoveMapping(mapping))
     shopify.modal.show('workspace-remove-tryon')
   }
   const refreshWorkspace = useCallback(() => revalidator.revalidate(), [revalidator])

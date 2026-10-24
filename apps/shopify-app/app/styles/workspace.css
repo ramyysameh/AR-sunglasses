@@ -15,9 +15,18 @@
    component, which draws its own focus indicator. */
 
 .workspace-product-placeholder {
+  flex: 0 0 auto;
   width: 40px;
   height: 40px;
   border-radius: 6px;
+  background: #f1f1f1;
+}
+
+/* Model names are often raw filenames with no spaces
+   (wayfarer_v3_final_export.glb); let them break anywhere so they wrap on a
+   phone instead of running out of their card. */
+.workspace-long-text {
+  overflow-wrap: anywhere;
 }
 
 .workspace-product-cell {

@@ -71,14 +71,14 @@ function ProductImage({ product }) {
     )
   }
 
+  // A plain div: Polaris renders <s-box> as display: contents, which ignored
+  // the 40px size and left this placeholder invisible.
   return (
-    <s-box
+    <div
       className="workspace-product-placeholder"
       role="img"
       aria-label={`No image available for ${title}`}
-      background="subdued"
-      borderRadius="base"
-    ></s-box>
+    ></div>
   )
 }
 
@@ -188,7 +188,7 @@ export default function ProductOperationsList({
                   <s-text type="strong">{title}</s-text>
                 </s-stack>
               </s-table-cell>
-              <s-table-cell>{modelName(mapping.modelAsset)}</s-table-cell>
+              <s-table-cell><span className="workspace-long-text">{modelName(mapping.modelAsset)}</span></s-table-cell>
               <s-table-cell>
                 <StatusBadge status={status} />
               </s-table-cell>
