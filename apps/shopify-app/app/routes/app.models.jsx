@@ -490,7 +490,7 @@ export default function Models() {
                   <s-stack direction="block" gap="base">
                     <ModelViewer src={`/models/${asset.id}.glb`} alt={displayName} expandable />
                     <s-stack direction="inline" gap="small-500" alignItems="center">
-                      <s-heading>{displayName}</s-heading>
+                      <s-heading><span className="workspace-long-text">{displayName}</span></s-heading>
                       {/* Keyed on the loader's needsReview (status OR low
                           confidence, tryonStatus.server.js's single-sourced
                           needsFitReview), not raw asset.status -- a
@@ -503,7 +503,7 @@ export default function Models() {
                         {asset.needsReview ? 'Needs fit review' : 'Ready'}
                       </s-badge>
                     </s-stack>
-                    {showFilename && <s-text color="subdued">{asset.filename}</s-text>}
+                    {showFilename && <s-text color="subdued"><span className="workspace-long-text">{asset.filename}</span></s-text>}
                     {asset.mappingCount > 0 ? (
                       <s-text color="subdued">
                         Used by {asset.mappingCount} product{asset.mappingCount === 1 ? '' : 's'}.{' '}
