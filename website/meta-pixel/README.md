@@ -1,22 +1,17 @@
 # Meta Pixel for the Zendo Labs site
 
-Adds Meta Pixel `1860638841647938` to the marketing site at
+Meta Pixel `1860638841647938` runs on the marketing site at
 https://zendo-labs.vercel.app (home page and `/ar-try-on/`).
 
 The site's source is not in this repository; it is deployed to Vercel from a
-local folder. `add-meta-pixel.mjs` patches that folder in place.
+local folder. The pixel lives in that site's `vite.config.js`, as a small
+plugin that injects the snippet into every page at build time. The copy in this
+folder is the one currently deployed.
 
-## Use
+## Keeping it
 
-From the site folder (the one with `index.html`, `ar-try-on/` and `vite.config.js`):
-
-```sh
-node /path/to/AR-sunglasses/website/meta-pixel/add-meta-pixel.mjs
-npx vercel --prod
-```
-
-It edits `index.html` and `ar-try-on/index.html`, and skips a file that already
-has the pixel.
+Copy `vite.config.js` from here over the one in the local site folder before
+the next `vercel --prod`. Deploying with the old config removes the pixel.
 
 ## What gets tracked
 
