@@ -1,12 +1,13 @@
 /* eslint-disable react/prop-types -- route-local dialogs consume loader-shaped data */
 import { boundary } from '@shopify/shopify-app-react-router/server'
 import { useAppBridge } from '@shopify/app-bridge-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-router'
 import { authenticate } from '../shopify.server'
 import { handleProductAction } from '../productActions.server'
 import { loadWorkspace } from '../workspace.server'
+import { withEmbedActive } from '../workspaceState.js'
 import prisma from '../db.server'
 import { aiGenerationEnabled, getAllowance } from '../generations.server'
 import { AddTryOnFlow, isReady as isReadyModel } from '../components/AddTryOnFlow'
@@ -17,6 +18,7 @@ import ModelPicker from '../components/ModelPicker'
 import PlanUsage from '../components/PlanUsage'
 import PreviewPanel from '../components/PreviewPanel'
 import SetupSteps from '../components/SetupSteps'
+import { useEmbedActive } from '../components/useEmbedActive'
 import ProductOperationsList, { filterWorkspaceMappings } from '../components/ProductOperationsList'
 import WorkspaceFilters from '../components/WorkspaceFilters'
 import WorkspaceGuide from '../components/WorkspaceGuide'
@@ -263,10 +265,24 @@ export function showGuide(setup, guide) {
 }
 
 export default function Workspace() {
-  const data = useLoaderData()
+  const loaderData = useLoaderData()
   const location = useLocation()
   const revalidator = useRevalidator()
   const shopify = useAppBridge()
+  // The loader only knows try-on is live once a product page has rendered the
+  // button. App Bridge knows the moment the embed is saved, so its answer
+  // upgrades setup and row statuses right away.
+  const { active: embedActive, check: checkEmbed } = useEmbedActive(shopify)
+  const data = useMemo(() => withEmbedActive(loaderData, embedActive), [loaderData, embedActive])
+  // Confirm the switch only when we saw it go from off to on in this visit
+  // (the merchant saved in the theme editor tab and came back), not on every load.
+  const previousEmbedActive = useRef(embedActive)
+  useEffect(() => {
+    if (previousEmbedActive.current === false && embedActive === true) {
+      shopify.toast.show('Try-on is live in your store')
+    }
+    previousEmbedActive.current = embedActive
+  }, [embedActive, shopify])
   const initialRequest = initialAddRequest(location.search, data.assets, data.usage?.atLimit)
   const [status, setStatus] = useState('all')
   // Models' "View products" links here with ?q=<model name> so the list opens
@@ -367,7 +383,7 @@ export default function Workspace() {
           storefrontUrl={data.storefrontUrl}
           aiEnabled={Boolean(data.aiModels)}
           onUploadModel={openAddTryOn}
-          onCheckAgain={refreshWorkspace}
+          onCheckAgain={() => { checkEmbed(); refreshWorkspace() }}
         />
         {showGuide(data.setup, data.guide) && <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />}
         {/* Always mounted when AI is on, so a bulk run in flight survives the

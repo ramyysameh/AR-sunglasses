@@ -16,6 +16,8 @@ const harness = vi.hoisted(() => ({
   location: { search: '' },
   revalidate: vi.fn(),
   toast: vi.fn(),
+  embedActive: null,
+  checkEmbed: vi.fn(),
   modalShow: vi.fn(),
   modalHide: vi.fn(),
   fetcher: {
@@ -33,6 +35,7 @@ vi.mock('react', async (importOriginal) => ({
   ...(await importOriginal()),
   useCallback: (callback) => callback,
   useEffect: () => undefined,
+  useMemo: (factory) => factory(),
   useRef: (initial) => {
     const index = harness.stateIndex++
     if (harness.state[index] === undefined) harness.state[index] = { current: initial }
@@ -46,6 +49,10 @@ vi.mock('react', async (importOriginal) => ({
     }]
   },
 }))
+vi.mock('../app/components/useEmbedActive', () => ({
+  useEmbedActive: () => ({ active: harness.embedActive ?? null, check: harness.checkEmbed }),
+}))
+
 vi.mock('react-router', () => ({
   useFetcher: () => harness.fetcher,
   useLoaderData: () => harness.data,

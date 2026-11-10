@@ -39,7 +39,9 @@ describe('SetupSteps', () => {
   it('offers the one-click switch and a storefront link on the last step', () => {
     const html = render(['done', 'done', 'current'])
     expect(html).toContain('Turn on try-on')
-    expect(html).toContain('In the theme editor, click Save')
+    expect(html).toContain('click Save there, then come back to this tab')
+    expect(html).toContain('opens your theme editor in a new tab')
+    expect(html).toContain('checks itself off as soon as you save')
     expect(html).toContain('View on your store')
     expect(html).toContain('href="https://s.myshopify.com/products/aviator" target="_blank" rel="noreferrer"')
     expect(html).toContain('Check again')

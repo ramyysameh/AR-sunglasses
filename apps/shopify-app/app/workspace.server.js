@@ -7,97 +7,17 @@ import { planUsage } from './planUsage.server.js'
 import { fetchProductsByIds } from './products.server.js'
 import { publishMappings } from './tryonMetafield.server.js'
 import { isOnTheme, productStatus } from './tryonStatus.server.js'
-import { setupSteps } from './setupSteps.server.js'
+import {
+  normalizeWorkspaceStatus,
+  setupSteps,
+  sortWorkspaceMappings,
+  workspaceCounts,
+  workspaceGuide,
+} from './workspaceState.js'
 
-// setupSteps is pure (no database), so it lives in its own module.
-export { setupSteps }
-
-const STATUS_PRIORITY = {
-  'model-issue': 0,
-  'review-fit': 1,
-  'add-to-theme': 2,
-  live: 3,
-}
-
-export function normalizeWorkspaceStatus(status) {
-  const id = typeof status === 'string' ? status : status?.id
-  if (id === 'live') return 'live'
-  if (id === 'not_on_theme' || id === 'add-to-theme') return 'add-to-theme'
-  // A model that needs its fit reviewed is not broken: it keeps the same
-  // "Review fit" name and warning weight it has on the Models page, and
-  // resolves through the fit review rather than a model swap.
-  if (id === 'check_fit' || id === 'review-fit') return 'review-fit'
-  return 'model-issue'
-}
-
-export function workspaceCounts(mappings) {
-  const live = mappings.filter((mapping) => mapping.status === 'live').length
-  return { all: mappings.length, live, needsAttention: mappings.length - live }
-}
-
-export function sortWorkspaceMappings(mappings) {
-  return [...mappings].sort((a, b) => STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status])
-}
-
-export function workspaceGuide({ assets, mappings, usage }) {
-  if (!assets.length) {
-    return {
-      kind: 'setup',
-      title: 'Upload your first model',
-      detail: 'Add a ready-to-use eyewear model.',
-      action: { id: 'add-try-on', label: 'Upload model' },
-    }
-  }
-  if (!mappings.length) {
-    return {
-      kind: 'setup',
-      title: 'Add try-on to a product',
-      detail: 'Choose a model, then a Shopify product.',
-      action: { id: 'add-try-on', label: 'Add try-on' },
-    }
-  }
-  const issue = mappings.find((mapping) => mapping.status === 'model-issue')
-  if (issue) {
-    return {
-      kind: 'recovery',
-      title: 'A model needs attention',
-      detail: issue.product?.title,
-      action: { id: 'choose-model', mappingId: issue.id, label: 'Choose model' },
-    }
-  }
-  const review = mappings.find((mapping) => mapping.status === 'review-fit')
-  if (review) {
-    return {
-      kind: 'recovery',
-      title: 'Review how a model fits',
-      detail: review.product?.title,
-      action: { id: 'review-fit', mappingId: review.id, label: 'Review fit' },
-    }
-  }
-  const theme = mappings.find((mapping) => mapping.status === 'add-to-theme')
-  if (theme) {
-    return {
-      kind: 'recovery',
-      title: 'Turn on try-on in your store',
-      detail: 'In the theme editor, click Save.',
-      action: { id: 'theme', mappingId: theme.id, href: theme.themeUrl, label: 'Turn on try-on' },
-    }
-  }
-  if (usage.atLimit) {
-    return {
-      kind: 'recovery',
-      title: 'Your plan limit is reached',
-      detail: 'Upgrade before adding another product.',
-      action: { id: 'plans', href: usage.pricingUrl, label: 'View plans' },
-    }
-  }
-  return {
-    kind: 'complete',
-    title: 'Everything is live',
-    detail: `${mappings.length} ${mappings.length === 1 ? 'product is' : 'products are'} ready`,
-    action: null,
-  }
-}
+// The pure helpers live in workspaceState.js (the browser uses them too);
+// re-exported so existing server imports keep working.
+export { normalizeWorkspaceStatus, setupSteps, sortWorkspaceMappings, workspaceCounts, workspaceGuide }
 
 export function emptyWorkspace(shop) {
   const assets = []

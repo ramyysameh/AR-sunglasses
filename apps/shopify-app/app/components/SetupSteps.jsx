@@ -71,10 +71,16 @@ export default function SetupSteps({ setup, embedUrl, storefrontUrl, aiEnabled, 
         {turnOn.state === 'current' && (
           <s-stack direction="block" gap="small-200">
             <s-paragraph>
-              One switch adds the Try-on button to every product with a model. In the theme editor, click Save.
+              One click adds the Try-on button to every product with a model. Your theme editor opens in a new tab
+              with try-on already switched on: click Save there, then come back to this tab.
             </s-paragraph>
             <s-stack direction="inline" gap="small-200">
-              <TopLevelAdminAction href={embedUrl} variant="primary" accessibilityLabel="Turn on try-on">
+              <TopLevelAdminAction
+                href={embedUrl}
+                variant="primary"
+                newTab
+                accessibilityLabel="Turn on try-on (opens your theme editor in a new tab)"
+              >
                 Turn on try-on
               </TopLevelAdminAction>
               {storefrontUrl && (
@@ -85,7 +91,7 @@ export default function SetupSteps({ setup, embedUrl, storefrontUrl, aiEnabled, 
               <s-button variant="tertiary" onClick={onCheckAgain}>Check again</s-button>
             </s-stack>
             <s-text color="subdued">
-              We notice the button once a product page with try-on has been viewed. Open one with View on your store.
+              This step checks itself off as soon as you save. If it doesn&apos;t, click Check again.
             </s-text>
           </s-stack>
         )}

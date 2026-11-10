@@ -24,6 +24,10 @@ export default function TopLevelAdminAction({
   accessibilityLabel,
   variant = 'secondary',
   slot,
+  // Open in a new browser tab instead of replacing the admin. Used for the
+  // theme editor embed link: the merchant clicks Save there and switches back
+  // to this tab, where the Workspace re-checks the embed on focus.
+  newTab = false,
 }) {
   // Every current call site always has a truthy href by the time it renders
   // this (each is already gated by its own `usage.pricingUrl && (...)` /
@@ -41,7 +45,7 @@ export default function TopLevelAdminAction({
       variant={variant}
       icon="external"
       accessibilityLabel={accessibilityLabel}
-      onClick={() => window.open(href, '_top')}
+      onClick={() => (newTab ? window.open(href, '_blank', 'noopener') : window.open(href, '_top'))}
     >
       {children}
     </s-button>
