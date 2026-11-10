@@ -97,3 +97,19 @@ describe('TopLevelAdminAction', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('TopLevelAdminAction newTab', () => {
+  it('opens a new browser tab instead of replacing the admin', () => {
+    const open = vi.fn()
+    vi.stubGlobal('window', { open })
+    const element = TopLevelAdminAction({
+      href: 'https://s.myshopify.com/admin/themes/current/editor?context=apps',
+      children: 'Turn on try-on',
+      accessibilityLabel: 'Turn on try-on',
+      newTab: true,
+    })
+    element.props.onClick()
+    expect(open).toHaveBeenCalledWith('https://s.myshopify.com/admin/themes/current/editor?context=apps', '_blank', 'noopener')
+    vi.unstubAllGlobals()
+  })
+})
