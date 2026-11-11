@@ -60,6 +60,8 @@ export async function purgeShopData(prisma, shop) {
   const generationRows = await prisma.modelGeneration.deleteMany({ where: { shop } })
   // Photo try-on request counters (salted IP hashes); no foreign keys.
   const photoTryons = await prisma.photoTryon.deleteMany({ where: { shop } })
+  // Per-product photo try-on switches; no foreign keys.
+  await prisma.photoTryonOff.deleteMany({ where: { shop } })
 
   return {
     storageRefs: assets.length,

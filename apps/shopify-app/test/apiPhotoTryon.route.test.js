@@ -9,9 +9,13 @@ const h = vi.hoisted(() => ({
   released: [],
   adminShops: [],
   renderInput: null,
+  productOff: false,
 }))
 
 vi.mock('../app/db.server.js', () => ({ default: {} }))
+vi.mock('../app/photoTryonControls.server.js', () => ({
+  isProductPhotoOff: async () => h.productOff,
+}))
 vi.mock('../app/shopify.server.js', () => ({
   unauthenticated: {
     admin: async (shop) => {
@@ -72,6 +76,7 @@ beforeEach(() => {
     released: [],
     adminShops: [],
     renderInput: null,
+    productOff: false,
   })
 })
 
@@ -151,6 +156,15 @@ describe('POST /api/photo-tryon', () => {
     const res = await post()
     expect(res.status).toBe(500)
     expect(JSON.stringify(await res.json())).not.toContain('raw failure')
+  })
+
+  it('refuses a product the merchant switched off, before spending anything', async () => {
+    h.productOff = true
+    const res = await post()
+    expect(res.status).toBe(404)
+    expect((await res.json()).code).toBe('PRODUCT_OFF')
+    expect(h.adminShops).toEqual([])
+    expect(h.renderInput).toBe(null)
   })
 
   it('answers GET with 405', async () => {

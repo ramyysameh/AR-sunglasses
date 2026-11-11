@@ -12,6 +12,7 @@ import {
   productPhoto,
   renderPhotoTryon,
 } from '../photoTryon.server'
+import { isProductPhotoOff } from '../photoTryonControls.server'
 
 // Public endpoint for the photo try-on page (public/photo-tryon/index.html),
 // which the theme block opens in an iframe served by this app, so the request
@@ -28,6 +29,7 @@ const STATUS = {
   BAD_PHOTO: 400,
   PHOTO_REFUSED: 422,
   NOT_ENABLED: 404,
+  PRODUCT_OFF: 404,
   PRODUCT_NOT_FOUND: 404,
   NO_PRODUCT_PHOTO: 404,
   SUBSCRIPTION: 402,
@@ -41,6 +43,7 @@ const MESSAGES = {
   BAD_PHOTO: 'Use a JPG, PNG or WebP photo.',
   PHOTO_REFUSED: "This photo couldn't be used. Try a clear, front-facing photo of your face.",
   NOT_ENABLED: 'Photo try-on is not available for this store.',
+  PRODUCT_OFF: 'Photo try-on is not available for this product.',
   PRODUCT_NOT_FOUND: 'This product is not available for photo try-on.',
   NO_PRODUCT_PHOTO: 'This product is not available for photo try-on.',
   SUBSCRIPTION: 'Photo try-on is not available for this store.',
@@ -70,6 +73,13 @@ export const action = async ({ request }) => {
   const photo = form.get('photo')
   if (!SHOP_DOMAIN.test(shop) || !PRODUCT_GID.test(productId)) return fail('BAD_REQUEST')
   if (!photoTryonEnabled(shop)) return fail('NOT_ENABLED')
+  // The merchant switched it off for this product (Workspace card).
+  try {
+    if (await isProductPhotoOff(db, shop, productId)) return fail('PRODUCT_OFF')
+  } catch (error) {
+    console.error('photo-tryon: product switch lookup failed', error)
+    return fail('AI_FAILED', 503)
+  }
   if (!photo || typeof photo.arrayBuffer !== 'function') return fail('BAD_PHOTO')
   if (photo.size > MAX_SELFIE_BYTES) return fail('BAD_PHOTO', 413)
 
