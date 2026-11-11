@@ -62,7 +62,7 @@ function isCdnUrl(url) {
   }
 }
 
-async function download(url, fetchImpl) {
+export async function download(url, fetchImpl = fetch) {
   if (!isCdnUrl(url)) throw tagged('BAD_PHOTO', `product image is not on ${CDN_HOST}`)
   let res
   try {

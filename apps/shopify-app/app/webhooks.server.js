@@ -58,6 +58,8 @@ export async function purgeShopData(prisma, shop) {
   const subscriptions = await prisma.shopSubscription.deleteMany({ where: { shop } })
   // No foreign keys; deleted last so a failure above leaves the index intact.
   const generationRows = await prisma.modelGeneration.deleteMany({ where: { shop } })
+  // Photo try-on request counters (salted IP hashes); no foreign keys.
+  const photoTryons = await prisma.photoTryon.deleteMany({ where: { shop } })
 
   return {
     storageRefs: assets.length,
@@ -66,5 +68,6 @@ export async function purgeShopData(prisma, shop) {
     sessions: sessions.count,
     subscriptions: subscriptions.count,
     generations: generationRows.count,
+    photoTryons: photoTryons.count,
   }
 }

@@ -39,6 +39,21 @@
   {% assign app_origin = engine_url | split: '/tryon/' | first %}
 {% endif %}
 
+{% comment %}
+  Photo try-on (spec 2026-11-11): a second button where the shopper uploads a
+  selfie and the app returns it with the glasses on. Built for specific stores,
+  so it only renders for the myshopify domains listed here. This only hides the
+  button -- the app checks its own PHOTO_TRYON_SHOPS list on every request, so
+  keep the two in step when adding a store. Needs the app origin to reach the
+  photo page, like the installed report above.
+{% endcomment %}
+{% assign photo_tryon_shops = 'qirpee-w4.myshopify.com' | split: ',' %}
+{% assign photo_tryon = false %}
+{% if app_origin != blank and photo_tryon_shops contains shop.permanent_domain %}
+  {% assign photo_tryon = true %}
+{% endif %}
+{% assign photo_dialog_id = dialog_id | append: '-photo' %}
+
 {% if tryon_enabled %}
 <div
   class="ar-tryon"
@@ -81,6 +96,31 @@
       <p class="ar-tryon__missing">Set the try-on engine URL in the block settings.</p>
     {% endif %}
   </dialog>
+
+  {% if photo_tryon %}
+    <button class="ar-tryon__open ar-tryon__open--photo" type="button" commandfor="{{ photo_dialog_id }}" command="show-modal">
+      <svg class="ar-tryon__open-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+        <circle cx="9" cy="10" r="2"></circle>
+        <path d="m21 16-5-5-9 9"></path>
+      </svg>
+      <span>Try on with a photo</span>
+    </button>
+
+    <dialog id="{{ photo_dialog_id }}" class="ar-tryon__dialog" aria-label="Try on sunglasses with a photo">
+      <button class="ar-tryon__close" type="button" aria-label="Close photo try-on" commandfor="{{ photo_dialog_id }}" command="close">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m18 6-12 12M6 6l12 12"></path>
+        </svg>
+      </button>
+      <iframe
+        class="ar-tryon__frame"
+        allow="camera"
+        src="{{ app_origin }}/photo-tryon/index.html?shop={{ shop.permanent_domain | url_encode }}&productId={{ product_gid | url_encode }}"
+        loading="lazy"
+      ></iframe>
+    </dialog>
+  {% endif %}
 </div>
 
 <script>
@@ -104,8 +144,14 @@
           ? event.target.closest('.ar-tryon__open, .ar-tryon__close')
           : null
         if (!trigger) return
+        // Each button names its own dialog (the block can hold two: live and
+        // photo try-on), so follow commandfor rather than taking the first one.
         const root = trigger.closest('.ar-tryon')
-        const dialog = root && root.querySelector('.ar-tryon__dialog')
+        const targetId = typeof trigger.getAttribute === 'function' && trigger.getAttribute('commandfor')
+        const named = targetId ? document.getElementById(targetId) : null
+        const dialog = named && typeof named.showModal === 'function'
+          ? named
+          : root && root.querySelector('.ar-tryon__dialog')
         if (!dialog) return
         if (trigger.classList.contains('ar-tryon__close')) dialog.close()
         else if (!dialog.open) dialog.showModal()
@@ -221,6 +267,20 @@
   .ar-tryon__open:focus-visible {
     outline: 3px solid rgba(17, 17, 17, 0.3);
     outline-offset: 3px;
+  }
+  /* Photo try-on: same size, outlined, so the live try-on stays the main action. */
+  .ar-tryon__open--photo {
+    margin-top: 10px;
+    background: #ffffff;
+    color: #171717;
+  }
+  .ar-tryon__open--photo:hover {
+    background: #f3f3f3;
+    color: #000000;
+  }
+  /* The floating pill (embed with no product form) stays a single button. */
+  .ar-tryon.ar-tryon--floating .ar-tryon__open--photo {
+    display: none;
   }
   .ar-tryon__open-icon {
     width: 20px;

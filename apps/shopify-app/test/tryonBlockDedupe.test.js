@@ -68,13 +68,14 @@ function makePage({ nativeCommands = false } = {}) {
 // Each block's script runs right after its own markup during parsing, so when
 // instance N runs, the DOM holds instances 1..N. `currentScript: null` models a
 // script a theme re-inserted after swapping in new section HTML.
-function runFor(index, roots, fetch = () => Promise.resolve(), page = makePage(), { currentScript, readyState } = {}) {
+function runFor(index, roots, fetch = () => Promise.resolve(), page = makePage(), { currentScript, readyState, byId = {} } = {}) {
   const visible = roots.slice(0, index + 1)
   page.onReady = page.onReady || []
   const document = {
     currentScript: currentScript === undefined ? { previousElementSibling: roots[index] } : currentScript,
     readyState,
     querySelectorAll: () => visible,
+    getElementById: (id) => byId[id] ?? null,
     addEventListener: (type, fn) => {
       if (type === 'click') page.listeners.push(fn)
       if (type === 'DOMContentLoaded') page.onReady.push(fn)
@@ -259,5 +260,23 @@ describe('try-on button after the theme swaps in new markup', () => {
     expect(liquid).toMatch(/class="ar-tryon__open"[^>]*commandfor="\{\{ dialog_id \}\}" command="show-modal"/)
     expect(liquid).toMatch(/class="ar-tryon__close"[^>]*commandfor="\{\{ dialog_id \}\}" command="close"/)
     expect(liquid).toMatch(/<dialog id="\{\{ dialog_id \}\}"/)
+  })
+})
+
+describe('photo try-on button', () => {
+  // The block can hold two dialogs (live and photo try-on). Without native
+  // Invoker Commands, the fallback must open the dialog the button names, not
+  // the first dialog in the block -- that is the live camera.
+  it('opens the dialog named by its commandfor, not the live try-on', () => {
+    const root = makeRoot()
+    const photoDialog = makeDialog()
+    const page = runFor(0, [root], undefined, makePage(), { byId: { 'ar-tryon-dialog-x-photo': photoDialog } })
+
+    const button = root._click('ar-tryon__open')
+    button.getAttribute = (name) => (name === 'commandfor' ? 'ar-tryon-dialog-x-photo' : null)
+    page.click(button)
+
+    expect(photoDialog.showModal).toHaveBeenCalledTimes(1)
+    expect(root._dialog.showModal).not.toHaveBeenCalled()
   })
 })
