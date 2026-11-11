@@ -7,7 +7,7 @@ import { useFetcher, useLoaderData, useLocation, useRevalidator } from 'react-ro
 import { authenticate } from '../shopify.server'
 import { handleProductAction } from '../productActions.server'
 import { loadWorkspace } from '../workspace.server'
-import { withEmbedActive } from '../workspaceState.js'
+import { embedOffWarning, withEmbedActive } from '../workspaceState.js'
 import prisma from '../db.server'
 import { aiGenerationEnabled, getAllowance } from '../generations.server'
 import { AddTryOnFlow, isReady as isReadyModel } from '../components/AddTryOnFlow'
@@ -17,6 +17,7 @@ import { useMarkFitReviewed } from '../components/useMarkFitReviewed'
 import ModelPicker from '../components/ModelPicker'
 import PlanUsage from '../components/PlanUsage'
 import PreviewPanel from '../components/PreviewPanel'
+import EmbedOffBanner from '../components/EmbedOffBanner'
 import SetupSteps from '../components/SetupSteps'
 import { useEmbedActive } from '../components/useEmbedActive'
 import ProductOperationsList, { filterWorkspaceMappings } from '../components/ProductOperationsList'
@@ -274,6 +275,9 @@ export default function Workspace() {
   // upgrades setup and row statuses right away.
   const { active: embedActive, check: checkEmbed } = useEmbedActive(shopify)
   const data = useMemo(() => withEmbedActive(loaderData, embedActive), [loaderData, embedActive])
+  // Setup and rows stay "Live" from past storefront views even if the embed
+  // was switched off later, so warn (with the way back) when App Bridge says so.
+  const embedOff = embedOffWarning(data.setup, embedActive)
   // Confirm the switch only when we saw it go from off to on in this visit
   // (the merchant saved in the theme editor tab and came back), not on every load.
   const previousEmbedActive = useRef(embedActive)
@@ -385,7 +389,10 @@ export default function Workspace() {
           onUploadModel={openAddTryOn}
           onCheckAgain={() => { checkEmbed(); refreshWorkspace() }}
         />
-        {showGuide(data.setup, data.guide) && <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />}
+        {embedOff && (
+          <EmbedOffBanner embedUrl={data.embedUrl} onCheckAgain={() => { checkEmbed(); refreshWorkspace() }} />
+        )}
+        {showGuide(data.setup, data.guide) && !(embedOff && data.guide?.kind === 'complete') && <WorkspaceGuide guide={data.guide} onAction={handleGuideAction} />}
         {/* Always mounted when AI is on, so a bulk run in flight survives the
             setup steps changing underneath it. PlanUsage already shows the AI
             allowance, hence showBalance={false}. */}

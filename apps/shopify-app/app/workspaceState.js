@@ -161,3 +161,14 @@ export function withEmbedActive(data, embedActive) {
     setup: setupSteps({ assets: data.assets, mappings, storeLive: true }),
   }
 }
+
+/**
+ * Whether to warn that the try-on embed is off. Only once setup is finished:
+ * before that, setup step 3 already offers "Turn on try-on". Needs a definite
+ * "off" from App Bridge; an unknown answer (null) never warns.
+ * @param {{ done?: boolean }|null|undefined} setup
+ * @param {boolean|null} embedActive
+ */
+export function embedOffWarning(setup, embedActive) {
+  return embedActive === false && Boolean(setup?.done)
+}
