@@ -115,13 +115,15 @@ export function workspaceGuide({ assets, mappings, usage }) {
   }
 }
 
-// Liquid file names in extensions/tryon-button/blocks. Either one being active
-// on the published theme means shoppers can see the Try-on button.
-const TRYON_BLOCK_HANDLES = new Set(['tryon_embed', 'tryon_button'])
+// Liquid file name of the app embed in extensions/tryon-button/blocks. Only the
+// embed counts: it is the store's on/off switch. A tryon_button block placed in
+// a product template hides its button while the embed is off (tryon_core), so
+// an active block alone does not mean shoppers can see try-on.
+const TRYON_EMBED_HANDLE = 'tryon_embed'
 
 /**
  * Reads App Bridge's `shopify.app.extensions()` result. true when the try-on
- * embed (or the older product-page block) is active on the published theme,
+ * embed is active on the published theme,
  * false when Shopify says it is not, null when the answer is missing or
  * malformed (old App Bridge, outside the admin) so callers keep the
  * proof-of-life signal instead.
@@ -133,7 +135,7 @@ export function tryOnActiveFromExtensions(extensions) {
   const theme = extensions.filter((extension) => extension?.type === 'theme_app_extension')
   if (!theme.length) return null
   return theme.some((extension) => (extension.activations ?? []).some(
-    (block) => TRYON_BLOCK_HANDLES.has(block?.handle) && block?.status === 'active',
+    (block) => block?.handle === TRYON_EMBED_HANDLE && block?.status === 'active',
   ))
 }
 
