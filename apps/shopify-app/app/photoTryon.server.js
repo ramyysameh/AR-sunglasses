@@ -16,7 +16,7 @@ import { fetchProductImages, download } from './productPhotos.server.js'
  * timestamp per request, for the daily limits, and is trimmed to two days.
  */
 
-const DEFAULT_SHOPS = 'qirpee-w4.myshopify.com'
+const DEFAULT_SHOPS = 'qirpee-w4.myshopify.com,ar-tryon-dev-xbqbnjhd.myshopify.com'
 
 export function parseShopList(spec) {
   return new Set(
