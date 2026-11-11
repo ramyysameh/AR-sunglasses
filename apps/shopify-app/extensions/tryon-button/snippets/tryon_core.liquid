@@ -47,7 +47,7 @@
   keep the two in step when adding a store. Needs the app origin to reach the
   photo page, like the installed report above.
 {% endcomment %}
-{% assign photo_tryon_shops = 'qirpee-w4.myshopify.com' | split: ',' %}
+{% assign photo_tryon_shops = 'qirpee-w4.myshopify.com,ar-tryon-dev-xbqbnjhd.myshopify.com' | split: ',' %}
 {% assign photo_tryon = false %}
 {% if app_origin != blank and photo_tryon_shops contains shop.permanent_domain %}
   {% assign photo_tryon = true %}
