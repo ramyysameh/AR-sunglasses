@@ -22,7 +22,12 @@
 {% endcomment %}
 {% assign dialog_id = 'ar-tryon-dialog-' | append: section.id | append: '-' | append: block.id %}
 
-{% if tryon_enabled %}
+{% comment %}
+  Off the theme editor the snippet decides: it also renders for products with
+  no model when the store has photo try-on (which needs no 3D model), and
+  outputs nothing when neither button applies.
+{% endcomment %}
+{% if tryon_enabled or request.design_mode != true %}
   {% render 'tryon_core',
     product: block.settings.product,
     engine_url: block.settings.engine_url,

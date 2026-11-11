@@ -10,11 +10,13 @@ import { loadWorkspace } from '../workspace.server'
 import { embedOffWarning, withEmbedActive } from '../workspaceState.js'
 import prisma from '../db.server'
 import { aiGenerationEnabled, getAllowance } from '../generations.server'
+import { handlePhotoTryonAction, loadPhotoTryonPanel } from '../photoTryonControls.server'
 import { AddTryOnFlow, isReady as isReadyModel } from '../components/AddTryOnFlow'
 import AiModelFlow from '../components/AiModelFlow'
 import ModelFitReview from '../components/ModelFitReview'
 import { useMarkFitReviewed } from '../components/useMarkFitReviewed'
 import ModelPicker from '../components/ModelPicker'
+import PhotoTryonCard from '../components/PhotoTryonCard'
 import PlanUsage from '../components/PlanUsage'
 import PreviewPanel from '../components/PreviewPanel'
 import EmbedOffBanner from '../components/EmbedOffBanner'
@@ -77,11 +79,25 @@ export const loader = async ({ request }) => {
   const aiModels = aiGenerationEnabled(session.shop) && workspace.usage.planName
     ? await getAllowance(prisma, session.shop, workspace.usage.planName)
     : null
-  return { ...workspace, aiModels }
+  // Only shops with photo try-on get the card (null otherwise). A failure here
+  // must not take the whole Workspace down with it.
+  let photoTryon = null
+  try {
+    photoTryon = await loadPhotoTryonPanel({ db: prisma, admin, shop: session.shop })
+  } catch (error) {
+    console.error('photo try-on panel failed to load', error)
+  }
+  return { ...workspace, aiModels, photoTryon }
 }
 
 export const action = async ({ request }) => {
   const { session, admin } = await authenticate.admin(request)
+  // Photo try-on switches post here too; peek at the intent on a clone so
+  // handleProductAction can still read the original body.
+  const form = await request.clone().formData()
+  if (form.get('intent') === 'photo-tryon') {
+    return handlePhotoTryonAction({ form, db: prisma, admin, shop: session.shop })
+  }
   return handleProductAction({ request, admin, shop: session.shop })
 }
 
@@ -397,6 +413,7 @@ export default function Workspace() {
             setup steps changing underneath it. PlanUsage already shows the AI
             allowance, hence showBalance={false}. */}
         {data.aiModels && <AiModelFlow initialAllowance={data.aiModels} showBalance={false} />}
+        <PhotoTryonCard panel={data.photoTryon} />
         {hasOperations && (
           <>
             {/* A native Polaris card; padding="none" lets the table run to its edges.

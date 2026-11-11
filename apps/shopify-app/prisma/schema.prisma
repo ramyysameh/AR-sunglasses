@@ -148,3 +148,16 @@ model PhotoTryon {
   @@index([shop, createdAt])
   @@index([clientKey, createdAt])
 }
+
+// Products the merchant switched photo try-on OFF for (spec 2026-11-11).
+// Photo try-on is on by default for every product in an enabled shop, so only
+// the exceptions are stored. Mirrored to the product metafield
+// $app:tryon.photo_off, which the storefront block reads to hide the button.
+model PhotoTryonOff {
+  id        String   @id @default(uuid())
+  shop      String
+  productId String
+  createdAt DateTime @default(now())
+
+  @@unique([shop, productId])
+}

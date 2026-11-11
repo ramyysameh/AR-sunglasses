@@ -46,21 +46,27 @@
   button -- the app checks its own PHOTO_TRYON_SHOPS list on every request, so
   keep the two in step when adding a store. Needs the app origin to reach the
   photo page, like the installed report above.
+
+  Independent of the 3D model: it shows on every product of a listed store,
+  mapped or not, unless the merchant switched it off for that product in the
+  Workspace (app-owned metafield $app:tryon.photo_off).
 {% endcomment %}
 {% assign photo_tryon_shops = 'qirpee-w4.myshopify.com,ar-tryon-dev-xbqbnjhd.myshopify.com' | split: ',' %}
 {% assign photo_tryon = false %}
 {% if app_origin != blank and photo_tryon_shops contains shop.permanent_domain %}
-  {% assign photo_tryon = true %}
+  {% unless product.metafields["$app:tryon"].photo_off.value == true %}
+    {% assign photo_tryon = true %}
+  {% endunless %}
 {% endif %}
 {% assign photo_dialog_id = dialog_id | append: '-photo' %}
 
-{% if tryon_enabled %}
+{% if tryon_enabled or photo_tryon %}
 <div
   class="ar-tryon"
   data-ar-tryon-placement="{{ placement }}"
   {% if request.design_mode %}
     data-ar-tryon-design-mode="true"
-  {% elsif app_origin != blank %}
+  {% elsif app_origin != blank and tryon_enabled %}
     data-ar-tryon-installed-url="{{ app_origin }}/api/tryon-installed?shop={{ shop.permanent_domain | url_encode }}&productId={{ product_gid | url_encode }}"
   {% endif %}
   {{ attributes }}
@@ -71,6 +77,7 @@
       (Theme settings → App embeds) to show this button to shoppers.
     </p>
   {% endif %}
+  {% if tryon_enabled %}
   <button class="ar-tryon__open" type="button" commandfor="{{ dialog_id }}" command="show-modal">
     <svg class="ar-tryon__open-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3h5Z"></path>
@@ -96,9 +103,10 @@
       <p class="ar-tryon__missing">Set the try-on engine URL in the block settings.</p>
     {% endif %}
   </dialog>
+  {% endif %}
 
   {% if photo_tryon %}
-    <button class="ar-tryon__open ar-tryon__open--photo" type="button" commandfor="{{ photo_dialog_id }}" command="show-modal">
+    <button class="ar-tryon__open ar-tryon__open--photo{% unless tryon_enabled %} ar-tryon__open--solo{% endunless %}" type="button" commandfor="{{ photo_dialog_id }}" command="show-modal">
       <svg class="ar-tryon__open-icon" viewBox="0 0 24 24" aria-hidden="true">
         <rect x="3" y="4" width="18" height="16" rx="2"></rect>
         <circle cx="9" cy="10" r="2"></circle>
@@ -273,6 +281,10 @@
     margin-top: 10px;
     background: #ffffff;
     color: #171717;
+  }
+  /* No live try-on on this product: the photo button is the only one. */
+  .ar-tryon__open--photo.ar-tryon__open--solo {
+    margin-top: 0;
   }
   .ar-tryon__open--photo:hover {
     background: #f3f3f3;

@@ -34,6 +34,7 @@ describe('purgeShopData and AI generations', () => {
       { shop: SHOP, clientKey: 'k1' },
       { shop: 'other.myshopify.com', clientKey: 'k2' },
     ]
+    const offRows = [{ shop: SHOP, productId: 'gid://shopify/Product/1' }, { shop: 'other.myshopify.com', productId: 'gid://shopify/Product/2' }]
     const prisma = {
       modelAsset: table([{ shop: SHOP, storageRef: 'a.glb' }]),
       productMapping: table([]),
@@ -41,6 +42,7 @@ describe('purgeShopData and AI generations', () => {
       shopSubscription: table([]),
       modelGeneration: table(generationRows),
       photoTryon: table(photoRows),
+      photoTryonOff: table(offRows),
     }
 
     const result = await purgeShopData(prisma, SHOP)
@@ -52,5 +54,6 @@ describe('purgeShopData and AI generations', () => {
     // Photo try-on counters (salted IP hashes) go too; other shops' stay.
     expect(result.photoTryons).toBe(1)
     expect(photoRows.map((r) => r.shop)).toEqual(['other.myshopify.com'])
+    expect(offRows.map((r) => r.shop)).toEqual(['other.myshopify.com'])
   })
 })
