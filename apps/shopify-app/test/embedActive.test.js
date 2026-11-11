@@ -14,8 +14,9 @@ describe('tryOnActiveFromExtensions', () => {
     expect(tryOnActiveFromExtensions([theme([block('tryon_embed', 'active')])])).toBe(true)
   })
 
-  it('also counts the older product-page block', () => {
-    expect(tryOnActiveFromExtensions([theme([block('tryon_embed', 'available'), block('tryon_button', 'active')])])).toBe(true)
+  it('ignores a product-page block when the embed is off, since the embed off hides its button', () => {
+    expect(tryOnActiveFromExtensions([theme([block('tryon_embed', 'available'), block('tryon_button', 'active')])])).toBe(false)
+    expect(tryOnActiveFromExtensions([theme([block('tryon_embed', 'active'), block('tryon_button', 'active')])])).toBe(true)
   })
 
   it('is false when Shopify reports the embed as only available', () => {
