@@ -1,8 +1,13 @@
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { setupSteps, tryOnActiveFromExtensions, withEmbedActive, workspaceCounts, workspaceGuide } from '../app/workspaceState.js'
+import EmbedOffBanner from '../app/components/EmbedOffBanner.jsx'
+import { embedOffWarning, setupSteps, tryOnActiveFromExtensions, withEmbedActive, workspaceCounts, workspaceGuide } from '../app/workspaceState.js'
 
 const theme = (blocks) => ({ handle: 'tryon-button', type: 'theme_app_extension', activations: blocks })
 const block = (handle, status) => ({ handle, name: handle, target: 'body', status, activations: [] })
+
+global.React = React
 
 describe('tryOnActiveFromExtensions', () => {
   it('is true when the try-on embed is active on the published theme', () => {
@@ -69,5 +74,28 @@ describe('withEmbedActive', () => {
     const onlyTheme = { ...loader, mappings: [mappings[0]], guide: workspaceGuide({ assets, mappings: [mappings[0]], usage }) }
     expect(onlyTheme.guide.action.id).toBe('theme')
     expect(withEmbedActive(onlyTheme, true).guide.kind).toBe('complete')
+  })
+})
+
+describe('embedOffWarning', () => {
+  it('warns only after setup is done and App Bridge says the embed is off', () => {
+    expect(embedOffWarning({ done: true }, false)).toBe(true)
+    expect(embedOffWarning({ done: true }, null)).toBe(false)
+    expect(embedOffWarning({ done: true }, true)).toBe(false)
+    expect(embedOffWarning({ done: false }, false)).toBe(false)
+    expect(embedOffWarning(null, false)).toBe(false)
+  })
+})
+
+describe('EmbedOffBanner', () => {
+  it('explains the problem and offers the one-click switch in a new tab', () => {
+    const html = renderToStaticMarkup(React.createElement(EmbedOffBanner, {
+      embedUrl: 'https://s.myshopify.com/admin/themes/current/editor?context=apps',
+      onCheckAgain: () => {},
+    }))
+    expect(html).toContain('Try-on is switched off in your theme')
+    expect(html).toContain('Turn on try-on')
+    expect(html).toContain('opens your theme editor in a new tab')
+    expect(html).toContain('Check again')
   })
 })

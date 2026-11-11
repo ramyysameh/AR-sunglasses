@@ -10,6 +10,7 @@ import PlanUsage from '../app/components/PlanUsage.jsx'
 import AiModelFlow from '../app/components/AiModelFlow.jsx'
 import SetupSteps from '../app/components/SetupSteps.jsx'
 import ModelFitReview from '../app/components/ModelFitReview.jsx'
+import EmbedOffBanner from '../app/components/EmbedOffBanner.jsx'
 
 const harness = vi.hoisted(() => ({
   data: null,
@@ -122,6 +123,7 @@ function render(data, search = '') {
 }
 
 beforeEach(() => {
+  harness.embedActive = null
   harness.state = []
   harness.stateIndex = 0
   harness.revalidate.mockReset()
@@ -132,6 +134,25 @@ beforeEach(() => {
 })
 
 describe('Workspace route composition', () => {
+  it('warns with a way back when setup is done but the embed is switched off', () => {
+    const complete = { kind: 'complete', title: 'Everything is live', detail: '4 products are ready', action: null }
+    expect(findComponent(render(baseData({ guide: complete })), EmbedOffBanner)).toBeUndefined()
+
+    harness.embedActive = false
+    const page = render(baseData({ guide: complete }))
+    const banner = findComponent(page, EmbedOffBanner)
+    expect(banner.props.embedUrl).toBe('https://shop.test/admin/themes/current/editor?context=apps')
+    // "Everything is live" would contradict the banner.
+    expect(findComponent(page, WorkspaceGuide)).toBeUndefined()
+    banner.props.onCheckAgain()
+    expect(harness.checkEmbed).toHaveBeenCalled()
+    expect(harness.revalidate).toHaveBeenCalled()
+
+    // Mid-setup, step 3 already offers the button: no banner.
+    const setup = { done: false, steps: [{ id: 'create', state: 'done' }, { id: 'save', state: 'done' }, { id: 'turn-on', state: 'current' }] }
+    expect(findComponent(render(baseData({ setup })), EmbedOffBanner)).toBeUndefined()
+  })
+
   it('shows the guided setup instead of the plain guide until setup is done', () => {
     const setup = {
       done: false,
