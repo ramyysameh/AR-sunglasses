@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import OpenAI, { toFile } from 'openai'
 import { tagged } from './errors.server.js'
-import { fetchProductImages, download } from './productPhotos.server.js'
+import { download } from './productPhotos.server.js'
 
 /**
  * Photo try-on (spec 2026-11-11): a shopper uploads a selfie and OpenAI's image
@@ -58,6 +58,15 @@ export const PHOTO_TRYON_PROMPT = `Image 1 is a photo of a person. Image 2 is a 
 Edit image 1 so the person is wearing exactly the sunglasses from image 2.
 - Copy the sunglasses faithfully: frame shape, thickness, colour and finish, lens colour and darkness, metal parts, and any logo or text on the frame, in the same place. Do not invent or restyle anything.
 - Size and place them naturally for this face: centred on the nose bridge, lenses over the eyes, temples running back to the ears, following the head's angle. Match the photo's lighting, with a soft shadow where the frame touches the face.
+- If the person already wears glasses, replace them with these.
+- Change nothing else: keep the person's face, identity, skin, expression, hair, clothing, pose, background, framing and image size exactly as they are.`
+
+export const PHOTO_TRYON_ACCESSORY_PROMPT = `Image 1 is a photo of a person. Image 2 shows a product: a pair of sunglasses with an eyewear chain attached. Image 2 may show them worn by a model; copy only the sunglasses and the chain, never the model.
+
+Edit image 1 so the person is wearing exactly these sunglasses with this chain.
+- Copy the sunglasses faithfully: frame shape, thickness, colour and finish, lens colour and darkness, metal parts, and any logo or text on the frame, in the same place. Do not invent or restyle anything.
+- Copy the chain faithfully: its links, beads or charms, colour, material and thickness. Attach it to the tip of each temple behind the ears and let it hang naturally down and around the back of the neck, with realistic drape and gravity. Where the photo cuts off, let the chain leave the frame naturally.
+- Size and place the sunglasses naturally for this face: centred on the nose bridge, lenses over the eyes, temples running back to the ears, following the head's angle. Match the photo's lighting, with soft shadows where the frame and chain touch the skin.
 - If the person already wears glasses, replace them with these.
 - Change nothing else: keep the person's face, identity, skin, expression, hair, clothing, pose, background, framing and image size exactly as they are.`
 
@@ -118,12 +127,66 @@ export function setPhotoClient(fake) {
   client = fake
 }
 
-/** The product's first photo, read through the shop's own Admin API. */
-export async function productPhoto(admin, productId, fetchImpl = fetch) {
-  const product = await fetchProductImages(admin, productId)
-  const first = product.images[0]
-  if (!first) throw tagged('NO_PRODUCT_PHOTO', `product ${productId} has no photos`)
-  return download(first.url, fetchImpl)
+/**
+ * Versions to render for a product (spec addendum 2026-11-12). Merchants sell
+ * some frames alone and with a chain as variants of one product, e.g. a "Set"
+ * option of "Glasses Only" / "1. Glasses + Chain", each variant with its own
+ * photo. For such a product the shopper gets one picture per version; for any
+ * other product, one picture from the product's main photo.
+ */
+const ACCESSORY = /chain|accessor|strap|cord|lanyard/i
+const PRODUCT_GID = /^gid:\/\/shopify\/Product\/\d+$/
+const IMAGE_URL = 'url(transform: { maxWidth: 2048, maxHeight: 2048, preferredContentType: JPG })'
+
+export const PRODUCT_VERSIONS_QUERY = `#graphql
+  query PhotoTryonVersions($id: ID!) {
+    product(id: $id) {
+      id
+      options { name values }
+      featuredMedia { ... on MediaImage { image { ${IMAGE_URL} } } }
+      variants(first: 50) {
+        nodes {
+          selectedOptions { name value }
+          media(first: 1) { nodes { ... on MediaImage { image { ${IMAGE_URL} } } } }
+        }
+      }
+    }
+  }`
+
+// "1. Glasses + Chain" -> "Glasses + Chain"
+export const versionLabel = (value) => String(value).replace(/^\s*\d+[.)]\s*/, '').trim()
+
+/** Pure: product data -> [{ label, accessory, url }], plain version first. */
+export function versionsFromProduct(product) {
+  const mainUrl = product?.featuredMedia?.image?.url ?? null
+  const option = (product?.options ?? []).find((o) => (o.values ?? []).some((v) => ACCESSORY.test(v)))
+  if (!option) return mainUrl ? [{ label: null, accessory: false, url: mainUrl }] : []
+  const variants = product.variants?.nodes ?? []
+  const imageFor = (value) => {
+    const variant = variants.find((v) => v.selectedOptions?.some((o) => o.name === option.name && o.value === value)
+      && v.media?.nodes?.[0]?.image?.url)
+    return variant?.media.nodes[0].image.url ?? null
+  }
+  const versions = option.values.map((value) => {
+    const accessory = ACCESSORY.test(value)
+    return { label: versionLabel(value), accessory, url: imageFor(value) ?? (accessory ? null : mainUrl) }
+  }).filter((v) => v.url)
+  versions.sort((a, b) => Number(a.accessory) - Number(b.accessory))
+  // At most one plain and one accessory version: that is what the page shows.
+  const plain = versions.find((v) => !v.accessory)
+  const withAccessory = versions.find((v) => v.accessory)
+  return [plain, withAccessory].filter(Boolean)
+}
+
+/** Versions with their photos downloaded (Shopify CDN only), via the shop's Admin API. */
+export async function productVersions(admin, productId, fetchImpl = fetch) {
+  if (!PRODUCT_GID.test(productId)) throw tagged('PRODUCT_NOT_FOUND', `not a product id: ${productId}`)
+  const res = await admin.graphql(PRODUCT_VERSIONS_QUERY, { variables: { id: productId } })
+  const product = (await res.json())?.data?.product
+  if (!product) throw tagged('PRODUCT_NOT_FOUND', `product ${productId} not found`)
+  const versions = versionsFromProduct(product)
+  if (versions.length === 0) throw tagged('NO_PRODUCT_PHOTO', `product ${productId} has no photos`)
+  return Promise.all(versions.map(async (version) => ({ ...version, ...(await download(version.url, fetchImpl)) })))
 }
 
 // OpenAI turns some photos down (no person, unsafe content). That's the
@@ -132,9 +195,10 @@ const isRefusal = (error) =>
   error?.status === 400 && /safety|moderation|content policy|rejected/i.test(`${error?.code ?? ''} ${error?.message ?? ''}`)
 
 /**
- * Selfie + product photo -> JPEG bytes of the shopper wearing the glasses.
+ * Selfie + product photo -> JPEG bytes of the shopper wearing the glasses
+ * (and the chain, for an accessory version).
  */
-export async function renderPhotoTryon({ selfie, selfieType, product, productType }) {
+export async function renderPhotoTryon({ selfie, selfieType, product, productType, accessory = false }) {
   let response
   try {
     response = await getClient().images.edit({
@@ -143,10 +207,13 @@ export async function renderPhotoTryon({ selfie, selfieType, product, productTyp
         await toFile(selfie, `person.${EXT[selfieType]}`, { type: selfieType }),
         await toFile(product, `sunglasses.${EXT[productType]}`, { type: productType }),
       ],
-      prompt: PHOTO_TRYON_PROMPT,
+      prompt: accessory ? PHOTO_TRYON_ACCESSORY_PROMPT : PHOTO_TRYON_PROMPT,
       size: 'auto',
       quality: 'medium',
       output_format: 'jpeg',
+      // Two versions travel back in one JSON response; keep each well under
+      // a megabyte so the pair stays far below Vercel's 4.5 MB response cap.
+      output_compression: 82,
       n: 1,
     })
   } catch (error) {

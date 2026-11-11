@@ -9,7 +9,7 @@ import {
   MAX_SELFIE_BYTES,
   reserveAttempt,
   releaseAttempt,
-  productPhoto,
+  productVersions,
   renderPhotoTryon,
 } from '../photoTryon.server'
 import { isProductPhotoOff } from '../photoTryonControls.server'
@@ -108,17 +108,32 @@ export const action = async ({ request }) => {
 
   try {
     const { admin } = await unauthenticated.admin(shop)
-    const product = await productPhoto(admin, productId)
-    const image = await renderPhotoTryon({
+    // One version per photo to try on: usually one, two for a product sold
+    // "Glasses Only" and "Glasses + Chain". Rendered in parallel, so a second
+    // version costs money but not waiting time.
+    const versions = await productVersions(admin, productId)
+    const settled = await Promise.allSettled(versions.map((version) => renderPhotoTryon({
       selfie,
       selfieType,
-      product: product.bytes,
-      productType: product.contentType,
-    })
-    return new Response(image, {
-      status: 200,
-      headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' },
-    })
+      product: version.bytes,
+      productType: version.contentType,
+      accessory: version.accessory,
+    })))
+    const done = versions
+      .map((version, i) => ({ version, result: settled[i] }))
+      .filter(({ result }) => result.status === 'fulfilled')
+    // Partial success still answers the shopper; only a total failure is an error.
+    if (done.length === 0) throw settled[0].reason
+    for (const item of settled) {
+      if (item.status === 'rejected') console.error('photo-tryon: one version failed', item.reason?.code, item.reason?.message)
+    }
+    return Response.json({
+      versions: done.map(({ version, result }) => ({
+        label: version.label,
+        accessory: version.accessory,
+        image: `data:image/jpeg;base64,${result.value.toString('base64')}`,
+      })),
+    }, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
     await releaseAttempt(db, attemptId)
     const code = error?.code === 'BAD_PHOTO' ? 'NO_PRODUCT_PHOTO' : error?.code

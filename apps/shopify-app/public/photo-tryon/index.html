@@ -113,6 +113,29 @@
     .btn.secondary { background: transparent; color: var(--text); border-color: var(--line); }
     .btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
+    .versions {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: 1fr;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .versions button {
+      min-height: 40px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 150ms ease, color 150ms ease;
+    }
+    .versions button[aria-pressed="true"] { background: var(--accent); color: #111; }
+    .versions button:focus-visible { outline: 3px solid rgba(255, 255, 255, 0.4); outline-offset: 2px; }
     .error {
       border: 1px solid rgba(255, 120, 120, 0.4);
       background: rgba(255, 80, 80, 0.08);
@@ -133,6 +156,8 @@
       <h1 id="title">Try on with a photo</h1>
       <p id="subtitle">Upload a photo of your face and see these sunglasses on you.</p>
     </header>
+
+    <div class="versions" id="versions" role="group" aria-label="Choose a version" hidden></div>
 
     <div class="stage" id="stage">
       <ul class="tips" id="tips">
@@ -178,7 +203,31 @@
         pick: $('pick'), pickLabel: $('pick-label'), file: $('file'), done: $('done'),
         save: $('save'), again: $('again'), title: $('title'), subtitle: $('subtitle'),
       }
-      let resultUrl = null
+      let results = []
+      let current = 0
+      const versionsEl = document.getElementById('versions')
+
+      // Show one version (e.g. "Glasses Only" / "Glasses + Chain") and point
+      // Save at it. The switch only appears when there is more than one.
+      function showVersion(i) {
+        current = i
+        const result = results[i]
+        setPreview(result.image)
+        els.save.href = result.image
+        els.save.download = `my-try-on${result.accessory ? '-with-chain' : ''}.jpg`
+        for (const [j, button] of [...versionsEl.children].entries()) button.setAttribute('aria-pressed', String(j === i))
+      }
+
+      function renderVersions() {
+        versionsEl.replaceChildren(...results.map((result, i) => {
+          const button = document.createElement('button')
+          button.type = 'button'
+          button.textContent = result.label || `Version ${i + 1}`
+          button.addEventListener('click', () => showVersion(i))
+          return button
+        }))
+        versionsEl.hidden = results.length < 2
+      }
       let busy = false
 
       // Phones and tablets offer camera or library from the same picker.
@@ -237,6 +286,7 @@
         busy = true
         els.error.hidden = true
         els.done.hidden = true
+        versionsEl.hidden = true
         let photo
         try {
           photo = await shrink(file)
@@ -260,11 +310,11 @@
             const data = await res.json().catch(() => ({}))
             throw new Error(data.error || "We couldn't create your photo. Try again in a moment.")
           }
-          const image = await res.blob()
-          if (resultUrl) URL.revokeObjectURL(resultUrl)
-          resultUrl = URL.createObjectURL(image)
-          setPreview(resultUrl)
-          els.save.href = resultUrl
+          const data = await res.json()
+          results = Array.isArray(data.versions) ? data.versions.filter((v) => typeof v.image === 'string') : []
+          if (results.length === 0) throw new Error("We couldn't create your photo. Try again in a moment.")
+          renderVersions()
+          showVersion(0)
           els.title.textContent = 'Your try-on'
           els.subtitle.textContent = 'Here are the sunglasses on you.'
           els.done.hidden = false

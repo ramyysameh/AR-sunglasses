@@ -9,7 +9,10 @@ const h = vi.hoisted(() => ({
   released: [],
   adminShops: [],
   renderInput: null,
+  renderInputs: [],
   productOff: false,
+  versions: null,
+  failAccessory: false,
 }))
 
 vi.mock('../app/db.server.js', () => ({ default: {} }))
@@ -41,14 +44,16 @@ vi.mock('../app/photoTryon.server.js', async (importOriginal) => {
     releaseAttempt: async (_db, id) => {
       h.released.push(id)
     },
-    productPhoto: async () => {
+    productVersions: async () => {
       if (h.productError) throw h.productError
-      return { bytes: Buffer.from([0x89, 0x50]), contentType: 'image/png' }
+      return h.versions ?? [{ label: null, accessory: false, bytes: Buffer.from([0x89, 0x50]), contentType: 'image/png' }]
     },
     renderPhotoTryon: async (input) => {
       h.renderInput = input
+      h.renderInputs.push(input)
       if (h.renderError) throw h.renderError
-      return Buffer.from([0xff, 0xd8, 0xff, 0xd9])
+      if (h.failAccessory && input.accessory) throw Object.assign(new Error('x'), { code: 'AI_FAILED' })
+      return Buffer.from(input.accessory ? 'chain' : 'plain')
     },
   }
 })
@@ -76,19 +81,46 @@ beforeEach(() => {
     released: [],
     adminShops: [],
     renderInput: null,
+    renderInputs: [],
     productOff: false,
+    versions: null,
+    failAccessory: false,
   })
 })
 
 describe('POST /api/photo-tryon', () => {
-  it('returns the edited photo as an uncacheable JPEG', async () => {
+  it('returns the edited photo as one uncacheable version', async () => {
     const res = await post()
     expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('image/jpeg')
     expect(res.headers.get('cache-control')).toBe('no-store')
+    const body = await res.json()
+    expect(body.versions).toHaveLength(1)
+    expect(body.versions[0].image).toBe(`data:image/jpeg;base64,${Buffer.from('plain').toString('base64')}`)
     expect(h.adminShops).toEqual(['qirpee-w4.myshopify.com'])
     expect(h.renderInput.selfieType).toBe('image/jpeg')
     expect(h.renderInput.productType).toBe('image/png')
+    expect(h.released).toEqual([])
+  })
+
+  const TWO = [
+    { label: 'Glasses Only', accessory: false, bytes: Buffer.from([1]), contentType: 'image/jpeg' },
+    { label: 'Glasses + Chain', accessory: true, bytes: Buffer.from([2]), contentType: 'image/jpeg' },
+  ]
+
+  it('renders glasses-only and with-chain versions from one upload, as one try', async () => {
+    h.versions = TWO
+    const body = await (await post()).json()
+    expect(body.versions.map((v) => [v.label, v.accessory])).toEqual([['Glasses Only', false], ['Glasses + Chain', true]])
+    expect(h.renderInputs.map((i) => i.accessory)).toEqual([false, true])
+    expect(h.released).toEqual([])
+  })
+
+  it('still answers with the versions that worked when one fails', async () => {
+    h.versions = TWO
+    h.failAccessory = true
+    const res = await post()
+    expect(res.status).toBe(200)
+    expect((await res.json()).versions.map((v) => v.label)).toEqual(['Glasses Only'])
     expect(h.released).toEqual([])
   })
 

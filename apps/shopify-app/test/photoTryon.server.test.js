@@ -10,6 +10,9 @@ import {
   setPhotoClient,
   LIMITS,
   PHOTO_TRYON_PROMPT,
+  PHOTO_TRYON_ACCESSORY_PROMPT,
+  versionsFromProduct,
+  versionLabel,
 } from '../app/photoTryon.server.js'
 
 // In-memory PhotoTryon table: just the calls reserveAttempt/releaseAttempt make.
@@ -170,5 +173,72 @@ describe('renderPhotoTryon', () => {
   it('treats an empty response as a failure', async () => {
     setPhotoClient({ images: { edit: async () => ({ data: [] }) } })
     await expect(renderPhotoTryon(input)).rejects.toMatchObject({ code: 'AI_FAILED' })
+  })
+})
+
+describe('versionsFromProduct', () => {
+  const img = (n) => ({ image: { url: `https://cdn.shopify.com/${n}.jpg` } })
+  const variant = (option, value, n) => ({
+    selectedOptions: [{ name: 'Color', value: 'Gold' }, { name: option, value }],
+    media: { nodes: n ? [img(n)] : [] },
+  })
+
+  it('gives one version from the main photo for a product with no chain option', () => {
+    const product = { featuredMedia: img('main'), options: [{ name: 'Color', values: ['Gray'] }], variants: { nodes: [] } }
+    expect(versionsFromProduct(product)).toEqual([{ label: null, accessory: false, url: 'https://cdn.shopify.com/main.jpg' }])
+  })
+
+  it('gives glasses-only then with-chain, each from its variant photo (qirpee-w4 layout)', () => {
+    const product = {
+      featuredMedia: img('main'),
+      options: [{ name: 'Color', values: ['Gold'] }, { name: 'set', values: ['1. Glasses + Chain', 'Glasses Only'] }],
+      variants: { nodes: [variant('set', 'Glasses Only', 'plain'), variant('set', '1. Glasses + Chain', 'chain')] },
+    }
+    expect(versionsFromProduct(product)).toEqual([
+      { label: 'Glasses Only', accessory: false, url: 'https://cdn.shopify.com/plain.jpg' },
+      { label: 'Glasses + Chain', accessory: true, url: 'https://cdn.shopify.com/chain.jpg' },
+    ])
+  })
+
+  it('treats "Glasses + Accessories" as the chain version', () => {
+    const product = {
+      featuredMedia: img('main'),
+      options: [{ name: 'Set', values: ['Glasses Only', '1. Glasses + Accessories'] }],
+      variants: { nodes: [variant('Set', 'Glasses Only', null), variant('Set', '1. Glasses + Accessories', 'acc')] },
+    }
+    expect(versionsFromProduct(product).map((v) => [v.label, v.accessory, v.url])).toEqual([
+      ['Glasses Only', false, 'https://cdn.shopify.com/main.jpg'],
+      ['Glasses + Accessories', true, 'https://cdn.shopify.com/acc.jpg'],
+    ])
+  })
+
+  it('drops the chain version when its variant has no photo, rather than guessing', () => {
+    const product = {
+      featuredMedia: img('main'),
+      options: [{ name: 'set', values: ['Glasses Only', 'Glasses + Chain'] }],
+      variants: { nodes: [variant('set', 'Glasses Only', 'plain'), variant('set', 'Glasses + Chain', null)] },
+    }
+    expect(versionsFromProduct(product).map((v) => v.label)).toEqual(['Glasses Only'])
+  })
+
+  it('is empty for a product with no photos at all', () => {
+    expect(versionsFromProduct({ featuredMedia: null, options: [], variants: { nodes: [] } })).toEqual([])
+  })
+
+  it('cleans list numbering off option values', () => {
+    expect(versionLabel('1. Glasses + Chain')).toBe('Glasses + Chain')
+    expect(versionLabel('Glasses Only')).toBe('Glasses Only')
+  })
+})
+
+describe('renderPhotoTryon accessory prompt', () => {
+  afterEach(() => setPhotoClient(null))
+  it('uses the chain prompt for an accessory version', async () => {
+    const edit = vi.fn(async () => ({ data: [{ b64_json: Buffer.from('r').toString('base64') }] }))
+    setPhotoClient({ images: { edit } })
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0])
+    await renderPhotoTryon({ selfie: jpeg, selfieType: 'image/jpeg', product: jpeg, productType: 'image/jpeg', accessory: true })
+    expect(edit.mock.calls[0][0].prompt).toBe(PHOTO_TRYON_ACCESSORY_PROMPT)
+    expect(PHOTO_TRYON_ACCESSORY_PROMPT).toMatch(/never the model/)
   })
 })
