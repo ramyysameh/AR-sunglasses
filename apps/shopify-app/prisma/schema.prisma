@@ -134,3 +134,17 @@ model ModelGeneration {
   @@index([shop, createdAt])
   @@index([providerJobId])
 }
+
+// One photo try-on request from a storefront shopper (spec 2026-11-11). Only
+// a counter for the daily limits: no photo, result or raw IP is stored.
+// clientKey is a salted hash of the shopper's IP. Rows older than two days
+// are deleted as new requests come in.
+model PhotoTryon {
+  id        String   @id @default(uuid())
+  shop      String
+  clientKey String
+  createdAt DateTime @default(now())
+
+  @@index([shop, createdAt])
+  @@index([clientKey, createdAt])
+}
