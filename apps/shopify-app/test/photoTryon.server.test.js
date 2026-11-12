@@ -13,6 +13,10 @@ import {
   PHOTO_TRYON_ACCESSORY_PROMPT,
   PHOTO_TRYON_ADD_CHAIN_PROMPT,
   renderAddChain,
+  signChainTicket,
+  verifyChainTicket,
+  imageHash,
+  reserveChainStep,
   versionsFromProduct,
   versionLabel,
 } from '../app/photoTryon.server.js'
@@ -256,5 +260,47 @@ describe('renderAddChain', () => {
     expect(body.prompt).toBe(PHOTO_TRYON_ADD_CHAIN_PROMPT)
     expect(body.image.map((f) => f.name)).toEqual(['person.jpg', 'chain.jpg'])
     expect(PHOTO_TRYON_ADD_CHAIN_PROMPT).toMatch(/Keep the sunglasses in image 1 exactly as they are/)
+  })
+})
+
+describe('chain tickets', () => {
+  const claims = { shop: 'qirpee-w4.myshopify.com', productId: 'gid://shopify/Product/1', attemptId: 'a1', hash: imageHash(Buffer.from('pic')) }
+  const now = 1_800_000_000_000
+
+  it('round-trips for the same shop, product and picture', () => {
+    const ticket = signChainTicket({ ...claims, now, secret: 's' })
+    expect(verifyChainTicket(ticket, { ...claims, now: now + 1000, secret: 's' }).a).toBe('a1')
+  })
+
+  it.each([
+    ['another picture', { hash: imageHash(Buffer.from('other')) }],
+    ['another product', { productId: 'gid://shopify/Product/2' }],
+    ['another shop', { shop: 'x.myshopify.com' }],
+    ['after 5 minutes', { now: now + 5 * 60 * 1000 + 1 }],
+    ['another secret', { secret: 'other' }],
+  ])('rejects %s', (_name, change) => {
+    const ticket = signChainTicket({ ...claims, now, secret: 's' })
+    expect(() => verifyChainTicket(ticket, { ...claims, now, secret: 's', ...change })).toThrow(expect.objectContaining({ code: 'BAD_TICKET' }))
+  })
+
+  it('rejects a tampered payload', () => {
+    const [, sig] = signChainTicket({ ...claims, now, secret: 's' }).split('.')
+    const forged = Buffer.from(JSON.stringify({ s: claims.shop, p: claims.productId, a: 'a1', h: 'x', e: now + 1e9 })).toString('base64url')
+    expect(() => verifyChainTicket(`${forged}.${sig}`, { ...claims, hash: 'x', now, secret: 's' })).toThrow(expect.objectContaining({ code: 'BAD_TICKET' }))
+  })
+})
+
+describe('reserveChainStep', () => {
+  const shop = 'qirpee-w4.myshopify.com'
+  it('allows one chain step per ticket and counts it against the shop, not the shopper', async () => {
+    const db = fakeDb()
+    await reserveChainStep(db, { shop, attemptId: 'a1', now: NOW })
+    expect(db.photoTryon.rows[0]).toMatchObject({ shop, clientKey: 'chain:a1' })
+    await expect(reserveChainStep(db, { shop, attemptId: 'a1', now: NOW })).rejects.toMatchObject({ code: 'BAD_TICKET' })
+  })
+
+  it('stops at the shop daily cap', async () => {
+    const rows = Array.from({ length: LIMITS.perShop }, (_, i) => ({ shop, clientKey: `c${i}`, createdAt: hoursAgo(1) }))
+    await expect(reserveChainStep(fakeDb(rows), { shop, attemptId: 'a2', now: NOW })).rejects.toMatchObject({ code: 'SHOP_LIMIT' })
   })
 })

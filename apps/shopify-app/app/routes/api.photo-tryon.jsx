@@ -12,6 +12,10 @@ import {
   productVersions,
   renderAddChain,
   renderPhotoTryon,
+  imageHash,
+  signChainTicket,
+  verifyChainTicket,
+  reserveChainStep,
 } from '../photoTryon.server'
 import { isProductPhotoOff } from '../photoTryonControls.server'
 
@@ -34,6 +38,7 @@ const STATUS = {
   PRODUCT_NOT_FOUND: 404,
   NO_PRODUCT_PHOTO: 404,
   SUBSCRIPTION: 402,
+  BAD_TICKET: 409,
   CLIENT_LIMIT: 429,
   SHOP_LIMIT: 429,
   AI_FAILED: 502,
@@ -48,6 +53,7 @@ const MESSAGES = {
   PRODUCT_NOT_FOUND: 'This product is not available for photo try-on.',
   NO_PRODUCT_PHOTO: 'This product is not available for photo try-on.',
   SUBSCRIPTION: 'Photo try-on is not available for this store.',
+  BAD_TICKET: "We couldn't add the chain. Upload your photo again to try.",
   CLIENT_LIMIT: "You've reached today's limit of photo try-ons. Try again tomorrow.",
   SHOP_LIMIT: 'Photo try-on is busy right now. Try again later.',
   AI_FAILED: "We couldn't create your photo. Try again in a moment.",
@@ -61,22 +67,6 @@ const toClient = (version, image) => ({
   accessory: version.accessory,
   image: `data:image/jpeg;base64,${image.toString('base64')}`,
 })
-
-// Newline-delimited JSON: one line per message, then {"done":true}.
-function versionStream(produce) {
-  const encoder = new TextEncoder()
-  return new ReadableStream({
-    async start(controller) {
-      const send = (message) => controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`))
-      try {
-        await produce(send)
-      } finally {
-        send({ done: true })
-        controller.close()
-      }
-    },
-  })
-}
 
 export const loader = () => new Response('Method not allowed', { status: 405 })
 
@@ -120,6 +110,10 @@ export const action = async ({ request }) => {
     }
   }
 
+  if (form.get('step') === 'chain') {
+    return chainStep({ form, shop, productId, base: selfie, baseType: selfieType })
+  }
+
   let attemptId
   try {
     attemptId = await reserveAttempt(db, { shop, clientKey: clientKeyFor(request) })
@@ -132,15 +126,14 @@ export const action = async ({ request }) => {
   try {
     const { admin } = await unauthenticated.admin(shop)
     // Usually one version; two for a product sold "Glasses Only" and
-    // "Glasses + Chain". The chain version is made by adding the chain to the
-    // finished glasses-only picture, so the glasses are identical in both.
-    // That makes it sequential, so the response is streamed (one JSON line per
-    // version): the shopper sees the glasses while the chain is being added.
+    // "Glasses + Chain". The chain version is made by adding the chain to this
+    // glasses-only picture, so the glasses are identical in both. That step
+    // takes as long again, so it is a second request (step=chain) the page
+    // makes after showing this picture, carrying a ticket bound to it.
     const versions = await productVersions(admin, productId)
     const plain = versions.find((v) => !v.accessory)
     const chain = versions.find((v) => v.accessory)
     const firstVersion = plain ?? chain
-    // Errors up to here are answered normally (and give the try back).
     const first = await renderPhotoTryon({
       selfie,
       selfieType,
@@ -149,19 +142,11 @@ export const action = async ({ request }) => {
       accessory: firstVersion.accessory,
     })
     const addChain = Boolean(plain && chain)
-    return new Response(versionStream(async (send) => {
-      send({ version: toClient(firstVersion, first), pending: addChain ? [{ label: chain.label, accessory: true }] : [] })
-      if (addChain) {
-        try {
-          send({ version: toClient(chain, await renderAddChain({ base: first, chain: chain.bytes, chainType: chain.contentType })) })
-        } catch (error) {
-          console.error('photo-tryon: adding the chain failed', error?.code, error?.message)
-          send({ failed: chain.label })
-        }
-      }
-    }), {
-      headers: { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' },
-    })
+    return Response.json({
+      version: toClient(firstVersion, first),
+      pending: addChain ? [{ label: chain.label, accessory: true }] : [],
+      ...(addChain ? { chainTicket: signChainTicket({ shop, productId, attemptId, hash: imageHash(first) }) } : {}),
+    }, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
     await releaseAttempt(db, attemptId)
     const code = error?.code === 'BAD_PHOTO' ? 'NO_PRODUCT_PHOTO' : error?.code
@@ -170,6 +155,45 @@ export const action = async ({ request }) => {
       return fail(code)
     }
     console.error('photo-tryon failed', error)
+    return fail('AI_FAILED', 500)
+  }
+}
+
+/**
+ * Second request for a chain product: add the chain to the glasses-only
+ * picture the first request returned. The ticket proves this server made that
+ * exact picture for this product moments ago, and it works once.
+ */
+async function chainStep({ form, shop, productId, base, baseType }) {
+  if (baseType !== 'image/jpeg') return fail('BAD_TICKET')
+  let claims
+  try {
+    claims = verifyChainTicket(form.get('ticket'), { shop, productId, hash: imageHash(base) })
+  } catch (error) {
+    return fail(error?.code === 'BAD_TICKET' ? 'BAD_TICKET' : 'BAD_REQUEST')
+  }
+  let stepId
+  try {
+    stepId = await reserveChainStep(db, { shop, attemptId: claims.a })
+  } catch (error) {
+    if (error?.code in STATUS) return fail(error.code)
+    console.error('photo-tryon: chain reservation failed', error)
+    return fail('AI_FAILED', 503)
+  }
+  try {
+    const { admin } = await unauthenticated.admin(shop)
+    const chain = (await productVersions(admin, productId)).find((v) => v.accessory)
+    if (!chain) throw Object.assign(new Error('no chain version'), { code: 'NO_PRODUCT_PHOTO' })
+    const image = await renderAddChain({ base, chain: chain.bytes, chainType: chain.contentType })
+    return Response.json({ version: toClient(chain, image) }, { headers: { 'Cache-Control': 'no-store' } })
+  } catch (error) {
+    await releaseAttempt(db, stepId)
+    const code = error?.code === 'BAD_PHOTO' ? 'NO_PRODUCT_PHOTO' : error?.code
+    if (code in STATUS) {
+      if (STATUS[code] >= 500) console.error('photo-tryon chain step failed', code, error?.message)
+      return fail(code)
+    }
+    console.error('photo-tryon chain step failed', error)
     return fail('AI_FAILED', 500)
   }
 }
