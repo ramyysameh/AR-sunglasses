@@ -11,6 +11,8 @@ import {
   LIMITS,
   PHOTO_TRYON_PROMPT,
   PHOTO_TRYON_ACCESSORY_PROMPT,
+  PHOTO_TRYON_ADD_CHAIN_PROMPT,
+  renderAddChain,
   versionsFromProduct,
   versionLabel,
 } from '../app/photoTryon.server.js'
@@ -240,5 +242,19 @@ describe('renderPhotoTryon accessory prompt', () => {
     await renderPhotoTryon({ selfie: jpeg, selfieType: 'image/jpeg', product: jpeg, productType: 'image/jpeg', accessory: true })
     expect(edit.mock.calls[0][0].prompt).toBe(PHOTO_TRYON_ACCESSORY_PROMPT)
     expect(PHOTO_TRYON_ACCESSORY_PROMPT).toMatch(/never the model/)
+  })
+})
+
+describe('renderAddChain', () => {
+  afterEach(() => setPhotoClient(null))
+  it('edits the glasses-only picture with the chain photo, keeping the glasses', async () => {
+    const edit = vi.fn(async () => ({ data: [{ b64_json: Buffer.from('r').toString('base64') }] }))
+    setPhotoClient({ images: { edit } })
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0])
+    await renderAddChain({ base: jpeg, chain: jpeg, chainType: 'image/jpeg' })
+    const body = edit.mock.calls[0][0]
+    expect(body.prompt).toBe(PHOTO_TRYON_ADD_CHAIN_PROMPT)
+    expect(body.image.map((f) => f.name)).toEqual(['person.jpg', 'chain.jpg'])
+    expect(PHOTO_TRYON_ADD_CHAIN_PROMPT).toMatch(/Keep the sunglasses in image 1 exactly as they are/)
   })
 })

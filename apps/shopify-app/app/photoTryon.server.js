@@ -61,6 +61,14 @@ Edit image 1 so the person is wearing exactly the sunglasses from image 2.
 - If the person already wears glasses, replace them with these.
 - Change nothing else: keep the person's face, identity, skin, expression, hair, clothing, pose, background, framing and image size exactly as they are.`
 
+export const PHOTO_TRYON_ADD_CHAIN_PROMPT = `Image 1 is a photo of a person wearing sunglasses. Image 2 shows an eyewear chain attached to sunglasses, possibly worn by a model.
+
+Add the eyewear chain from image 2 to the sunglasses the person in image 1 is wearing. Copy only the chain from image 2, never the model or the sunglasses in it.
+- Keep the sunglasses in image 1 exactly as they are: same frame shape, size, colour, lenses, position and angle. Do not redraw, restyle or replace them.
+- Copy the chain faithfully: its links, beads or charms, colour, material and thickness. Attach it to the tip of each temple behind the ears and let it hang naturally down and around the back of the neck, with realistic drape and gravity. Where the photo cuts off, let the chain leave the frame naturally.
+- Match the photo's lighting, with soft shadows where the chain touches the skin or clothes.
+- Change nothing else: keep the person's face, identity, skin, expression, hair, clothing, pose, background, framing and image size exactly as they are.`
+
 export const PHOTO_TRYON_ACCESSORY_PROMPT = `Image 1 is a photo of a person. Image 2 shows a product: a pair of sunglasses with an eyewear chain attached. Image 2 may show them worn by a model; copy only the sunglasses and the chain, never the model.
 
 Edit image 1 so the person is wearing exactly these sunglasses with this chain.
@@ -199,20 +207,37 @@ const isRefusal = (error) =>
  * (and the chain, for an accessory version).
  */
 export async function renderPhotoTryon({ selfie, selfieType, product, productType, accessory = false }) {
+  return editImage([
+    await toFile(selfie, `person.${EXT[selfieType]}`, { type: selfieType }),
+    await toFile(product, `sunglasses.${EXT[productType]}`, { type: productType }),
+  ], accessory ? PHOTO_TRYON_ACCESSORY_PROMPT : PHOTO_TRYON_PROMPT)
+}
+
+/**
+ * Add the chain to an already-rendered "glasses only" picture. Editing that
+ * picture, instead of rendering the chain version from scratch, keeps the
+ * glasses identical in both versions: rendered separately, the chain version
+ * redrew the frame from a photo where it is small and worn by a model.
+ */
+export async function renderAddChain({ base, chain, chainType }) {
+  return editImage([
+    await toFile(base, 'person.jpg', { type: 'image/jpeg' }),
+    await toFile(chain, `chain.${EXT[chainType]}`, { type: chainType }),
+  ], PHOTO_TRYON_ADD_CHAIN_PROMPT)
+}
+
+async function editImage(image, prompt) {
   let response
   try {
     response = await getClient().images.edit({
       model: PHOTO_MODEL,
-      image: [
-        await toFile(selfie, `person.${EXT[selfieType]}`, { type: selfieType }),
-        await toFile(product, `sunglasses.${EXT[productType]}`, { type: productType }),
-      ],
-      prompt: accessory ? PHOTO_TRYON_ACCESSORY_PROMPT : PHOTO_TRYON_PROMPT,
+      image,
+      prompt,
       size: 'auto',
       quality: 'medium',
       output_format: 'jpeg',
-      // Two versions travel back in one JSON response; keep each well under
-      // a megabyte so the pair stays far below Vercel's 4.5 MB response cap.
+      // Versions travel back as base64 in one response; keep each well under
+      // a megabyte so a pair stays far below Vercel's 4.5 MB response cap.
       output_compression: 82,
       n: 1,
     })
