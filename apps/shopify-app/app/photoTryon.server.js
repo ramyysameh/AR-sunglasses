@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import OpenAI, { toFile } from 'openai'
 import { tagged } from './errors.server.js'
 import { download } from './productPhotos.server.js'
@@ -113,6 +113,61 @@ export async function reserveAttempt(db, { shop, clientKey, now = new Date() }) 
   db.photoTryon
     .deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - RETENTION_MS) } } })
     .catch((error) => console.error('photo-tryon: retention trim failed', error))
+  return row.id
+}
+
+/**
+ * Chain step tickets (spec addendum 2026-11-12). The chain version is made by
+ * editing the glasses-only picture, in a second request, so the shopper sees
+ * that picture while the chain is added (Vercel buffered a streamed reply).
+ * The ticket binds that request to the exact picture this server produced,
+ * for one product of one shop, for a few minutes, so the endpoint cannot be
+ * used to edit arbitrary images or replayed for free.
+ */
+const CHAIN_TICKET_TTL_MS = 5 * 60 * 1000
+const ticketSecret = () => process.env.SHOPIFY_API_SECRET || 'dev-only-photo-tryon-secret'
+const b64url = (buf) => Buffer.from(buf).toString('base64url')
+export const imageHash = (bytes) => createHash('sha256').update(bytes).digest('hex')
+
+export function signChainTicket({ shop, productId, attemptId, hash, now = Date.now(), secret = ticketSecret() }) {
+  const payload = b64url(JSON.stringify({ s: shop, p: productId, a: attemptId, h: hash, e: now + CHAIN_TICKET_TTL_MS }))
+  const sig = b64url(createHmac('sha256', secret).update(payload).digest())
+  return `${payload}.${sig}`
+}
+
+/** The ticket's claims, or a tagged BAD_TICKET error. */
+export function verifyChainTicket(ticket, { shop, productId, hash, now = Date.now(), secret = ticketSecret() }) {
+  const [payload, sig] = String(ticket ?? '').split('.')
+  if (!payload || !sig) throw tagged('BAD_TICKET', 'malformed ticket')
+  const expected = createHmac('sha256', secret).update(payload).digest()
+  const given = Buffer.from(sig, 'base64url')
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) throw tagged('BAD_TICKET', 'bad signature')
+  let claims
+  try {
+    claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+  } catch {
+    throw tagged('BAD_TICKET', 'bad payload')
+  }
+  if (claims.e < now) throw tagged('BAD_TICKET', 'expired')
+  if (claims.s !== shop || claims.p !== productId) throw tagged('BAD_TICKET', 'wrong product')
+  if (claims.h !== hash) throw tagged('BAD_TICKET', 'not the picture this ticket was issued for')
+  return claims
+}
+
+/**
+ * One chain step per ticket, counted against the shop's daily cap (it is a
+ * second paid image) but not the shopper's, whose upload already counted.
+ */
+export async function reserveChainStep(db, { shop, attemptId, now = new Date() }) {
+  const clientKey = `chain:${attemptId}`
+  const since = new Date(now.getTime() - DAY_MS)
+  const [used, byShop] = await Promise.all([
+    db.photoTryon.count({ where: { clientKey } }),
+    db.photoTryon.count({ where: { shop, createdAt: { gte: since } } }),
+  ])
+  if (used > 0) throw tagged('BAD_TICKET', 'ticket already used')
+  if (byShop >= LIMITS.perShop) throw tagged('SHOP_LIMIT', 'shop daily limit reached')
+  const row = await db.photoTryon.create({ data: { shop, clientKey } })
   return row.id
 }
 

@@ -261,28 +261,37 @@
         }
       }
 
+      // First reply: the glasses-only picture, plus a ticket when a chain
+      // version is still to come. The chain is then added to that very picture
+      // in a second request, so the glasses stay identical in both versions.
       async function readReply(res) {
-        // An older server answered with one JSON object holding every version.
-        if (!(res.headers.get('content-type') || '').includes('ndjson')) {
-          const data = await res.json()
-          for (const version of Array.isArray(data.versions) ? data.versions : []) handleMessage({ version })
+        const data = await res.json()
+        if (Array.isArray(data.versions)) {
+          for (const version of data.versions) handleMessage({ version })
           return
         }
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-        for (;;) {
-          const { value, done } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          let newline
-          while ((newline = buffer.indexOf('\n')) >= 0) {
-            const line = buffer.slice(0, newline).trim()
-            buffer = buffer.slice(newline + 1)
-            if (line) handleMessage(JSON.parse(line))
-          }
+        handleMessage({ version: data.version, pending: data.pending })
+        if (data.chainTicket && Array.isArray(data.pending) && data.pending.length) {
+          await requestChain(data.version, data.pending[0], data.chainTicket)
         }
-        if (buffer.trim()) handleMessage(JSON.parse(buffer))
+      }
+
+      async function requestChain(base, pending, ticket) {
+        try {
+          const picture = await (await fetch(base.image)).blob()
+          const body = new FormData()
+          body.append('shop', shop)
+          body.append('productId', productId)
+          body.append('step', 'chain')
+          body.append('ticket', ticket)
+          body.append('photo', picture, 'base.jpg')
+          const res = await fetch('/api/photo-tryon', { method: 'POST', body })
+          const data = await res.json().catch(() => ({}))
+          if (!res.ok || !data.version) throw new Error(data.error || 'chain failed')
+          handleMessage({ version: data.version })
+        } catch {
+          handleMessage({ failed: pending.label })
+        }
       }
       let busy = false
 
