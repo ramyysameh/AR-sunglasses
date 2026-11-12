@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   productOff: false,
   versions: null,
   failAccessory: false,
+  addChainInput: null,
 }))
 
 vi.mock('../app/db.server.js', () => ({ default: {} }))
@@ -55,6 +56,11 @@ vi.mock('../app/photoTryon.server.js', async (importOriginal) => {
       if (h.failAccessory && input.accessory) throw Object.assign(new Error('x'), { code: 'AI_FAILED' })
       return Buffer.from(input.accessory ? 'chain' : 'plain')
     },
+    renderAddChain: async (input) => {
+      h.addChainInput = input
+      if (h.failAccessory) throw Object.assign(new Error('x'), { code: 'AI_FAILED' })
+      return Buffer.from(`${input.base}+chain`)
+    },
   }
 })
 
@@ -62,6 +68,9 @@ const { action, loader } = await import('../app/routes/api.photo-tryon.jsx')
 
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10])
 const tag = (code) => Object.assign(new Error('internal detail'), { code })
+// The success reply is newline-delimited JSON, one message per line.
+const lines = async (res) => (await res.text()).trim().split('\n').map((l) => JSON.parse(l))
+const b64 = (s) => `data:image/jpeg;base64,${Buffer.from(s).toString('base64')}`
 
 function post({ shop = 'qirpee-w4.myshopify.com', productId = 'gid://shopify/Product/123', photo = JPEG } = {}) {
   const form = new FormData()
@@ -85,17 +94,19 @@ beforeEach(() => {
     productOff: false,
     versions: null,
     failAccessory: false,
+    addChainInput: null,
   })
 })
 
 describe('POST /api/photo-tryon', () => {
-  it('returns the edited photo as one uncacheable version', async () => {
+  it('streams the edited photo as one uncacheable version', async () => {
     const res = await post()
     expect(res.status).toBe(200)
     expect(res.headers.get('cache-control')).toBe('no-store')
-    const body = await res.json()
-    expect(body.versions).toHaveLength(1)
-    expect(body.versions[0].image).toBe(`data:image/jpeg;base64,${Buffer.from('plain').toString('base64')}`)
+    expect(res.headers.get('content-type')).toBe('application/x-ndjson')
+    const msgs = await lines(res)
+    expect(msgs).toEqual([{ version: { label: null, accessory: false, image: b64('plain') }, pending: [] }, { done: true }])
+    expect(h.addChainInput).toBe(null)
     expect(h.adminShops).toEqual(['qirpee-w4.myshopify.com'])
     expect(h.renderInput.selfieType).toBe('image/jpeg')
     expect(h.renderInput.productType).toBe('image/png')
@@ -107,21 +118,39 @@ describe('POST /api/photo-tryon', () => {
     { label: 'Glasses + Chain', accessory: true, bytes: Buffer.from([2]), contentType: 'image/jpeg' },
   ]
 
-  it('renders glasses-only and with-chain versions from one upload, as one try', async () => {
+  it('sends glasses-only first, then the chain added onto that same picture, as one try', async () => {
     h.versions = TWO
-    const body = await (await post()).json()
-    expect(body.versions.map((v) => [v.label, v.accessory])).toEqual([['Glasses Only', false], ['Glasses + Chain', true]])
-    expect(h.renderInputs.map((i) => i.accessory)).toEqual([false, true])
+    const msgs = await lines(await post())
+    expect(msgs[0]).toEqual({
+      version: { label: 'Glasses Only', accessory: false, image: b64('plain') },
+      pending: [{ label: 'Glasses + Chain', accessory: true }],
+    })
+    expect(msgs[1]).toEqual({ version: { label: 'Glasses + Chain', accessory: true, image: b64('plain+chain') } })
+    expect(msgs[2]).toEqual({ done: true })
+    // Only the glasses-only render starts from the selfie; the chain edits its result.
+    expect(h.renderInputs.map((i) => i.accessory)).toEqual([false])
+    expect(h.addChainInput.base.toString()).toBe('plain')
+    expect(h.addChainInput.chain).toEqual(Buffer.from([2]))
     expect(h.released).toEqual([])
   })
 
-  it('still answers with the versions that worked when one fails', async () => {
+  it('reports a failed chain version without losing the glasses-only picture or the try', async () => {
     h.versions = TWO
     h.failAccessory = true
     const res = await post()
     expect(res.status).toBe(200)
-    expect((await res.json()).versions.map((v) => v.label)).toEqual(['Glasses Only'])
+    const msgs = await lines(res)
+    expect(msgs.map((m) => Object.keys(m)[0])).toEqual(['version', 'failed', 'done'])
+    expect(msgs[1]).toEqual({ failed: 'Glasses + Chain' })
     expect(h.released).toEqual([])
+  })
+
+  it('renders the chain photo directly when a product has only a chain version', async () => {
+    h.versions = [TWO[1]]
+    const msgs = await lines(await post())
+    expect(msgs[0].version.label).toBe('Glasses + Chain')
+    expect(h.renderInputs.map((i) => i.accessory)).toEqual([true])
+    expect(h.addChainInput).toBe(null)
   })
 
   it('is off for every other store, before spending anything', async () => {

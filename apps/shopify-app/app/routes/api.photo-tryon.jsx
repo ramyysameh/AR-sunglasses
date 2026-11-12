@@ -10,6 +10,7 @@ import {
   reserveAttempt,
   releaseAttempt,
   productVersions,
+  renderAddChain,
   renderPhotoTryon,
 } from '../photoTryon.server'
 import { isProductPhotoOff } from '../photoTryonControls.server'
@@ -54,6 +55,28 @@ const MESSAGES = {
 
 const fail = (code, status = STATUS[code] ?? 500) =>
   Response.json({ code, error: MESSAGES[code] ?? 'Something went wrong. Try again.' }, { status })
+
+const toClient = (version, image) => ({
+  label: version.label,
+  accessory: version.accessory,
+  image: `data:image/jpeg;base64,${image.toString('base64')}`,
+})
+
+// Newline-delimited JSON: one line per message, then {"done":true}.
+function versionStream(produce) {
+  const encoder = new TextEncoder()
+  return new ReadableStream({
+    async start(controller) {
+      const send = (message) => controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`))
+      try {
+        await produce(send)
+      } finally {
+        send({ done: true })
+        controller.close()
+      }
+    },
+  })
+}
 
 export const loader = () => new Response('Method not allowed', { status: 405 })
 
@@ -108,32 +131,37 @@ export const action = async ({ request }) => {
 
   try {
     const { admin } = await unauthenticated.admin(shop)
-    // One version per photo to try on: usually one, two for a product sold
-    // "Glasses Only" and "Glasses + Chain". Rendered in parallel, so a second
-    // version costs money but not waiting time.
+    // Usually one version; two for a product sold "Glasses Only" and
+    // "Glasses + Chain". The chain version is made by adding the chain to the
+    // finished glasses-only picture, so the glasses are identical in both.
+    // That makes it sequential, so the response is streamed (one JSON line per
+    // version): the shopper sees the glasses while the chain is being added.
     const versions = await productVersions(admin, productId)
-    const settled = await Promise.allSettled(versions.map((version) => renderPhotoTryon({
+    const plain = versions.find((v) => !v.accessory)
+    const chain = versions.find((v) => v.accessory)
+    const firstVersion = plain ?? chain
+    // Errors up to here are answered normally (and give the try back).
+    const first = await renderPhotoTryon({
       selfie,
       selfieType,
-      product: version.bytes,
-      productType: version.contentType,
-      accessory: version.accessory,
-    })))
-    const done = versions
-      .map((version, i) => ({ version, result: settled[i] }))
-      .filter(({ result }) => result.status === 'fulfilled')
-    // Partial success still answers the shopper; only a total failure is an error.
-    if (done.length === 0) throw settled[0].reason
-    for (const item of settled) {
-      if (item.status === 'rejected') console.error('photo-tryon: one version failed', item.reason?.code, item.reason?.message)
-    }
-    return Response.json({
-      versions: done.map(({ version, result }) => ({
-        label: version.label,
-        accessory: version.accessory,
-        image: `data:image/jpeg;base64,${result.value.toString('base64')}`,
-      })),
-    }, { headers: { 'Cache-Control': 'no-store' } })
+      product: firstVersion.bytes,
+      productType: firstVersion.contentType,
+      accessory: firstVersion.accessory,
+    })
+    const addChain = Boolean(plain && chain)
+    return new Response(versionStream(async (send) => {
+      send({ version: toClient(firstVersion, first), pending: addChain ? [{ label: chain.label, accessory: true }] : [] })
+      if (addChain) {
+        try {
+          send({ version: toClient(chain, await renderAddChain({ base: first, chain: chain.bytes, chainType: chain.contentType })) })
+        } catch (error) {
+          console.error('photo-tryon: adding the chain failed', error?.code, error?.message)
+          send({ failed: chain.label })
+        }
+      }
+    }), {
+      headers: { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' },
+    })
   } catch (error) {
     await releaseAttempt(db, attemptId)
     const code = error?.code === 'BAD_PHOTO' ? 'NO_PRODUCT_PHOTO' : error?.code

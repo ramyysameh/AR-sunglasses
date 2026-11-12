@@ -135,6 +135,7 @@
       transition: background-color 150ms ease, color 150ms ease;
     }
     .versions button[aria-pressed="true"] { background: var(--accent); color: #111; }
+    .versions button:disabled { cursor: progress; opacity: 0.7; }
     .versions button:focus-visible { outline: 3px solid rgba(255, 255, 255, 0.4); outline-offset: 2px; }
     .error {
       border: 1px solid rgba(255, 120, 120, 0.4);
@@ -210,8 +211,9 @@
       // Show one version (e.g. "Glasses Only" / "Glasses + Chain") and point
       // Save at it. The switch only appears when there is more than one.
       function showVersion(i) {
-        current = i
         const result = results[i]
+        if (!result || !result.image) return
+        current = i
         setPreview(result.image)
         els.save.href = result.image
         els.save.download = `my-try-on${result.accessory ? '-with-chain' : ''}.jpg`
@@ -222,11 +224,65 @@
         versionsEl.replaceChildren(...results.map((result, i) => {
           const button = document.createElement('button')
           button.type = 'button'
-          button.textContent = result.label || `Version ${i + 1}`
+          const label = result.label || `Version ${i + 1}`
+          // A version still being made (the chain is added after the glasses-only picture).
+          button.textContent = result.image ? label : `${label} · adding…`
+          button.disabled = !result.image
+          button.setAttribute('aria-pressed', String(i === current))
           button.addEventListener('click', () => showVersion(i))
           return button
         }))
         versionsEl.hidden = results.length < 2
+      }
+
+      // The server streams one JSON line per message: the first picture (with
+      // any versions still to come), then each later version or its failure.
+      function handleMessage(message) {
+        if (message.version && typeof message.version.image === 'string') {
+          const at = results.findIndex((r) => !r.image && r.label === message.version.label)
+          if (results.length === 0) {
+            const pending = Array.isArray(message.pending) ? message.pending : []
+            results = [message.version, ...pending.map((p) => ({ label: p.label, accessory: p.accessory, image: null }))]
+            current = 0
+            renderVersions()
+            showVersion(0)
+            els.title.textContent = 'Your try-on'
+            els.subtitle.textContent = 'Here are the sunglasses on you.'
+            els.working.hidden = true
+            els.done.hidden = false
+          } else {
+            if (at >= 0) results[at] = message.version
+            else results.push(message.version)
+            renderVersions()
+          }
+        } else if (message.failed) {
+          results = results.filter((r) => r.image || r.label !== message.failed)
+          renderVersions()
+        }
+      }
+
+      async function readReply(res) {
+        // An older server answered with one JSON object holding every version.
+        if (!(res.headers.get('content-type') || '').includes('ndjson')) {
+          const data = await res.json()
+          for (const version of Array.isArray(data.versions) ? data.versions : []) handleMessage({ version })
+          return
+        }
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        for (;;) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          let newline
+          while ((newline = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, newline).trim()
+            buffer = buffer.slice(newline + 1)
+            if (line) handleMessage(JSON.parse(line))
+          }
+        }
+        if (buffer.trim()) handleMessage(JSON.parse(buffer))
       }
       let busy = false
 
@@ -310,15 +366,17 @@
             const data = await res.json().catch(() => ({}))
             throw new Error(data.error || "We couldn't create your photo. Try again in a moment.")
           }
-          const data = await res.json()
-          results = Array.isArray(data.versions) ? data.versions.filter((v) => typeof v.image === 'string') : []
+          results = []
+          els.again.disabled = true
+          await readReply(res)
           if (results.length === 0) throw new Error("We couldn't create your photo. Try again in a moment.")
-          renderVersions()
-          showVersion(0)
-          els.title.textContent = 'Your try-on'
-          els.subtitle.textContent = 'Here are the sunglasses on you.'
-          els.done.hidden = false
         } catch (error) {
+          if (results.length > 0) {
+            // The first picture arrived; only a later version was lost.
+            results = results.filter((r) => r.image)
+            renderVersions()
+            return
+          }
           showError(error.message && !/fetch|network/i.test(error.message)
             ? error.message
             : 'Connection problem. Check your internet and try again.')
@@ -326,6 +384,7 @@
         } finally {
           URL.revokeObjectURL(selfieUrl)
           els.working.hidden = true
+          els.again.disabled = false
           busy = false
         }
       }
