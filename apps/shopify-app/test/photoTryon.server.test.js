@@ -13,6 +13,8 @@ import {
   PHOTO_TRYON_ACCESSORY_PROMPT,
   PHOTO_TRYON_ADD_CHAIN_PROMPT,
   renderAddChain,
+  accessoryKind,
+  PHOTO_TRYON_ADD_CHARMS_PROMPT,
   signChainTicket,
   verifyChainTicket,
   imageHash,
@@ -191,7 +193,7 @@ describe('versionsFromProduct', () => {
 
   it('gives one version from the main photo for a product with no chain option', () => {
     const product = { featuredMedia: img('main'), options: [{ name: 'Color', values: ['Gray'] }], variants: { nodes: [] } }
-    expect(versionsFromProduct(product)).toEqual([{ label: null, accessory: false, url: 'https://cdn.shopify.com/main.jpg' }])
+    expect(versionsFromProduct(product)).toEqual([{ label: null, accessory: false, kind: null, url: 'https://cdn.shopify.com/main.jpg' }])
   })
 
   it('gives glasses-only then with-chain, each from its variant photo (qirpee-w4 layout)', () => {
@@ -201,20 +203,20 @@ describe('versionsFromProduct', () => {
       variants: { nodes: [variant('set', 'Glasses Only', 'plain'), variant('set', '1. Glasses + Chain', 'chain')] },
     }
     expect(versionsFromProduct(product)).toEqual([
-      { label: 'Glasses Only', accessory: false, url: 'https://cdn.shopify.com/plain.jpg' },
-      { label: 'Glasses + Chain', accessory: true, url: 'https://cdn.shopify.com/chain.jpg' },
+      { label: 'Glasses Only', accessory: false, kind: null, url: 'https://cdn.shopify.com/plain.jpg' },
+      { label: 'Glasses + Chain', accessory: true, kind: 'chain', url: 'https://cdn.shopify.com/chain.jpg' },
     ])
   })
 
-  it('treats "Glasses + Accessories" as the chain version', () => {
+  it('treats "Glasses + Accessories" as a frame-accessories version, not a chain (LEXI TIGER)', () => {
     const product = {
       featuredMedia: img('main'),
       options: [{ name: 'Set', values: ['Glasses Only', '1. Glasses + Accessories'] }],
       variants: { nodes: [variant('Set', 'Glasses Only', null), variant('Set', '1. Glasses + Accessories', 'acc')] },
     }
-    expect(versionsFromProduct(product).map((v) => [v.label, v.accessory, v.url])).toEqual([
-      ['Glasses Only', false, 'https://cdn.shopify.com/main.jpg'],
-      ['Glasses + Accessories', true, 'https://cdn.shopify.com/acc.jpg'],
+    expect(versionsFromProduct(product).map((v) => [v.label, v.accessory, v.kind, v.url])).toEqual([
+      ['Glasses Only', false, null, 'https://cdn.shopify.com/main.jpg'],
+      ['Glasses + Accessories', true, 'charms', 'https://cdn.shopify.com/acc.jpg'],
     ])
   })
 
@@ -258,7 +260,7 @@ describe('renderAddChain', () => {
     await renderAddChain({ base: jpeg, chain: jpeg, chainType: 'image/jpeg' })
     const body = edit.mock.calls[0][0]
     expect(body.prompt).toBe(PHOTO_TRYON_ADD_CHAIN_PROMPT)
-    expect(body.image.map((f) => f.name)).toEqual(['person.jpg', 'chain.jpg'])
+    expect(body.image.map((f) => f.name)).toEqual(['person.jpg', 'accessory.jpg'])
     expect(PHOTO_TRYON_ADD_CHAIN_PROMPT).toMatch(/Keep the sunglasses in image 1 exactly as they are/)
   })
 })
@@ -302,5 +304,26 @@ describe('reserveChainStep', () => {
   it('stops at the shop daily cap', async () => {
     const rows = Array.from({ length: LIMITS.perShop }, (_, i) => ({ shop, clientKey: `c${i}`, createdAt: hoursAgo(1) }))
     await expect(reserveChainStep(fakeDb(rows), { shop, attemptId: 'a2', now: NOW })).rejects.toMatchObject({ code: 'SHOP_LIMIT' })
+  })
+})
+
+describe('accessory kinds', () => {
+  afterEach(() => setPhotoClient(null))
+  it.each([
+    ['1. Glasses + Chain', 'chain'],
+    ['Glasses + Strap', 'chain'],
+    ['1. Glasses + Accessories', 'charms'],
+  ])('%s -> %s', (value, kind) => {
+    expect(accessoryKind(value)).toBe(kind)
+  })
+
+  it('uses the frame-accessories prompt (no chain) for charms', async () => {
+    const edit = vi.fn(async () => ({ data: [{ b64_json: Buffer.from('r').toString('base64') }] }))
+    setPhotoClient({ images: { edit } })
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0])
+    await renderAddChain({ base: jpeg, chain: jpeg, chainType: 'image/jpeg', kind: 'charms' })
+    expect(edit.mock.calls[0][0].prompt).toBe(PHOTO_TRYON_ADD_CHARMS_PROMPT)
+    expect(PHOTO_TRYON_ADD_CHARMS_PROMPT).toMatch(/Do not add a chain/)
+    expect(PHOTO_TRYON_ADD_CHARMS_PROMPT).toMatch(/on one temple only, add them to that temple only/)
   })
 })

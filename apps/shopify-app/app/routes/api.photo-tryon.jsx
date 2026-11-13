@@ -184,7 +184,7 @@ async function chainStep({ form, shop, productId, base, baseType }) {
     const { admin } = await unauthenticated.admin(shop)
     const chain = (await productVersions(admin, productId)).find((v) => v.accessory)
     if (!chain) throw Object.assign(new Error('no chain version'), { code: 'NO_PRODUCT_PHOTO' })
-    const image = await renderAddChain({ base, chain: chain.bytes, chainType: chain.contentType })
+    const image = await renderAddChain({ base, chain: chain.bytes, chainType: chain.contentType, kind: chain.kind })
     return Response.json({ version: toClient(chain, image) }, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
     await releaseAttempt(db, stepId)

@@ -216,7 +216,11 @@
         current = i
         setPreview(result.image)
         els.save.href = result.image
-        els.save.download = `my-try-on${result.accessory ? '-with-chain' : ''}.jpg`
+        // "Glasses + Chain" -> my-try-on-glasses-chain.jpg; a plain version is my-try-on.jpg.
+        const slug = result.accessory && result.label
+          ? `-${result.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
+          : ''
+        els.save.download = `my-try-on${slug}.jpg`
         for (const [j, button] of [...versionsEl.children].entries()) button.setAttribute('aria-pressed', String(j === i))
       }
 

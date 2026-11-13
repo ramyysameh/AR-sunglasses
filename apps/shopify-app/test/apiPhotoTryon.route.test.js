@@ -123,7 +123,7 @@ describe('POST /api/photo-tryon', () => {
 
   const TWO = [
     { label: 'Glasses Only', accessory: false, bytes: Buffer.from([1]), contentType: 'image/jpeg' },
-    { label: 'Glasses + Chain', accessory: true, bytes: Buffer.from([2]), contentType: 'image/jpeg' },
+    { label: 'Glasses + Chain', accessory: true, kind: 'chain', bytes: Buffer.from([2]), contentType: 'image/jpeg' },
   ]
 
   it('returns glasses-only first with a ticket for the chain step', async () => {
@@ -145,10 +145,20 @@ describe('POST /api/photo-tryon', () => {
     expect((await res.json()).version).toEqual({ label: 'Glasses + Chain', accessory: true, image: b64('plain+chain') })
     expect(h.addChainInput.base).toEqual(pic('plain'))
     expect(h.addChainInput.chain).toEqual(Buffer.from([2]))
+    expect(h.addChainInput.kind).toBe('chain')
     // The selfie was rendered once; the chain step never calls the full render.
     expect(h.renderInputs).toHaveLength(1)
     // A ticket works once.
     expect((await chainReq()).status).toBe(409)
+  })
+
+  it('passes the accessories kind through to the second step (LEXI TIGER)', async () => {
+    h.versions = [TWO[0], { label: 'Glasses + Accessories', accessory: true, kind: 'charms', bytes: Buffer.from([3]), contentType: 'image/jpeg' }]
+    const first = await (await post()).json()
+    expect(first.pending).toEqual([{ label: 'Glasses + Accessories', accessory: true }])
+    const res = await post({ step: 'chain', ticket: first.chainTicket, photo: pic('plain') })
+    expect((await res.json()).version.label).toBe('Glasses + Accessories')
+    expect(h.addChainInput.kind).toBe('charms')
   })
 
   it('refuses the chain step for a picture other than the one the ticket was issued for', async () => {
