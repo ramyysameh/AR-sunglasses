@@ -69,6 +69,15 @@ Add the eyewear chain from image 2 to the sunglasses the person in image 1 is we
 - Match the photo's lighting, with soft shadows where the chain touches the skin or clothes.
 - Change nothing else: keep the person's face, identity, skin, expression, hair, clothing, pose, background, framing and image size exactly as they are.`
 
+export const PHOTO_TRYON_ADD_CHARMS_PROMPT = `Image 1 is a photo of a person wearing sunglasses. Image 2 shows the same sunglasses worn by a model, with decorative accessories attached to the frame itself, for example small rings, charms, pearls or pendants clipped onto a temple.
+
+Add exactly those accessories from image 2 to the sunglasses the person in image 1 is wearing. Copy only the accessories, never the model or the sunglasses in image 2. Do not add a chain, a strap or anything else that is not attached to the frame in image 2.
+- Keep the sunglasses in image 1 exactly as they are: same frame shape, size, colour, pattern, lenses, position and angle. Do not redraw, restyle or replace them.
+- Copy the accessories faithfully: how many pieces there are, their shape, colour and material (for example gold rings, a pearl, a gold bead), and how they hang from one another.
+- Put them in the same place as in image 2: on the same temple of the wearer (the wearer's own left or right, not the viewer's) and at the same spot along it, such as just behind the hinge. If image 2 shows them on one temple only, add them to that temple only.
+- Keep them true to scale with the frame: small pieces stay small. Let anything that dangles hang down with gravity, and match the photo's lighting and reflections on the metal.
+- Change nothing else: keep the person's face, identity, skin, expression, hair, clothing, pose, background, framing and image size exactly as they are.`
+
 export const PHOTO_TRYON_ACCESSORY_PROMPT = `Image 1 is a photo of a person. Image 2 shows a product: a pair of sunglasses with an eyewear chain attached. Image 2 may show them worn by a model; copy only the sunglasses and the chain, never the model.
 
 Edit image 1 so the person is wearing exactly these sunglasses with this chain.
@@ -198,6 +207,12 @@ export function setPhotoClient(fake) {
  * other product, one picture from the product's main photo.
  */
 const ACCESSORY = /chain|accessor|strap|cord|lanyard/i
+// Which kind of extra the accessory version adds. A chain hangs from the
+// temple tips around the neck; "accessories" are pieces fixed to the frame
+// itself, like LEXI TIGER's rings and pearl charm on one temple. They need
+// different instructions: told to add a "chain", the AI hung one round the neck.
+const CHAIN = /chain|strap|cord|lanyard/i
+export const accessoryKind = (value) => (CHAIN.test(value) ? 'chain' : 'charms')
 const PRODUCT_GID = /^gid:\/\/shopify\/Product\/\d+$/
 const IMAGE_URL = 'url(transform: { maxWidth: 2048, maxHeight: 2048, preferredContentType: JPG })'
 
@@ -219,11 +234,11 @@ export const PRODUCT_VERSIONS_QUERY = `#graphql
 // "1. Glasses + Chain" -> "Glasses + Chain"
 export const versionLabel = (value) => String(value).replace(/^\s*\d+[.)]\s*/, '').trim()
 
-/** Pure: product data -> [{ label, accessory, url }], plain version first. */
+/** Pure: product data -> [{ label, accessory, kind, url }], plain version first. kind is null, 'chain' or 'charms'. */
 export function versionsFromProduct(product) {
   const mainUrl = product?.featuredMedia?.image?.url ?? null
   const option = (product?.options ?? []).find((o) => (o.values ?? []).some((v) => ACCESSORY.test(v)))
-  if (!option) return mainUrl ? [{ label: null, accessory: false, url: mainUrl }] : []
+  if (!option) return mainUrl ? [{ label: null, accessory: false, kind: null, url: mainUrl }] : []
   const variants = product.variants?.nodes ?? []
   const imageFor = (value) => {
     const variant = variants.find((v) => v.selectedOptions?.some((o) => o.name === option.name && o.value === value)
@@ -232,7 +247,12 @@ export function versionsFromProduct(product) {
   }
   const versions = option.values.map((value) => {
     const accessory = ACCESSORY.test(value)
-    return { label: versionLabel(value), accessory, url: imageFor(value) ?? (accessory ? null : mainUrl) }
+    return {
+      label: versionLabel(value),
+      accessory,
+      kind: accessory ? accessoryKind(value) : null,
+      url: imageFor(value) ?? (accessory ? null : mainUrl),
+    }
   }).filter((v) => v.url)
   versions.sort((a, b) => Number(a.accessory) - Number(b.accessory))
   // At most one plain and one accessory version: that is what the page shows.
@@ -269,16 +289,17 @@ export async function renderPhotoTryon({ selfie, selfieType, product, productTyp
 }
 
 /**
- * Add the chain to an already-rendered "glasses only" picture. Editing that
- * picture, instead of rendering the chain version from scratch, keeps the
- * glasses identical in both versions: rendered separately, the chain version
- * redrew the frame from a photo where it is small and worn by a model.
+ * Add the chain (or the frame accessories) to an already-rendered "glasses
+ * only" picture. Editing that picture, instead of rendering the accessory
+ * version from scratch, keeps the glasses identical in both versions:
+ * rendered separately, it redrew the frame from a photo where it is small and
+ * worn by a model.
  */
-export async function renderAddChain({ base, chain, chainType }) {
+export async function renderAddChain({ base, chain, chainType, kind = 'chain' }) {
   return editImage([
     await toFile(base, 'person.jpg', { type: 'image/jpeg' }),
-    await toFile(chain, `chain.${EXT[chainType]}`, { type: chainType }),
-  ], PHOTO_TRYON_ADD_CHAIN_PROMPT)
+    await toFile(chain, `accessory.${EXT[chainType]}`, { type: chainType }),
+  ], kind === 'charms' ? PHOTO_TRYON_ADD_CHARMS_PROMPT : PHOTO_TRYON_ADD_CHAIN_PROMPT)
 }
 
 async function editImage(image, prompt) {
