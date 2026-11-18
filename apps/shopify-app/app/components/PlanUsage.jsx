@@ -19,8 +19,8 @@ export function usagePercent({ used, limit }) {
 export function aiModelsLine({ allowance, used, unlimited }) {
   const models = `${used} AI ${used === 1 ? 'model' : 'models'}`
   if (unlimited) return `${models} created`
-  if (used <= allowance) return `${used} / ${allowance} free AI models used`
-  return `${models} created (${allowance} free, then $5 each)`
+  // used can exceed allowance for shops that saved paid models before the cap.
+  return `${Math.min(used, allowance)} / ${allowance} AI models used`
 }
 
 /**

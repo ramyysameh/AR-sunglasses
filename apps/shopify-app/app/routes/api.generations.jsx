@@ -30,13 +30,13 @@ const STATUS_BY_CODE = {
   NOT_READY: 409,
   RETRY_LIMIT: 409,
   GLB_MISSING: 409,
-  CHARGE_NOT_CONFIRMED: 402,
+  ALLOWANCE_USED: 403,
   TOO_MANY_RUNNING: 429,
   DAILY_LIMIT: 429,
 }
 
 // Thrown by createGeneration before it creates the row.
-const PRE_INSERT_CODES = new Set(['BAD_PHOTOS', 'TOO_MANY_RUNNING', 'DAILY_LIMIT'])
+const PRE_INSERT_CODES = new Set(['BAD_PHOTOS', 'TOO_MANY_RUNNING', 'DAILY_LIMIT', 'ALLOWANCE_USED'])
 
 const MESSAGES = {
   BAD_PHOTOS: 'Choose 3 or 4 photos (front and sides work best).',
@@ -48,7 +48,7 @@ const MESSAGES = {
   NOT_READY: 'This model is still being worked on. Refresh the page.',
   RETRY_LIMIT: "You've used all 3 retries for these photos. Start again with different photos.",
   GLB_MISSING: "This model's file is no longer available. Try generating it again.",
-  CHARGE_NOT_CONFIRMED: 'This model costs $5. Confirm to save it.',
+  ALLOWANCE_USED: "You've used all the AI models included in your plan. Upgrade your plan to create more.",
   TOO_MANY_RUNNING: 'Too many models are being generated. Wait for one to finish.',
   DAILY_LIMIT: "You've reached today's limit of 100 AI generations. Try again tomorrow.",
 }
@@ -76,7 +76,7 @@ async function deletePhotos(refs) {
 }
 
 // Start (or queue) a generation from photos already imported for a product.
-async function createFromImported({ shop, shopGid, imported }) {
+async function createFromImported({ shop, shopGid, planName, imported }) {
   try {
     return await createGeneration(prisma, {
       shop,
@@ -86,6 +86,7 @@ async function createFromImported({ shop, shopGid, imported }) {
       productId: imported.productId,
       productTitle: imported.title,
       productHandle: imported.handle,
+      planName,
     })
   } catch (error) {
     // Only when the error says no row was created: createGeneration throws these
@@ -97,9 +98,9 @@ async function createFromImported({ shop, shopGid, imported }) {
 }
 
 // Import a product's chosen photos and start (or queue) its generation.
-async function generateFromProduct({ admin, shop, shopGid, productId, imageIds }) {
+async function generateFromProduct({ admin, shop, shopGid, planName, productId, imageIds }) {
   const imported = await importProductPhotos({ admin, shop, productId, imageIds })
-  return createFromImported({ shop, shopGid, imported })
+  return createFromImported({ shop, shopGid, planName, imported })
 }
 
 function failureResult(productId, error) {
@@ -167,7 +168,7 @@ export const action = async ({ request }) => {
       }
       // Refuse before any upload URL exists, so a start the guard would refuse
       // doesn't leave orphaned photos in storage.
-      await assertCanStartGeneration(prisma, shop)
+      await assertCanStartGeneration(prisma, shop, undefined, planName)
       const uploads = await Promise.all(
         files.map((file) => presignPhotoUpload({ shop, contentType: file?.type, size: file?.size })),
       )
@@ -180,6 +181,7 @@ export const action = async ({ request }) => {
         shopGid: await shopGidFor(admin),
         photoRefs: intent === 'create' ? parseJson(form.get('photoRefs')) : null,
         retryOf: intent === 'retry' ? generationId : null,
+        planName,
       })
       return Response.json({ generation: toClientGeneration(generation) })
     }
@@ -194,11 +196,12 @@ export const action = async ({ request }) => {
 
     if (intent === 'create-from-product') {
       // Same reasoning as presign-photos: refuse before anything is stored.
-      await assertCanStartGeneration(prisma, shop)
+      await assertCanStartGeneration(prisma, shop, undefined, planName)
       const generation = await generateFromProduct({
         admin,
         shop,
         shopGid: await shopGidFor(admin),
+        planName,
         productId: form.get('productId')?.toString(),
         imageIds: parseJson(form.get('imageIds')),
       })
@@ -224,7 +227,7 @@ export const action = async ({ request }) => {
       ) {
         throw Object.assign(new Error('bad product list'), { code: 'BAD_PRODUCTS' })
       }
-      await assertCanStartGeneration(prisma, shop)
+      await assertCanStartGeneration(prisma, shop, undefined, planName)
       const shopGid = await shopGidFor(admin)
       // Import every product's photos in parallel (the slow CDN + storage part),
       // then create the generations one after another in request order, so each
@@ -257,7 +260,7 @@ export const action = async ({ request }) => {
           continue
         }
         try {
-          const generation = await createFromImported({ shop, shopGid, imported })
+          const generation = await createFromImported({ shop, shopGid, planName, imported })
           results.push({ productId, generation: toClientGeneration(generation) })
         } catch (error) {
           if (error?.code === 'DAILY_LIMIT') dailyLimitHit = true
@@ -272,7 +275,6 @@ export const action = async ({ request }) => {
         shop,
         generationId,
         planName,
-        acceptCharge: form.get('acceptCharge') === 'true',
       })
       if (!saved.productId) return Response.json(saved)
       const mapping = await addGeneratedModelToProduct({

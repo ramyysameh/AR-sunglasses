@@ -5,13 +5,11 @@ import { useAppBridge } from '@shopify/app-bridge-react'
 import ModelViewer from './ModelViewer'
 import AiProductSource from './AiProductSource'
 
-// Keep in step with the server: storage.server.js MAX_PHOTO_BYTES and the
-// $5 App Pricing meter. (A client component can't import .server modules.)
+// Keep in step with the server: storage.server.js MAX_PHOTO_BYTES.
+// (A client component can't import .server modules.)
 const MAX_PHOTO_BYTES = 10 * 1048576
 const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp']
-const PRICE = '$5'
 const POLL_MS = 5000
-const CONFIRM_MODAL_ID = 'ai-charge-confirm'
 const GENERIC_ERROR = 'Something went wrong. Try again.'
 const UPLOAD_FAILED = "The photos didn't upload. Check your connection and try again."
 const LOAD_FAILED = "Couldn't load your AI models. Refresh the page to try again."
@@ -43,20 +41,21 @@ export function canGenerate(photos) {
 export function balanceMessage(allowance) {
   if (!allowance) return ''
   if (allowance.unlimited) return 'Unlimited AI models on your plan'
-  if (allowance.freeRemaining > 0) return `${allowance.freeRemaining} of ${allowance.allowance} free AI models left`
-  return `Next model: ${PRICE}, added to your Shopify bill`
+  if (allowance.freeRemaining > 0) return `${allowance.freeRemaining} of ${allowance.allowance} AI models left on your plan`
+  return `You've used all ${allowance.allowance} AI models on your plan. Upgrade your plan to create more.`
 }
 
-export function saveNeedsCharge(allowance) {
+/** AI models are capped at the plan's allowance: none left means no new starts or saves. */
+export function allowanceUsedUp(allowance) {
   return Boolean(allowance) && !allowance.unlimited && allowance.freeRemaining <= 0
 }
 
 export function failureMessage(error) {
   if (error === 'low_confidence' || error?.startsWith('invalid_model')) {
-    return "We couldn't build a model that fits from these photos. Try clearer photos: plain background, frame only (not worn), good light, whole frame in shot. You weren't charged."
+    return "We couldn't build a model that fits from these photos. Try clearer photos: plain background, frame only (not worn), good light, whole frame in shot. It doesn't count toward your plan."
   }
-  if (error === 'timeout') return "Generating took too long. Try again. You weren't charged."
-  return "Generating failed. Try again. You weren't charged."
+  if (error === 'timeout') return "Generating took too long. Try again. It doesn't count toward your plan."
+  return "Generating failed. Try again. It doesn't count toward your plan."
 }
 
 export function generationView(generation) {
@@ -239,7 +238,6 @@ export default function AiModelFlow({ initialAllowance, showBalance = true }) {
   const setError = useCallback((message, { partial = false } = {}) => {
     setNotice(message ? { message, partial } : null)
   }, [])
-  const [chargeFor, setChargeFor] = useState(null)
   // Polls can overlap a slow response; only the latest request may update state.
   const latestRequest = useRef(0)
 
@@ -394,41 +392,20 @@ export default function AiModelFlow({ initialAllowance, showBalance = true }) {
     }
   }
 
-  function askToConfirmCharge(generationId) {
-    setChargeFor(generationId)
-    shopify.modal.show(CONFIRM_MODAL_ID)
-  }
-
-  async function act(generation, action, { acceptCharge = false } = {}) {
-    if (action === 'save' && saveNeedsCharge(allowance) && !acceptCharge) {
-      askToConfirmCharge(generation.id)
-      return
-    }
+  async function act(generation, action) {
     setBusy(true)
     setError(null)
-    // Never rejects (confirmCharge calls this without awaiting it).
     try {
-      const res = await postForm({
-        intent: action,
-        generationId: generation.id,
-        ...(action === 'save' ? { acceptCharge: String(acceptCharge) } : {}),
-      })
-      if (res.body.code === 'CHARGE_NOT_CONFIRMED') {
-        // Another save took the last free slot since this page loaded.
-        askToConfirmCharge(generation.id)
-        await refresh()
-        return
-      }
+      const res = await postForm({ intent: action, generationId: generation.id })
       if (!res.ok) {
+        // ALLOWANCE_USED included: refresh so the balance line shows it.
+        if (res.body.code === 'ALLOWANCE_USED') await refresh()
         setError(res.body.error ?? GENERIC_ERROR)
         return
       }
       if (action === 'save') {
-        const charged = res.body.paid ? ` ${PRICE} added to your Shopify bill.` : ''
         const mapped = mappingMessage(res.body.mapping, generation.productTitle)
-        shopify.toast.show(mapped
-          ? `${mapped}${charged}`
-          : res.body.paid ? `Model saved.${charged}` : 'Model saved to your library')
+        shopify.toast.show(mapped || 'Model saved to your library')
         revalidator.revalidate()
       }
       await refresh()
@@ -440,11 +417,7 @@ export default function AiModelFlow({ initialAllowance, showBalance = true }) {
     }
   }
 
-  function confirmCharge() {
-    shopify.modal.hide(CONFIRM_MODAL_ID)
-    const generation = generations.find((g) => g.id === chargeFor)
-    if (generation) act(generation, 'save', { acceptCharge: true })
-  }
+  const usedUp = allowanceUsedUp(allowance)
 
   return (
     <s-section heading="Create with AI">
@@ -483,7 +456,7 @@ export default function AiModelFlow({ initialAllowance, showBalance = true }) {
             <s-stack direction="inline">
               <s-button
                 variant="primary"
-                disabled={busy || bulkItems(picked).length === 0}
+                disabled={busy || usedUp || bulkItems(picked).length === 0}
                 {...(generating ? { loading: true } : {})}
                 onClick={generateFromProducts}
               >
@@ -510,7 +483,7 @@ export default function AiModelFlow({ initialAllowance, showBalance = true }) {
               ))}
             </s-grid>
             <s-stack direction="inline">
-              <s-button variant="primary" disabled={busy || !canGenerate(photos)} {...(busy ? { loading: true } : {})} onClick={generate}>
+              <s-button variant="primary" disabled={busy || usedUp || !canGenerate(photos)} {...(busy ? { loading: true } : {})} onClick={generate}>
                 Generate 3D model
               </s-button>
             </s-stack>
@@ -525,18 +498,6 @@ export default function AiModelFlow({ initialAllowance, showBalance = true }) {
           />
         ))}
       </s-stack>
-      <s-modal id={CONFIRM_MODAL_ID} heading={`Save this model for ${PRICE}?`}>
-        <s-paragraph>
-          You&apos;ve used all the free AI models on your plan. This model costs {PRICE}.
-          It will be added to your next Shopify bill.
-        </s-paragraph>
-        <s-button slot="primary-action" variant="primary" onClick={confirmCharge}>
-          Save for {PRICE}
-        </s-button>
-        <s-button slot="secondary-actions" onClick={() => shopify.modal.hide(CONFIRM_MODAL_ID)}>
-          Cancel
-        </s-button>
-      </s-modal>
     </s-section>
   )
 }

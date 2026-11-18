@@ -7,7 +7,6 @@ const deps = vi.hoisted(() => ({
   cancel: vi.fn(),
   calibrate: vi.fn(),
   saveCalibratedModel: vi.fn(),
-  report: vi.fn(),
   objects: new Map(),
 }))
 
@@ -31,9 +30,6 @@ vi.mock('../app/storage.server.js', () => ({
 }))
 vi.mock('../app/models.server.js', () => ({
   saveCalibratedModel: (...args) => deps.saveCalibratedModel(...args),
-}))
-vi.mock('../app/usageBilling.server.js', () => ({
-  reportModelCharge: (...args) => deps.report(...args),
 }))
 
 const generations = await import('../app/generations.server.js')
@@ -323,6 +319,27 @@ describe('assertCanStartGeneration', () => {
     const busy = createFakePrisma()
     await seed(busy, Array(generations.LIMITS.perDay).fill('failed'), { createdAt: new Date(NOW.getTime() - 60_000) })
     await expect(generations.assertCanStartGeneration(busy, SHOP, NOW)).rejects.toMatchObject({ code: 'DAILY_LIMIT' })
+  })
+
+  it('refuses a start once the plan allowance is used, except on unlimited plans', async () => {
+    const prisma = createFakePrisma()
+    await seed(prisma, Array(9).fill('saved'))
+    await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW, 'Starter')).resolves.toBeUndefined()
+    await seed(prisma, ['saved'])
+    await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW, 'Starter')).rejects.toMatchObject({ code: 'ALLOWANCE_USED' })
+    await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW, 'Growth')).resolves.toBeUndefined()
+    await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW, 'Pro')).resolves.toBeUndefined()
+    // Unknown plan fails closed (0 allowance).
+    await expect(generations.assertCanStartGeneration(prisma, SHOP, NOW, null)).rejects.toMatchObject({ code: 'ALLOWANCE_USED' })
+  })
+
+  it('createGeneration refuses with ALLOWANCE_USED before inserting a row', async () => {
+    const prisma = createFakePrisma()
+    await seed(prisma, Array(10).fill('saved'))
+    await expect(generations.createGeneration(prisma, { shop: SHOP, shopGid: SHOP_GID, photoRefs: PHOTOS, planName: 'Starter', now: NOW }))
+      .rejects.toMatchObject({ code: 'ALLOWANCE_USED' })
+    expect(await prisma.modelGeneration.count({ where: { shop: SHOP } })).toBe(10)
+    expect(deps.start).not.toHaveBeenCalled()
   })
 })
 
@@ -656,54 +673,41 @@ describe('saveGeneration', () => {
 
   beforeEach(() => {
     deps.saveCalibratedModel.mockResolvedValue({ assetId: 'asset-1' })
-    deps.report.mockResolvedValue(undefined)
   })
 
   it('saves within the allowance for free', async () => {
     const prisma = createFakePrisma()
     const g = await readyRow(prisma)
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
-      .resolves.toEqual({ assetId: 'asset-1', paid: false, productId: null, productHandle: null })
+      .resolves.toEqual({ assetId: 'asset-1', productId: null, productHandle: null })
     const [, shopArg, bytes, filename, options] = deps.saveCalibratedModel.mock.calls[0]
     expect([shopArg, bytes.toString(), filename, options]).toEqual([SHOP, 'glb', 'AI model', { id: g.id, label: null }])
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({
       status: 'saved', paid: false, modelAssetId: 'asset-1', savedAt: NOW, glbRef: null,
     })
     expect(deps.objects.has(`generations/${g.id}.glb`)).toBe(false)
-    expect(deps.report).not.toHaveBeenCalled()
     expect(prisma.locks).toEqual([[SHOP]])
   })
 
-  it('charges $5 once the allowance is used up, when the merchant accepted', async () => {
-    const prisma = createFakePrisma()
-    await seed(prisma, Array(10).fill('saved'))
-    const g = await readyRow(prisma)
-    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
-      .resolves.toEqual({ assetId: 'asset-1', paid: true, productId: null, productHandle: null })
-    expect(deps.report).toHaveBeenCalledWith({ shopGid: SHOP_GID, idempotencyKey: `aimodel_${g.id}`, timestamp: NOW })
-    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ paid: true, chargeReported: true })
-  })
-
-  it('refuses a paid save the merchant did not accept, and leaves it ready', async () => {
+  it('refuses a save once the allowance is used up (hard cap), and leaves it ready', async () => {
     const prisma = createFakePrisma()
     await seed(prisma, Array(10).fill('saved'))
     const g = await readyRow(prisma)
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
-      .rejects.toMatchObject({ code: 'CHARGE_NOT_CONFIRMED' })
+      .rejects.toMatchObject({ code: 'ALLOWANCE_USED' })
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'ready', paid: null })
     expect(deps.saveCalibratedModel).not.toHaveBeenCalled()
   })
 
-  it('never charges on Pro', async () => {
+  it('never caps Pro', async () => {
     const prisma = createFakePrisma()
     await seed(prisma, Array(100).fill('saved'))
     const g = await readyRow(prisma)
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Pro', now: NOW }))
-      .resolves.toEqual({ assetId: 'asset-1', paid: false, productId: null, productHandle: null })
-    expect(deps.report).not.toHaveBeenCalled()
+      .resolves.toEqual({ assetId: 'asset-1', productId: null, productHandle: null })
   })
 
-  it('puts the row back to ready, uncharged, when creating the asset fails', async () => {
+  it('puts the row back to ready when creating the asset fails', async () => {
     const prisma = createFakePrisma()
     const g = await readyRow(prisma)
     deps.saveCalibratedModel.mockRejectedValue(new Error('S3 down'))
@@ -711,22 +715,6 @@ describe('saveGeneration', () => {
       .rejects.toThrow('S3 down')
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'ready', paid: null })
     expect(deps.objects.has(`generations/${g.id}.glb`)).toBe(true)
-  })
-
-  it('keeps the model saved when reporting the charge fails', async () => {
-    const prisma = createFakePrisma()
-    await seed(prisma, Array(10).fill('saved'))
-    const g = await readyRow(prisma)
-    deps.report.mockRejectedValue(Object.assign(new Error('503'), { code: 'APP_EVENTS_REJECTED' }))
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
-        .resolves.toEqual({ assetId: 'asset-1', paid: true, productId: null, productHandle: null })
-      expect(errorSpy).toHaveBeenCalled()
-    } finally {
-      errorSpy.mockRestore()
-    }
-    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'saved', chargeReported: false })
   })
 
   it('only saves ready rows of this shop', async () => {
@@ -760,17 +748,8 @@ describe('saveGeneration', () => {
       .rejects.toMatchObject({ code: 'NOT_READY' })
   })
 
-  it('stays free within the allowance even when the charge was accepted', async () => {
+  it('reuses the asset a crashed save already created: no second asset', async () => {
     const prisma = createFakePrisma()
-    const g = await readyRow(prisma)
-    await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
-      .resolves.toEqual({ assetId: 'asset-1', paid: false, productId: null, productHandle: null })
-    expect(deps.report).not.toHaveBeenCalled()
-  })
-
-  it('reuses the asset a crashed save already created: no second asset, one charge', async () => {
-    const prisma = createFakePrisma()
-    await seed(prisma, Array(10).fill('saved'))
     const g = await readyRow(prisma)
     // The asset row commits, then the connection drops before the reply. The
     // lookup that would have spotted it inside the save fails too, so the row
@@ -781,7 +760,7 @@ describe('saveGeneration', () => {
     })
     const realFind = prisma.modelAsset.findUnique
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const input = { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }
+    const input = { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }
     try {
       // 1st lookup (before create) passes through; 2nd (after the failed create) throws.
       let lookups = 0
@@ -793,41 +772,14 @@ describe('saveGeneration', () => {
       prisma.modelAsset.findUnique = realFind
       expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'ready', paid: null })
 
-      await expect(generations.saveGeneration(prisma, input)).resolves.toEqual({ assetId: g.id, paid: true, productId: null, productHandle: null })
+      await expect(generations.saveGeneration(prisma, input)).resolves.toEqual({ assetId: g.id, productId: null, productHandle: null })
     } finally {
       prisma.modelAsset.findUnique = realFind
       errorSpy.mockRestore()
     }
     expect(deps.saveCalibratedModel).toHaveBeenCalledTimes(1)
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } }))
-      .toMatchObject({ status: 'saved', modelAssetId: g.id, chargeReported: true })
-
-    await generations.listGenerations(prisma, SHOP, NOW)
-    expect(deps.report).toHaveBeenCalledTimes(1)
-    expect(deps.report).toHaveBeenCalledWith({ shopGid: SHOP_GID, idempotencyKey: `aimodel_${g.id}`, timestamp: NOW })
-  })
-
-  it('completes the save when the asset create committed but the call errored (paid: charged once)', async () => {
-    const prisma = createFakePrisma()
-    await seed(prisma, Array(10).fill('saved'))
-    const g = await readyRow(prisma)
-    deps.saveCalibratedModel.mockImplementationOnce(async (_prisma, shop, _bytes, _name, { id }) => {
-      prisma.modelAsset.assets.set(id, { id, shop })
-      throw new Error('connection reset')
-    })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', acceptCharge: true, now: NOW }))
-        .resolves.toEqual({ assetId: g.id, paid: true, productId: null, productHandle: null })
-      expect(warn).toHaveBeenCalledTimes(1)
-    } finally {
-      warn.mockRestore()
-    }
-    expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } }))
-      .toMatchObject({ status: 'saved', paid: true, modelAssetId: g.id, savedAt: NOW, glbRef: null, chargeReported: true })
-    expect(deps.objects.has(`generations/${g.id}.glb`)).toBe(false)
-    expect(deps.report).toHaveBeenCalledTimes(1)
-    expect(deps.report).toHaveBeenCalledWith({ shopGid: SHOP_GID, idempotencyKey: `aimodel_${g.id}`, timestamp: NOW })
+      .toMatchObject({ status: 'saved', modelAssetId: g.id })
   })
 
   it('completes a free save too when the asset create committed but the call errored', async () => {
@@ -840,13 +792,12 @@ describe('saveGeneration', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
-        .resolves.toEqual({ assetId: g.id, paid: false, productId: null, productHandle: null })
+        .resolves.toEqual({ assetId: g.id, productId: null, productHandle: null })
     } finally {
       warn.mockRestore()
     }
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } }))
       .toMatchObject({ status: 'saved', paid: false, modelAssetId: g.id })
-    expect(deps.report).not.toHaveBeenCalled()
   })
 
   it('reuses the asset when a concurrent create wins the unique id (P2002)', async () => {
@@ -857,7 +808,7 @@ describe('saveGeneration', () => {
       throw Object.assign(new Error('Unique constraint failed on the fields: (`id`)'), { code: 'P2002' })
     })
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
-      .resolves.toEqual({ assetId: g.id, paid: false, productId: null, productHandle: null })
+      .resolves.toEqual({ assetId: g.id, productId: null, productHandle: null })
     expect(await prisma.modelGeneration.findUnique({ where: { id: g.id } })).toMatchObject({ status: 'saved', modelAssetId: g.id })
   })
 
@@ -881,7 +832,7 @@ describe('saveGeneration', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
-        .resolves.toEqual({ assetId: 'asset-1', paid: false, productId: null, productHandle: null })
+        .resolves.toEqual({ assetId: 'asset-1', productId: null, productHandle: null })
       expect(errorSpy).toHaveBeenCalled()
     } finally {
       errorSpy.mockRestore()
@@ -916,15 +867,6 @@ describe('saveGeneration', () => {
 })
 
 describe('listGenerations', () => {
-  it('re-sends unreported charges', async () => {
-    const prisma = createFakePrisma()
-    const g = await prisma.modelGeneration.create({ data: row({ status: 'saved', paid: true, chargeReported: false, savedAt: NOW }) })
-    deps.report.mockResolvedValue(undefined)
-    await generations.listGenerations(prisma, SHOP, NOW)
-    expect(deps.report).toHaveBeenCalledWith({ shopGid: SHOP_GID, idempotencyKey: `aimodel_${g.id}`, timestamp: NOW })
-    expect((await prisma.modelGeneration.findUnique({ where: { id: g.id } })).chargeReported).toBe(true)
-  })
-
   it('advances running rows and unsticks rows left collecting for over 5 minutes', async () => {
     const prisma = createFakePrisma()
     await prisma.modelGeneration.create({ data: row({ status: 'running', providerJobId: 'resp_a', startedAt: NOW }) })
@@ -999,21 +941,18 @@ describe('listGenerations', () => {
     expect(await prisma.modelGeneration.findUnique({ where: { id: recent.id } })).toMatchObject({ status: 'saving', paid: true })
   })
 
-  it('rolls a stuck saving row forward to saved when its asset exists, then reports the charge', async () => {
+  it('rolls a stuck saving row forward to saved when its asset exists', async () => {
     const prisma = createFakePrisma()
     const stale = await prisma.modelGeneration.create({
       data: row({ status: 'saving', paid: true, glbRef: 'generations/s.glb', updatedAt: new Date(NOW.getTime() - 16 * 60_000) }),
     })
     deps.objects.set('generations/s.glb', Buffer.from('s'))
     prisma.modelAsset.assets.set(stale.id, { id: stale.id, shop: SHOP })
-    deps.report.mockResolvedValue(undefined)
     await generations.listGenerations(prisma, SHOP, NOW)
     expect(await prisma.modelGeneration.findUnique({ where: { id: stale.id } })).toMatchObject({
-      status: 'saved', paid: true, modelAssetId: stale.id, savedAt: NOW, glbRef: null, chargeReported: true,
+      status: 'saved', modelAssetId: stale.id, savedAt: NOW, glbRef: null,
     })
     expect(deps.objects.has('generations/s.glb')).toBe(false)
-    expect(deps.report).toHaveBeenCalledTimes(1)
-    expect(deps.report).toHaveBeenCalledWith({ shopGid: SHOP_GID, idempotencyKey: `aimodel_${stale.id}`, timestamp: NOW })
   })
 
   it('reverts a stuck saving row whose asset id belongs to another shop', async () => {
@@ -1119,7 +1058,7 @@ describe('product-sourced generations', () => {
     deps.objects.set('generations/x.glb', Buffer.from('glb'))
     deps.saveCalibratedModel.mockResolvedValue({ assetId: g.id })
     await expect(generations.saveGeneration(prisma, { shop: SHOP, generationId: g.id, planName: 'Starter', now: NOW }))
-      .resolves.toEqual({ assetId: g.id, paid: false, productId: 'gid://shopify/Product/42', productHandle: 'gripz-pelmo' })
+      .resolves.toEqual({ assetId: g.id, productId: 'gid://shopify/Product/42', productHandle: 'gripz-pelmo' })
   })
 })
 

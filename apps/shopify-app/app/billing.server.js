@@ -3,9 +3,9 @@
 // here MUST match the dashboard plan names exactly, or planLimit() fails closed.
 export const PLAN_LIMITS = { Starter: 10, Growth: 40, Pro: Infinity }
 
-// Lifetime free AI-generated models per plan (spec 2026-09-30). Separate from
-// PLAN_LIMITS, which caps products with try-on. Past it, each saved model is a
-// $5 usage charge. Same fail-closed rule as planLimit: unknown name -> 0.
+// Lifetime AI-generated models per plan (spec 2026-09-30). Separate from
+// PLAN_LIMITS, which caps products with try-on. A hard cap: there is no paid
+// overage. Same fail-closed rule as planLimit: unknown name -> 0.
 export const AI_MODEL_ALLOWANCE = { Starter: 10, Growth: 40, Pro: Infinity }
 
 export function aiModelAllowance(name) {

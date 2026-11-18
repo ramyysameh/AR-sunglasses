@@ -120,6 +120,18 @@ describe('api.generations', () => {
     expect(h.presign).toHaveBeenCalledWith({ shop: h.shop, contentType: 'image/png', size: 2 })
     expect(h.gen.guard).toHaveBeenCalledTimes(1)
     expect(h.gen.guard.mock.calls[0][1]).toBe(h.shop)
+    expect(h.gen.guard.mock.calls[0][3]).toBe('Starter')
+  })
+
+  it('refuses to presign (403) once the plan allowance is used', async () => {
+    h.gen.guard.mockRejectedValue(tagged('ALLOWANCE_USED'))
+    const files = [{ type: 'image/jpeg', size: 1 }, { type: 'image/png', size: 2 }, { type: 'image/webp', size: 3 }]
+    const res = await api.action(post({ intent: 'presign-photos', files: JSON.stringify(files) }))
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.code).toBe('ALLOWANCE_USED')
+    expect(body.error).toMatch(/Upgrade your plan/)
+    expect(h.presign).not.toHaveBeenCalled()
   })
 
   it('refuses to presign (429) when the shop could not start a generation anyway', async () => {
@@ -146,25 +158,25 @@ describe('api.generations', () => {
     const refs = ['0a', '1b', '2c'].map((id) => `generation-photos/${h.shop}/${id}.jpg`)
     const body = await (await api.action(post({ intent: 'create', photoRefs: JSON.stringify(refs) }))).json()
     expect(body).toEqual({ generation: { id: 'g2', status: 'running' } })
-    expect(h.gen.create.mock.calls[0][1]).toEqual({ shop: h.shop, shopGid: 'gid://shopify/Shop/7', photoRefs: refs, retryOf: null })
+    expect(h.gen.create.mock.calls[0][1]).toEqual({ shop: h.shop, shopGid: 'gid://shopify/Shop/7', photoRefs: refs, retryOf: null, planName: 'Starter' })
   })
 
   it('retries by generation id', async () => {
     h.gen.create.mockResolvedValue({ id: 'g3', status: 'running' })
     await api.action(post({ intent: 'retry', generationId: 'g1' }))
-    expect(h.gen.create.mock.calls[0][1]).toMatchObject({ photoRefs: null, retryOf: 'g1' })
+    expect(h.gen.create.mock.calls[0][1]).toMatchObject({ photoRefs: null, retryOf: 'g1', planName: 'Starter' })
   })
 
-  it('saves, passing the plan and whether the charge was accepted', async () => {
-    h.gen.save.mockResolvedValue({ assetId: 'a1', paid: true })
+  it('saves, passing the plan (an extra acceptCharge field is ignored)', async () => {
+    h.gen.save.mockResolvedValue({ assetId: 'a1' })
     const body = await (await api.action(post({ intent: 'save', generationId: 'g1', acceptCharge: 'true' }))).json()
-    expect(body).toEqual({ assetId: 'a1', paid: true })
-    expect(h.gen.save.mock.calls[0][1]).toEqual({ shop: h.shop, generationId: 'g1', planName: 'Starter', acceptCharge: true })
+    expect(body).toEqual({ assetId: 'a1' })
+    expect(h.gen.save.mock.calls[0][1]).toEqual({ shop: h.shop, generationId: 'g1', planName: 'Starter' })
   })
 
   it('maps known error codes to statuses and merchant copy', async () => {
     const cases = [
-      ['CHARGE_NOT_CONFIRMED', 402], ['TOO_MANY_RUNNING', 429], ['DAILY_LIMIT', 429],
+      ['ALLOWANCE_USED', 403], ['TOO_MANY_RUNNING', 429], ['DAILY_LIMIT', 429],
       ['RETRY_LIMIT', 409], ['NOT_READY', 409], ['NOT_FOUND', 404], ['GLB_MISSING', 409],
     ]
     for (const [code, status] of cases) {
@@ -221,17 +233,17 @@ describe('product source', () => {
   })
 
   it('maps product-sourced saves and leaves upload saves alone', async () => {
-    h.gen.save.mockResolvedValue({ assetId: 'a1', paid: true, productId: 'gid://shopify/Product/42', productHandle: 'gripz' })
+    h.gen.save.mockResolvedValue({ assetId: 'a1', productId: 'gid://shopify/Product/42', productHandle: 'gripz' })
     h.mapping.mockResolvedValue({ mapped: false, reason: 'product_limit' })
-    const res = await api.action(post({ intent: 'save', generationId: 'g1', acceptCharge: 'true' }))
+    const res = await api.action(post({ intent: 'save', generationId: 'g1' }))
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body).toMatchObject({ assetId: 'a1', paid: true })
+    expect(body).toMatchObject({ assetId: 'a1' })
     expect(body.mapping).toEqual({ mapped: false, reason: 'product_limit' })
     expect(h.mapping.mock.calls[0][0]).toMatchObject({ shop: h.shop, planName: 'Starter', productId: 'gid://shopify/Product/42', productHandle: 'gripz', modelAssetId: 'a1' })
 
     h.mapping.mockClear()
-    h.gen.save.mockResolvedValue({ assetId: 'a2', paid: false, productId: null, productHandle: null })
+    h.gen.save.mockResolvedValue({ assetId: 'a2', productId: null, productHandle: null })
     const plain = await (await api.action(post({ intent: 'save', generationId: 'g2' }))).json()
     expect(plain.mapping).toBeUndefined()
     expect(h.mapping).not.toHaveBeenCalled()

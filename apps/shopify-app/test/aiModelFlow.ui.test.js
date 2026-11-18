@@ -4,7 +4,7 @@ import {
   photoError,
   canGenerate,
   balanceMessage,
-  saveNeedsCharge,
+  allowanceUsedUp,
   failureMessage,
   generationView,
   defaultImageSelection,
@@ -45,18 +45,18 @@ describe('photos', () => {
 })
 
 describe('balance', () => {
-  it('shows free models left, the $5 price, or unlimited', () => {
-    expect(balanceMessage({ allowance: 10, used: 3, unlimited: false, freeRemaining: 7 })).toBe('7 of 10 free AI models left')
-    expect(balanceMessage({ allowance: 10, used: 10, unlimited: false, freeRemaining: 0 })).toBe('Next model: $5, added to your Shopify bill')
+  it('shows models left, the hard cap, or unlimited (never a price)', () => {
+    expect(balanceMessage({ allowance: 10, used: 3, unlimited: false, freeRemaining: 7 })).toBe('7 of 10 AI models left on your plan')
+    expect(balanceMessage({ allowance: 10, used: 10, unlimited: false, freeRemaining: 0 })).toBe("You've used all 10 AI models on your plan. Upgrade your plan to create more.")
     expect(balanceMessage({ allowance: null, used: 4, unlimited: true, freeRemaining: null })).toBe('Unlimited AI models on your plan')
     expect(balanceMessage(null)).toBe('')
   })
 
-  it('asks for the $5 confirmation only when nothing free is left', () => {
-    expect(saveNeedsCharge({ unlimited: false, freeRemaining: 0 })).toBe(true)
-    expect(saveNeedsCharge({ unlimited: false, freeRemaining: 1 })).toBe(false)
-    expect(saveNeedsCharge({ unlimited: true, freeRemaining: null })).toBe(false)
-    expect(saveNeedsCharge(null)).toBe(false)
+  it('is used up only when a capped plan has nothing left', () => {
+    expect(allowanceUsedUp({ unlimited: false, freeRemaining: 0 })).toBe(true)
+    expect(allowanceUsedUp({ unlimited: false, freeRemaining: 1 })).toBe(false)
+    expect(allowanceUsedUp({ unlimited: true, freeRemaining: null })).toBe(false)
+    expect(allowanceUsedUp(null)).toBe(false)
   })
 })
 
@@ -85,16 +85,16 @@ describe('generationView', () => {
     expect(generationView({ status: 'mystery', retriesLeft: 0 }).label).toBe('Working on it…')
   })
 
-  it('explains a failure, says nothing was charged, and offers retry and dismiss', () => {
+  it('explains a failure, says it did not count, and offers retry and dismiss', () => {
     const view = generationView({ status: 'failed', error: 'low_confidence', retriesLeft: 1 })
     expect(view.tone).toBe('critical')
     expect(view.label).toMatch(/plain background/)
     expect(view.actions).toEqual(['retry', 'discard'])
   })
 
-  it('always tells the merchant a failure was free', () => {
+  it('always tells the merchant a failure does not count toward the plan', () => {
     for (const code of ['low_confidence', 'invalid_model: x', 'timeout', 'start_failed', 'openai_failed', null]) {
-      expect(failureMessage(code)).toMatch(/You weren't charged\./)
+      expect(failureMessage(code)).toMatch(/It doesn't count toward your plan\./)
     }
   })
 })
