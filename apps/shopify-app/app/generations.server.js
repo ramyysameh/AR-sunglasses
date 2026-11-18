@@ -3,7 +3,6 @@ import { startGeneration, checkGeneration, cancelGeneration } from './modelGener
 import { calibrateUpload } from './calibration.server.js'
 import { saveModelGlb, readModelGlb, deleteModelGlb, presignObjectRead } from './storage.server.js'
 import { saveCalibratedModel } from './models.server.js'
-import { reportModelCharge } from './usageBilling.server.js'
 import { tagged } from './errors.server.js'
 
 /**
@@ -65,15 +64,27 @@ async function slotsInUse(prisma, shop) {
 }
 
 /**
- * The cost guard: at most LIMITS.perDay starts (plus automatic retries) in 24
- * hours. Concurrency is no longer refused: over LIMITS.running, new rows wait
- * in the queue (startQueued). The photo presign runs this first, unlocked, so
- * a start that would be refused doesn't leave uploaded photos behind.
+ * The start guard. AI models are capped at the plan's free allowance (there is
+ * no paid overage), so a shop with none left can't start one it couldn't save.
+ * Then the cost guard: at most LIMITS.perDay starts (plus automatic retries) in
+ * 24 hours. Concurrency is no longer refused: over LIMITS.running, new rows
+ * wait in the queue (startQueued). The photo presign runs this first, unlocked,
+ * so a start that would be refused doesn't leave uploaded photos behind.
+ * `planName` undefined skips the allowance check (internal callers only; every
+ * request path passes the shop's plan).
  */
-export async function assertCanStartGeneration(prisma, shop, now = new Date()) {
+export async function assertCanStartGeneration(prisma, shop, now = new Date(), planName = undefined) {
+  if (planName !== undefined) await assertAllowanceLeft(prisma, shop, planName)
   const used = await startsInLastDay(prisma, shop, now)
   if (used >= LIMITS.perDay) {
     throw tagged('DAILY_LIMIT', `shop started ${used} generations in 24h`)
+  }
+}
+
+async function assertAllowanceLeft(prisma, shop, planName) {
+  const { unlimited, freeRemaining, allowance } = await getAllowance(prisma, shop, planName)
+  if (!unlimited && freeRemaining <= 0) {
+    throw tagged('ALLOWANCE_USED', `all ${allowance} AI models on the plan are used`)
   }
 }
 
@@ -150,7 +161,7 @@ export function toClientGeneration(generation) {
 export async function createGeneration(prisma, {
   shop, shopGid, photoRefs = null, retryOf = null,
   photoSource = 'upload', productId = null, productTitle = null, productHandle = null,
-  now = new Date(),
+  planName = undefined, now = new Date(),
 }) {
   // The guard and the row it protects are created under one per-shop lock, so
   // two concurrent starts can't both pass the same count.
@@ -194,7 +205,7 @@ export async function createGeneration(prisma, {
       throw tagged('BAD_PHOTOS', "expected 3 or 4 of this shop's uploaded photos")
     }
 
-    await assertCanStartGeneration(tx, shop, now)
+    await assertCanStartGeneration(tx, shop, now, planName)
 
     const startNow = (await slotsInUse(tx, shop)) < LIMITS.running
     const created = await tx.modelGeneration.create({
@@ -481,45 +492,30 @@ async function assetForGeneration(prisma, shop, generation) {
   }
 }
 
-async function reportChargeFor(prisma, generation) {
-  await reportModelCharge({
-    shopGid: generation.shopGid,
-    idempotencyKey: `aimodel_${generation.id}`,
-    timestamp: generation.savedAt,
-  })
-  await prisma.modelGeneration.update({ where: { id: generation.id }, data: { chargeReported: true } })
-}
-
 /**
  * Keep a result: it becomes an ordinary ModelAsset. This is the only step that
- * uses the allowance or costs $5.
+ * uses the allowance, and it is refused once the allowance is used (no overage).
  *
  * 1. Claim, under a per-shop advisory lock, so two simultaneous saves can't
- *    both take the last free slot; paid/free is decided here, once.
+ *    both take the last free slot. No free slot left = refused (ALLOWANCE_USED).
  * 2. Create the asset outside the transaction (S3 read + calibration are too
  *    slow to hold a pooled connection), with the generation's id, so a save
- *    re-run after a crash reuses it. If that fails, nothing was charged and
+ *    re-run after a crash reuses it. If that fails, nothing was used and
  *    the row goes back to ready.
- * 3. Charge. A failed report leaves the model saved; listGenerations re-sends
- *    it, and Shopify's permanent idempotency makes that safe.
  */
-export async function saveGeneration(prisma, { shop, generationId, planName, acceptCharge = false, now = new Date() }) {
-  const { generation, paid } = await prisma.$transaction(async (tx) => {
+export async function saveGeneration(prisma, { shop, generationId, planName, now = new Date() }) {
+  const generation = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${shop}))`
     const found = await tx.modelGeneration.findFirst({ where: { id: generationId, shop } })
     if (!found) throw tagged('NOT_FOUND', `generation ${generationId} not found`)
     if (found.status !== 'ready') throw tagged('NOT_READY', `cannot save a ${found.status} generation`)
-    const { unlimited, freeRemaining } = await getAllowance(tx, shop, planName)
-    const isPaid = !unlimited && freeRemaining <= 0
-    if (isPaid && !acceptCharge) {
-      throw tagged('CHARGE_NOT_CONFIRMED', 'this save costs $5 and was not confirmed')
-    }
+    await assertAllowanceLeft(tx, shop, planName)
     const claim = await tx.modelGeneration.updateMany({
       where: { id: found.id, status: 'ready' },
-      data: { status: 'saving', paid: isPaid },
+      data: { status: 'saving', paid: false },
     })
     if (claim.count === 0) throw tagged('NOT_READY', 'generation is already being saved')
-    return { generation: found, paid: isPaid }
+    return found
   })
 
   let asset
@@ -528,7 +524,7 @@ export async function saveGeneration(prisma, { shop, generationId, planName, acc
   } catch (error) {
     // The create may have committed before the call errored (e.g. a connection
     // reset after commit). Reverting then would leave a live model that is
-    // never charged or counted, so check for it first and carry on if it's there.
+    // never counted, so check for it first and carry on if it's there.
     let committed = null
     try {
       committed = await ownAsset(prisma, shop, generation.id)
@@ -543,7 +539,7 @@ export async function saveGeneration(prisma, { shop, generationId, planName, acc
     asset = { assetId: committed.id }
   }
 
-  const saved = await prisma.modelGeneration.update({
+  await prisma.modelGeneration.update({
     where: { id: generation.id },
     data: { status: 'saved', modelAssetId: asset.assetId, savedAt: now, glbRef: null },
   })
@@ -554,16 +550,8 @@ export async function saveGeneration(prisma, { shop, generationId, planName, acc
     console.error('AI generation pending GLB delete failed', generation.id, error)
   }
 
-  if (paid) {
-    try {
-      await reportChargeFor(prisma, saved)
-    } catch (error) {
-      console.error('AI model charge report failed; will re-send', generation.id, error)
-    }
-  }
   return {
     assetId: asset.assetId,
-    paid,
     productId: generation.productId ?? null,
     productHandle: generation.productHandle ?? null,
   }
@@ -612,10 +600,9 @@ async function sweepExpired(prisma, shop, now) {
  * row "saving" that would burn a free slot forever. After 15 minutes (longer
  * than any function run, so an in-flight save is never touched):
  * - if its asset was created, the save happened: roll it forward to "saved",
- *   so the merchant keeps one model and a paid save is charged (below);
+ *   so the merchant keeps one model;
  * - otherwise hand it back to "ready". The pending GLB is only deleted after
- *   "saved", and the charge only happens after "saved", so nothing is lost or
- *   billed.
+ *   "saved", so nothing is lost.
  */
 async function settleStuckSaves(prisma, shop, now) {
   const stuck = await prisma.modelGeneration.findMany({
@@ -638,7 +625,7 @@ async function settleStuckSaves(prisma, shop, now) {
 
 /**
  * What the admin page shows, brought up to date first. Also the fallback that
- * collects finished jobs when a webhook was missed, and retries charge reports.
+ * collects finished jobs when a webhook was missed.
  */
 export async function listGenerations(prisma, shop, now = new Date()) {
   await sweepExpired(prisma, shop, now)
@@ -671,17 +658,6 @@ export async function listGenerations(prisma, shop, now = new Date()) {
     await startQueued(prisma, shop, now)
   } catch (error) {
     console.error('AI generation queue start failed', shop, error)
-  }
-
-  const unreported = await prisma.modelGeneration.findMany({
-    where: { shop, status: 'saved', paid: true, chargeReported: false },
-  })
-  for (const generation of unreported) {
-    try {
-      await reportChargeFor(prisma, generation)
-    } catch (error) {
-      console.error('AI model charge re-send failed', generation.id, error)
-    }
   }
 
   const rows = await prisma.modelGeneration.findMany({
