@@ -52,6 +52,39 @@ function bakeNodeTransforms(doc) {
   return baked
 }
 
+// Move the AR_* anchor tags to the scene root at their world position.
+//
+// Every later step treats the tags as scene children read by LOCAL translation:
+// rescale and recenter shift only top-level non-mesh nodes, and tagReader reads
+// getTranslation(). Create with AI emits trimesh/pygltflib files where the meshes
+// AND the tags sit under one non-mesh root ("world"). The recenter then moved that
+// root, not the tags, so bridgeAnchor stayed in the raw frame while
+// modelBoundsCenter (from the baked vertices) moved with the frame top -- the
+// engine, which places the frame by their difference, drew it that much low
+// (21 mm on a measured round frame). Nested tags also missed the rescale.
+//
+// Lifting them first puts the tags in the same space as the baked vertices, so the
+// existing steps handle them correctly. Only the measured doc changes: the stored
+// GLB is the merchant's original file.
+function liftAnchorTags(doc, spec) {
+  const scene = doc.getRoot().listScenes()[0]
+  if (!scene || !spec?.tagNames) return false
+  let lifted = false
+  for (const name of Object.values(spec.tagNames)) {
+    const node = doc.getRoot().listNodes().find((n) => n.getName() === name)
+    const parent = node?.getParentNode()
+    if (!node || !parent) continue // missing, or already a scene child
+    const world = node.getWorldTranslation()
+    parent.removeChild(node)
+    scene.addChild(node)
+    node.setTranslation([world[0], world[1], world[2]])
+    node.setRotation([0, 0, 0, 1])
+    node.setScale([1, 1, 1])
+    lifted = true
+  }
+  return lifted
+}
+
 // X extent of the front slab (the frame front), used both to measure real-world
 // scale and to recenter the bridge to x=0.
 function frontSlabX(positions) {
@@ -105,6 +138,7 @@ function rescaleToRealWorld(doc, positions) {
 export function normalizeModel(doc, spec) {
   const transforms = []
   let scale = 1
+  if (liftAnchorTags(doc, spec)) transforms.push('lift-anchors')
   if (bakeNodeTransforms(doc)) transforms.push('flatten')
   let positions = mergedPositions(doc)
   if (positions.length === 0) return { doc, transforms, scale }
